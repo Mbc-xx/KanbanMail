@@ -36,7 +36,8 @@ Written in Rust with [Tauri](https://tauri.app).
   email body, which is much slower on servers without a full-text index.
   Esc goes back to the board.
 - Links in emails open in the default browser (mailto links open a new email).
-- Undo after archiving, deleting, marking as spam or moving emails.
+- Undo after archiving, deleting, marking as spam or moving emails; how long
+  the "Undo" button stays (or no undo at all) is set in Settings → Reading.
 - Board columns are edited from the settings (add, rename, drag to reorder,
   remove; type a new folder name to create it).
 - "Load more" at the bottom of a column or folder for older emails.
@@ -165,7 +166,7 @@ From the settings button on the board, grouped in tabs:
   settings, board columns file, disconnecting the account.
 - **Writing**: signature editor, "Always Bcc", address book suggestions.
 - **Columns**: the board columns.
-- **Reading**: theme, size, notifications, seconds before an opened email is
+- **Reading**: theme, size, undo time, notifications, seconds before an opened email is
   marked as read, grouping by conversation, remote images.
 - **Important**: colleagues of your domain, "always" and "never important" lists.
 - **Folders**: which folders the sidebar shows, their order and colors.

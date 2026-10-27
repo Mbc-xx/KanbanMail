@@ -53,6 +53,13 @@ pub struct Settings {
     /// Interface size in percent (90, 100, 110, 125).
     #[serde(default = "default_zoom")]
     pub zoom: u32,
+    /// How long the "Undo" button stays after a move, in seconds (0 = no undo).
+    #[serde(default = "default_undo")]
+    pub undo_seconds: u32,
+}
+
+fn default_undo() -> u32 {
+    8
 }
 
 fn default_notify() -> String {
@@ -121,6 +128,7 @@ impl Default for Settings {
             notify: default_notify(),
             theme: default_theme(),
             zoom: default_zoom(),
+            undo_seconds: default_undo(),
         }
     }
 }

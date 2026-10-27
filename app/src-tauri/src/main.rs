@@ -326,6 +326,7 @@ struct SettingsView {
     notify: String,
     theme: String,
     zoom: u32,
+    undo_seconds: u32,
 }
 
 #[tauri::command]
@@ -353,6 +354,7 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         notify: settings.notify,
         theme: settings.theme,
         zoom: settings.zoom,
+        undo_seconds: settings.undo_seconds,
     })
 }
 
@@ -386,6 +388,7 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         notify: settings.notify,
         theme: settings.theme,
         zoom: settings.zoom.clamp(80, 150),
+        undo_seconds: settings.undo_seconds.min(60),
     }
         .save()
         .map_err(err)

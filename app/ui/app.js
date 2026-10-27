@@ -61,7 +61,7 @@ function toast(message, kind = "error", action = null) {
   el.className = "toast" + (kind === "info" ? " info" : "");
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), action ? 8000 : kind === "info" ? 2500 : 7000);
+  toastTimer = setTimeout(() => (el.hidden = true), action ? (state.undoSeconds || 8) * 1000 : kind === "info" ? 2500 : 7000);
 }
 
 function el_text(text) {
@@ -241,7 +241,7 @@ async function emptyFolder(kind) {
 /// `moves`: [{ message_id, now, back }] (emails without Message-ID cannot be undone).
 function offerUndo(message, moves) {
   const undoable = moves.filter((m) => m.message_id && m.now && m.back && m.now !== m.back);
-  if (!undoable.length) return toast(message, "info");
+  if (!undoable.length || state.undoSeconds === 0) return toast(message, "info");
   toast(message, "info", {
     label: "Undo",
     run: async () => {
@@ -444,6 +444,7 @@ function applySettingsState(settings) {
   state.folderPrefs = settings.folders || [];
   state.rules = settings.rules || [];
   state.notify = settings.notify || "important";
+  state.undoSeconds = settings.undo_seconds ?? 8;
   applyAppearance(settings.theme, settings.zoom);
 }
 
@@ -2506,6 +2507,7 @@ $("open-settings").addEventListener("click", async () => {
     $("set-theme").value = s.theme || "system";
     $("set-zoom").value = String(s.zoom || 100);
     $("set-notify").value = s.notify || "important";
+    $("set-undo").value = String(s.undo_seconds ?? 8);
     rulesDraft = (s.rules || []).map((r) => ({ ...r }));
     columnsDraft = state.columns.map((c) => ({ name: c.name, folder: c.folder }));
     columnsChanged = false;
@@ -2552,6 +2554,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
         folders: prefsDraft,
         rules: rulesDraft.filter((r) => r.contains.trim() && r.folder.trim()),
         notify: $("set-notify").value,
+        undo_seconds: parseInt($("set-undo").value, 10),
         theme: $("set-theme").value,
         zoom: parseInt($("set-zoom").value, 10),
       },
