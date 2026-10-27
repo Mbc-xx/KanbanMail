@@ -46,7 +46,10 @@ Written in Rust with [Tauri](https://tauri.app).
   Spam, Read or Unread from the bar at the bottom, or drag them together.
   Every column has a "Mark all as read" button.
 - Automatic rules: "when From / To / Subject contains … move to …", applied to
-  new Inbox emails (first match wins), or to the whole Inbox on demand.
+  new Inbox emails (first match wins), or to the whole Inbox on demand. Rules
+  are saved and always active while the app runs; emails that arrived while it
+  was closed are processed when it starts again. Rules that also work with the
+  app closed must live on the mail server (e.g. your provider's email filters).
 - Spam / Not spam, and "Empty Trash" / "Empty Junk" (with confirmation).
 - Instant start: the board of the last session is shown right away from a local
   cache, then refreshed from the server.

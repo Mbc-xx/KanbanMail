@@ -476,6 +476,8 @@ async function openBoard({ fromCache = false } = {}) {
     loadFolders();
     loadKnownSenders();
     await Promise.all(state.columns.map((c) => loadColumn(c.folder)));
+    // Rules and notifications also work when the Inbox is not a board column.
+    if (!state.columns.some((c) => c.folder.toUpperCase() === "INBOX")) checkInbox();
   } catch (e) {
     if (fromCache) {
       // Keep showing the last known board, and say why it is not updating.
@@ -692,10 +694,21 @@ async function applyRules(cards, { announce = true } = {}) {
 
 async function afterInboxLoaded(cards) {
   const first = inboxKnown === null;
-  const fresh = first ? [] : cards.filter((c) => !inboxKnown.has(c.uid));
+  // The highest Inbox UID already checked by the rules, remembered across
+  // restarts: emails that arrived while the app was closed are newer.
+  const lastChecked = cacheGet("rulesLastUid");
+  const maxUid = cards.reduce((m, c) => Math.max(m, c.uid), 0);
+  const fresh = first
+    ? lastChecked === null
+      ? [] // very first run: nothing to catch up on
+      : cards.filter((c) => c.uid > lastChecked)
+    : cards.filter((c) => !inboxKnown.has(c.uid));
   inboxKnown = new Set(cards.map((c) => c.uid));
+  if (maxUid > (lastChecked || 0)) cacheSet("rulesLastUid", maxUid);
   if (!fresh.length) return;
   const moved = await applyRules(fresh);
+  // No notifications for the emails that arrived while the app was closed.
+  if (first) return;
   const toNotify = fresh.filter(
     (c) => !c.seen && !moved.has(c.message_id) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
   );
