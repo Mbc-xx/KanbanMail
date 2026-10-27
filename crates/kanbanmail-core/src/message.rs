@@ -24,6 +24,8 @@ pub struct Card {
     /// Message-IDs this email refers to (In-Reply-To and References: the thread
     /// root and the most recent ones), used to group conversations in lists.
     pub thread_refs: Vec<String>,
+    /// To and Cc addresses, comma-separated (used by the automatic rules).
+    pub to: String,
 }
 
 /// An attachment that can be downloaded from the reader.
@@ -65,6 +67,34 @@ pub struct MessageView {
     pub text_main: Option<String>,
     /// Attachments to download (inline images shown in the HTML are left out).
     pub attachments: Vec<AttachmentInfo>,
+    /// A calendar invitation carried by the email, if any.
+    pub invite: Option<Invite>,
+}
+
+/// A date-time from a calendar file: local wall time unless `utc`.
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct IcsTime {
+    /// "2026-10-28"
+    pub date: String,
+    /// "10:00", absent for all-day events.
+    pub time: Option<String>,
+    pub utc: bool,
+}
+
+/// The main event of a calendar invitation (text/calendar part).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Invite {
+    /// REQUEST (invitation), CANCEL, REPLY...
+    pub method: String,
+    pub uid: String,
+    pub summary: String,
+    pub location: String,
+    pub start: IcsTime,
+    pub end: Option<IcsTime>,
+    pub organizer: String,
+    pub organizer_name: String,
+    /// The whole calendar file, to answer or add it to a calendar.
+    pub ics: String,
 }
 
 fn sender(list: Option<mail_parser::AddressList<'_>>) -> String {
@@ -119,7 +149,18 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
     let message_id = parsed.as_ref().and_then(|m| m.message_id()).map(str::to_string);
     let automated = parsed.as_ref().is_some_and(|m| is_automated(m, &from_address));
     let thread_refs = parsed.as_ref().map(thread_refs).unwrap_or_default();
-    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated, thread_refs }
+    let to = parsed
+        .as_ref()
+        .map(|m| {
+            [m.to(), m.cc()]
+                .into_iter()
+                .flatten()
+                .flat_map(|l| l.mailboxes().filter_map(|mb| mb.address().map(str::to_string)).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated, thread_refs, to }
 }
 
 /// In-Reply-To plus the first and the last few References (enough to link a
@@ -194,6 +235,7 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             text: Some(String::from_utf8_lossy(raw).into_owned()),
             html: None,
             has_remote_content: false,
+            invite: None,
             html_main: None,
             text_main: None,
             attachments: Vec::new(),
@@ -251,6 +293,7 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
         html_main,
         has_remote_content: html.as_deref().is_some_and(has_remote_content),
         attachments: list_attachments(&m, raw_html.as_deref()),
+        invite: find_invite(&m),
         html,
     }
 }
@@ -429,6 +472,98 @@ pub fn quote_start_text(text: &str) -> Option<usize> {
     None
 }
 
+/// The first calendar part (text/calendar or a .ics attachment) as an invitation.
+fn find_invite(m: &mail_parser::Message<'_>) -> Option<Invite> {
+    m.parts().find_map(|p| {
+        let is_ics = mime_of(&p).starts_with("text/calendar")
+            || p.attachment_name().is_some_and(|n| n.to_ascii_lowercase().ends_with(".ics"));
+        if !is_ics {
+            return None;
+        }
+        parse_ics(&String::from_utf8_lossy(&p.decoded()))
+    })
+}
+
+/// Unfolded lines of a calendar file (continuation lines start with a space or tab).
+fn ics_lines(ics: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in ics.split('\n').map(|l| l.trim_end_matches('\r')) {
+        match (line.strip_prefix(' ').or_else(|| line.strip_prefix('\t')), out.last_mut()) {
+            (Some(rest), Some(prev)) => prev.push_str(rest),
+            _ => out.push(line.to_string()),
+        }
+    }
+    out
+}
+
+/// Splits "NAME;PARAM=x:value" into (NAME, params, value).
+pub fn ics_property(line: &str) -> Option<(String, String, String)> {
+    let colon = {
+        // The value starts at the first colon outside quoted parameter values.
+        let mut quoted = false;
+        line.char_indices().find(|&(_, c)| {
+            if c == '"' {
+                quoted = !quoted;
+            }
+            c == ':' && !quoted
+        })?.0
+    };
+    let (head, value) = (&line[..colon], &line[colon + 1..]);
+    let (name, params) = head.split_once(';').unwrap_or((head, ""));
+    Some((name.to_ascii_uppercase(), params.to_string(), value.to_string()))
+}
+
+fn ics_text(value: &str) -> String {
+    value.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+}
+
+fn ics_param(params: &str, name: &str) -> Option<String> {
+    params.split(';').find_map(|p| {
+        let (k, v) = p.split_once('=')?;
+        k.eq_ignore_ascii_case(name).then(|| v.trim_matches('"').to_string())
+    })
+}
+
+fn ics_time(params: &str, value: &str) -> IcsTime {
+    let v = value.trim();
+    let date = |d: &str| if d.len() >= 8 { format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8]) } else { d.to_string() };
+    if params.to_ascii_uppercase().contains("VALUE=DATE") && !v.contains('T') || v.len() == 8 {
+        return IcsTime { date: date(v), time: None, utc: false };
+    }
+    let (d, t) = v.split_once('T').unwrap_or((v, ""));
+    let time = (t.len() >= 4).then(|| format!("{}:{}", &t[0..2], &t[2..4]));
+    IcsTime { date: date(d), time, utc: t.ends_with('Z') }
+}
+
+/// The first event of a calendar file.
+pub fn parse_ics(ics: &str) -> Option<Invite> {
+    let mut inv = Invite { ics: ics.to_string(), ..Default::default() };
+    let mut in_event = false;
+    let mut seen_event = false;
+    for line in ics_lines(ics) {
+        let Some((name, params, value)) = ics_property(&line) else { continue };
+        match (name.as_str(), in_event) {
+            ("METHOD", false) => inv.method = value.trim().to_ascii_uppercase(),
+            ("BEGIN", _) if value.eq_ignore_ascii_case("VEVENT") && !seen_event => in_event = true,
+            ("END", true) if value.eq_ignore_ascii_case("VEVENT") => {
+                in_event = false;
+                seen_event = true;
+            }
+            ("UID", true) => inv.uid = value,
+            ("SUMMARY", true) => inv.summary = ics_text(&value),
+            ("LOCATION", true) => inv.location = ics_text(&value),
+            ("DTSTART", true) => inv.start = ics_time(&params, &value),
+            ("DTEND", true) => inv.end = Some(ics_time(&params, &value)),
+            ("ORGANIZER", true) => {
+                inv.organizer = value.trim_start_matches("mailto:").trim_start_matches("MAILTO:").to_string();
+                inv.organizer_name = ics_param(&params, "CN").unwrap_or_default();
+            }
+            _ => {}
+        }
+    }
+    (seen_event && !inv.uid.is_empty()).then_some(inv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +610,24 @@ JVBERi0xLjQ=\r\n\
         assert_eq!(name, "report.pdf");
         assert_eq!(bytes, b"%PDF-1.4");
         assert!(parse_card(1, SAMPLE, false, false, 0).has_attachments);
+    }
+
+    #[test]
+    fn parses_calendar_invitations() {
+        let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VTIMEZONE\r\nTZID:Europe/Rome\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:abc-123@example.com\r\nSUMMARY:Project kick-off\\, phase 2\r\nLOCATION:Room 4\r\nDTSTART;TZID=Europe/Rome:20261028T100000\r\nDTEND;TZID=Europe/Rome:20261028T113000\r\nORGANIZER;CN=\"Anna: PM\":mailto:anna@example.com\r\nATTENDEE;CN=Me:mailto:me@example.com\r\nDESCRIPTION:A long description that continues\r\n  on the next line\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let inv = parse_ics(ics).unwrap();
+        assert_eq!(inv.method, "REQUEST");
+        assert_eq!(inv.uid, "abc-123@example.com");
+        assert_eq!(inv.summary, "Project kick-off, phase 2");
+        assert_eq!(inv.location, "Room 4");
+        assert_eq!(inv.start, IcsTime { date: "2026-10-28".into(), time: Some("10:00".into()), utc: false });
+        assert_eq!(inv.end.unwrap().time.as_deref(), Some("11:30"));
+        assert_eq!(inv.organizer, "anna@example.com");
+        assert_eq!(inv.organizer_name, "Anna: PM");
+        let all_day = parse_ics("BEGIN:VEVENT\nUID:x\nDTSTART;VALUE=DATE:20261101\nEND:VEVENT\n").unwrap();
+        assert_eq!(all_day.start.time, None);
+        let utc = parse_ics("BEGIN:VEVENT\nUID:y\nDTSTART:20261028T090000Z\nEND:VEVENT\n").unwrap();
+        assert!(utc.start.utc);
     }
 
     #[test]

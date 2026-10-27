@@ -461,6 +461,7 @@ pub async fn special_folder(session: &mut Session, kind: &str) -> Result<String>
         "archive" => "Archive",
         "drafts" => "Drafts",
         "sent" => "Sent",
+        "junk" => "Junk",
         _ => anyhow::bail!("unknown special folder: {kind}"),
     };
     if let Some(found) = find_special_folder(session, kind).await? {
@@ -827,6 +828,46 @@ pub async fn load_all_mail(
             Some(ThreadEntry { folder: r.folder, card })
         })
         .collect())
+}
+
+/// Moves an email back after an undo: finds it in `now_in` by Message-ID and
+/// moves it to `back_to`.
+pub async fn move_back(session: &mut Session, caps: ServerCaps, message_id: &str, now_in: &str, back_to: &str) -> Result<()> {
+    session.select(now_in).await.with_context(|| format!("cannot open {now_in}"))?;
+    let uids = uids_by_message_id(session, message_id).await?;
+    let uid = *uids.last().ok_or_else(|| anyhow!("the email is no longer in {now_in}"))?;
+    move_message(session, caps, now_in, uid, back_to).await
+}
+
+/// Marks several emails of a folder as read or unread at once.
+pub async fn set_seen_many(session: &mut Session, folder: &str, uids: &[u32], seen: bool) -> Result<()> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let op = if seen { "+FLAGS.SILENT (\\Seen)" } else { "-FLAGS.SILENT (\\Seen)" };
+    let _: Vec<_> = session.uid_store(&set, op).await.context("changing read state failed")?.try_collect().await?;
+    Ok(())
+}
+
+/// Permanently deletes every email of the Trash or Junk folder.
+/// Returns the folder name and how many emails were deleted.
+pub async fn empty_folder(session: &mut Session, kind: &str) -> Result<(String, u32)> {
+    anyhow::ensure!(kind == "trash" || kind == "junk", "only Trash and Junk can be emptied");
+    let folder = find_special_folder(session, kind).await?.ok_or_else(|| anyhow!("no {kind} folder"))?;
+    let mailbox = session.select(&folder).await.with_context(|| format!("cannot open {folder}"))?;
+    if mailbox.exists == 0 {
+        return Ok((folder, 0));
+    }
+    let _: Vec<_> = session
+        .store("1:*", "+FLAGS.SILENT (\\Deleted)")
+        .await
+        .context("marking emails as deleted failed")?
+        .try_collect()
+        .await?;
+    let _: Vec<_> = session.expunge().await.context("EXPUNGE failed")?.try_collect().await?;
+    Ok((folder, mailbox.exists))
 }
 
 #[cfg(test)]

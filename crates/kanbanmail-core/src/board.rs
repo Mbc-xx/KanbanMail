@@ -73,3 +73,14 @@ impl Board {
         Ok(board)
     }
 }
+
+impl Board {
+    /// Writes the columns back to `board.toml`, keeping the explanatory header.
+    pub fn save(&self) -> Result<()> {
+        anyhow::ensure!(!self.columns.is_empty(), "the board needs at least one column");
+        let header: String = DEFAULT_BOARD.lines().take_while(|l| l.starts_with('#')).map(|l| format!("{l}\n")).collect();
+        let body = toml::to_string_pretty(self)?;
+        let path = board_path()?;
+        std::fs::write(&path, format!("{header}\n{body}")).with_context(|| format!("writing {}", path.display()))
+    }
+}

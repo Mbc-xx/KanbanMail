@@ -41,6 +41,39 @@ pub struct Settings {
     /// listed keep their default place after these.
     #[serde(default)]
     pub folders: Vec<FolderPref>,
+    /// Automatic rules applied to new Inbox emails, in order (the first match wins).
+    #[serde(default)]
+    pub rules: Vec<Rule>,
+    /// Desktop notifications for new Inbox emails: "off", "important" or "all".
+    #[serde(default = "default_notify")]
+    pub notify: String,
+    /// "system", "light" or "dark".
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// Interface size in percent (90, 100, 110, 125).
+    #[serde(default = "default_zoom")]
+    pub zoom: u32,
+}
+
+fn default_notify() -> String {
+    "important".into()
+}
+
+fn default_theme() -> String {
+    "system".into()
+}
+
+fn default_zoom() -> u32 {
+    100
+}
+
+/// "When <field> contains <contains>, move the email to <folder>".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rule {
+    /// "from", "to" or "subject".
+    pub field: String,
+    pub contains: String,
+    pub folder: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +117,10 @@ impl Default for Settings {
             important_same_domain: true,
             group_threads: false,
             folders: Vec::new(),
+            rules: Vec::new(),
+            notify: default_notify(),
+            theme: default_theme(),
+            zoom: default_zoom(),
         }
     }
 }

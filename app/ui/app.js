@@ -44,14 +44,237 @@ function show(screenId) {
 }
 
 let toastTimer;
-function toast(message, kind = "error") {
+/// A message at the bottom. With `action` ({ label, run }) it shows a button
+/// (e.g. "Undo") and stays a little longer.
+function toast(message, kind = "error", action = null) {
   const el = $("toast");
-  el.textContent = message;
+  el.replaceChildren(el_text(message));
+  if (action) {
+    const b = document.createElement("button");
+    b.textContent = action.label;
+    b.addEventListener("click", () => {
+      el.hidden = true;
+      action.run();
+    });
+    el.append(b);
+  }
   el.className = "toast" + (kind === "info" ? " info" : "");
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), kind === "info" ? 2500 : 7000);
+  toastTimer = setTimeout(() => (el.hidden = true), action ? 8000 : kind === "info" ? 2500 : 7000);
 }
+
+function el_text(text) {
+  const span = document.createElement("span");
+  span.textContent = text;
+  return span;
+}
+
+// ---------- multiple selection ----------
+
+state.selection = new Map(); // "folder/uid" -> { folder, card }
+const selKey = (folder, card) => folder + "/" + card.uid;
+let lastSelectedEl = null;
+
+function updateSelectionBar() {
+  const n = state.selection.size;
+  $("selection-bar").hidden = !n;
+  $("selection-count").textContent = `${n} selected`;
+  for (const c of document.querySelectorAll(".card")) {
+    const key = c.dataset.folder + "/" + c.dataset.uid;
+    c.classList.toggle("multi-selected", state.selection.has(key));
+  }
+}
+
+function toggleSelection(members, cardEl) {
+  const all = members.every((m) => state.selection.has(selKey(m.folder, m.card)));
+  for (const m of members) {
+    if (all) state.selection.delete(selKey(m.folder, m.card));
+    else state.selection.set(selKey(m.folder, m.card), m);
+  }
+  lastSelectedEl = cardEl;
+  updateSelectionBar();
+}
+
+/// Shift-click: everything between the last selected card and this one (same column).
+function selectRange(cardEl) {
+  const container = cardEl.closest(".cards");
+  const cards = [...container.querySelectorAll(".card")];
+  const from = lastSelectedEl && container.contains(lastSelectedEl) ? cards.indexOf(lastSelectedEl) : cards.indexOf(cardEl);
+  const to = cards.indexOf(cardEl);
+  const columnFolder = container.closest(".column").dataset.folder;
+  for (const c of cards.slice(Math.min(from, to), Math.max(from, to) + 1)) {
+    const list = state.cards[columnFolder] || [];
+    const card = list.find((x) => String(x.uid) === c.dataset.uid && (x.__folder || columnFolder) === c.dataset.folder);
+    if (card) state.selection.set(c.dataset.folder + "/" + c.dataset.uid, { folder: c.dataset.folder, card });
+  }
+  lastSelectedEl = cardEl;
+  updateSelectionBar();
+}
+
+function clearSelection() {
+  state.selection.clear();
+  lastSelectedEl = null;
+  updateSelectionBar();
+}
+
+async function markMany(members, seen) {
+  const byFolder = new Map();
+  for (const m of members) {
+    m.card.seen = seen;
+    if (!byFolder.has(m.folder)) byFolder.set(m.folder, []);
+    byFolder.get(m.folder).push(m.card.uid);
+  }
+  for (const c of visibleColumns()) renderCards(c.folder);
+  try {
+    for (const [folder, uids] of byFolder) await invoke("set_seen_many", { folder, uids, seen });
+  } catch (e) {
+    toast("Read state not changed: " + e);
+  }
+  await afterBulkChange();
+}
+
+function markAllRead(folder) {
+  const members = (state.cards[folder] || []).filter((c) => !c.seen).map((card) => ({ folder: card.__folder || folder, card }));
+  if (members.length) markMany(members, true);
+}
+
+for (const b of document.querySelectorAll("#selection-bar [data-sel]")) {
+  b.addEventListener("click", () => {
+    const members = [...state.selection.values()];
+    const action = b.dataset.sel;
+    clearSelection();
+    if (action === "clear" || !members.length) return;
+    if (action === "read" || action === "unread") return markMany(members, action === "read");
+    fileMany(members, action);
+  });
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && state.selection.size && $("reader").hidden && $("composer").hidden && $("settings").hidden) clearSelection();
+});
+
+// ---------- calendar invitations ----------
+
+function icsDate(t) {
+  if (!t?.date) return null;
+  const [y, m, d] = t.date.split("-").map(Number);
+  if (!t.time) return { date: new Date(y, m - 1, d), allDay: true };
+  const [hh, mm] = t.time.split(":").map(Number);
+  return { date: t.utc ? new Date(Date.UTC(y, m - 1, d, hh, mm)) : new Date(y, m - 1, d, hh, mm), allDay: false };
+}
+
+function describeWhen(inv) {
+  const s = icsDate(inv.start);
+  if (!s) return "";
+  const e = icsDate(inv.end);
+  const day = s.date.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  if (s.allDay) return day + " (all day)";
+  const time = (d) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const sameDay = e && e.date.toDateString() === s.date.toDateString();
+  return `${day}, ${time(s.date)}${e ? " – " + (sameDay ? time(e.date) : e.date.toLocaleString()) : ""}`;
+}
+
+function renderInvite(inv) {
+  const box = $("reader-invite");
+  box.hidden = !inv;
+  if (!inv) return;
+  const cancelled = inv.method === "CANCEL";
+  const isReply = inv.method === "REPLY";
+  $("invite-title").textContent = (cancelled ? "Cancelled: " : isReply ? "Answer to: " : "") + (inv.summary || "Calendar event");
+  $("invite-when").textContent = describeWhen(inv);
+  const organizer = inv.organizer_name || inv.organizer;
+  $("invite-where").textContent = [inv.location && "📍 " + inv.location, organizer && "Organizer: " + organizer].filter(Boolean).join(" · ");
+  for (const b of box.querySelectorAll("[data-rsvp]")) {
+    b.hidden = cancelled || isReply || !inv.organizer;
+    b.classList.remove("chosen");
+  }
+}
+
+for (const b of document.querySelectorAll("#reader-invite [data-rsvp]")) {
+  b.addEventListener("click", async () => {
+    const { folder, card } = readerCard;
+    const response = b.dataset.rsvp;
+    b.disabled = true;
+    try {
+      await invoke("respond_invite", { folder, uid: card.uid, response });
+      for (const x of document.querySelectorAll("#reader-invite [data-rsvp]")) x.classList.toggle("chosen", x === b);
+      toast({ ACCEPTED: "Accepted", TENTATIVE: "Answered “maybe”", DECLINED: "Declined" }[response] + " — the organizer has been told", "info");
+    } catch (e) {
+      toast("Could not send the answer: " + e);
+    } finally {
+      b.disabled = false;
+    }
+  });
+}
+
+$("invite-add").addEventListener("click", async () => {
+  const { folder, card } = readerCard;
+  try {
+    await invoke("add_to_calendar", { folder, uid: card.uid });
+  } catch (e) {
+    toast("Could not open the calendar: " + e);
+  }
+});
+
+// ---------- spam and emptying ----------
+
+async function emptyFolder(kind) {
+  const name = kind === "trash" ? "Trash" : "Junk";
+  const choice = await ask(`Permanently delete every email in ${name}? This cannot be undone.`, [
+    { label: "Cancel", value: null },
+    { label: `Empty ${name}`, value: "yes", kind: "danger" },
+  ]);
+  if (choice !== "yes") return;
+  try {
+    const n = await invoke("empty_folder", { kind });
+    toast(`${n} email${n === 1 ? "" : "s"} deleted permanently`, "info");
+  } catch (e) {
+    toast(`Could not empty ${name}: ${e}`);
+  }
+  await afterBulkChange();
+}
+
+// ---------- undo ----------
+
+/// After a move: "Undo" puts the emails back where they were.
+/// `moves`: [{ message_id, now, back }] (emails without Message-ID cannot be undone).
+function offerUndo(message, moves) {
+  const undoable = moves.filter((m) => m.message_id && m.now && m.back && m.now !== m.back);
+  if (!undoable.length) return toast(message, "info");
+  toast(message, "info", {
+    label: "Undo",
+    run: async () => {
+      let failed = 0;
+      for (const m of undoable) {
+        try {
+          await invoke("undo_move", { messageId: m.message_id, nowIn: m.now, backTo: m.back });
+        } catch (e) {
+          failed++;
+          console.error(e);
+        }
+      }
+      toast(failed ? `${failed} of ${undoable.length} could not be restored` : "Restored", failed ? "error" : "info");
+      await Promise.all(visibleColumns().map((c) => loadColumn(c.folder)));
+      scheduleFolderCounts();
+    },
+  });
+}
+
+// ---------- appearance ----------
+
+/// Theme ("system", "light", "dark") and interface size (percent).
+function applyAppearance(theme, zoom) {
+  const root = document.documentElement;
+  if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+  else delete root.dataset.theme;
+  root.style.zoom = String((zoom || 100) / 100);
+  local.set("appearance", JSON.stringify({ theme, zoom }));
+}
+try {
+  const a = JSON.parse(localStorage.getItem("appearance") || "null");
+  if (a) applyAppearance(a.theme, a.zoom);
+} catch (_) {}
 
 function formatDate(ts, long = false) {
   if (!ts) return "";
@@ -95,7 +318,8 @@ async function start() {
     if (status.configured) {
       state.email = status.email;
       $("account-email").textContent = status.email;
-      await openBoard();
+      const fromCache = showCachedBoard();
+      await openBoard({ fromCache });
     } else {
       if (status.email) $("login-email").value = status.email;
       if (status.server) $("login-server").value = status.server;
@@ -148,6 +372,7 @@ $("logout").addEventListener("click", async () => {
     { label: "Disconnect", value: "yes", kind: "danger" },
   ]);
   if (choice !== "yes") return;
+  cacheClear();
   await invoke("forget_account").catch((e) => toast(String(e)));
   invoke("set_unread_badge", { count: 0 }).catch(() => {});
   $("settings").hidden = true;
@@ -158,26 +383,86 @@ $("logout").addEventListener("click", async () => {
 
 // ---------- board ----------
 
-async function openBoard() {
-  show("loading");
-  $("loading-text").textContent = "Preparing columns…";
+// ---------- local cache for an instant start ----------
+
+const cacheKey = (k) => `cache:${state.email}:${k}`;
+
+function cacheGet(k) {
+  try {
+    return JSON.parse(localStorage.getItem(cacheKey(k)) || "null");
+  } catch (_) {
+    return null;
+  }
+}
+
+function cacheSet(k, value) {
+  try {
+    localStorage.setItem(cacheKey(k), JSON.stringify(value));
+  } catch (_) {}
+}
+
+function cacheClear() {
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith(`cache:${state.email}:`)) localStorage.removeItem(k);
+  } catch (_) {}
+}
+
+/// Shows the board from the last session right away; fresh data replaces it
+/// a moment later. Returns true if there was something to show.
+function showCachedBoard() {
+  const columns = cacheGet("board");
+  if (!columns?.length) return false;
+  const settings = cacheGet("settings");
+  if (settings) applySettingsState(settings);
+  state.columns = columns;
+  state.folders = cacheGet("folders") || [];
+  $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
+  state.onlyImportant = local.get("onlyImportant") === "1";
+  $("only-important").checked = state.onlyImportant;
+  state.view = null;
+  renderColumns();
+  renderFolders();
+  for (const c of columns) {
+    state.cards[c.folder] = cacheGet("cards:" + c.folder) || [];
+    renderCards(c.folder);
+  }
+  setSyncStatus("Updating…");
+  show("board-screen");
+  return true;
+}
+
+function applySettingsState(settings) {
+  state.markReadAfter = settings.mark_read_after_seconds;
+  state.signature = settings.signature;
+  state.signatureHtml = settings.signature_html;
+  state.defaultBcc = settings.default_bcc;
+  state.loadRemoteImages = settings.load_remote_images;
+  state.allow = settings.important_allow;
+  state.block = settings.important_block;
+  state.sameDomain = settings.important_same_domain;
+  state.groupThreads = settings.group_threads;
+  state.folderPrefs = settings.folders || [];
+  state.rules = settings.rules || [];
+  state.notify = settings.notify || "important";
+  applyAppearance(settings.theme, settings.zoom);
+}
+
+async function openBoard({ fromCache = false } = {}) {
+  if (!fromCache) {
+    show("loading");
+    $("loading-text").textContent = "Preparing columns…";
+  }
   try {
     const info = await invoke("open_board");
     state.columns = info.columns;
+    state.defaultLimit = info.limit || 200;
+    cacheSet("board", info.columns);
     $("config-path").textContent = info.config_path;
     $("settings-config-path").textContent = info.config_path;
     try {
       const settings = await invoke("get_settings");
-      state.markReadAfter = settings.mark_read_after_seconds;
-      state.signature = settings.signature;
-      state.signatureHtml = settings.signature_html;
-      state.defaultBcc = settings.default_bcc;
-      state.loadRemoteImages = settings.load_remote_images;
-      state.allow = settings.important_allow;
-      state.block = settings.important_block;
-      state.sameDomain = settings.important_same_domain;
-      state.groupThreads = settings.group_threads;
-      state.folderPrefs = settings.folders || [];
+      applySettingsState(settings);
+      cacheSet("settings", settings);
       if (settings.use_system_contacts) loadContacts();
     } catch (_) {}
     setSyncStatus(info.can_idle ? "Live updates on (IDLE)" : "Refreshing every 60 seconds");
@@ -191,6 +476,12 @@ async function openBoard() {
     loadKnownSenders();
     await Promise.all(state.columns.map((c) => loadColumn(c.folder)));
   } catch (e) {
+    if (fromCache) {
+      // Keep showing the last known board, and say why it is not updating.
+      setSyncStatus("Offline");
+      toast("Could not connect to the server: " + e);
+      return;
+    }
     show("login");
     showLoginError("Could not open the board: " + e);
   }
@@ -219,6 +510,20 @@ function renderColumns() {
     head.append(el("h2", "", col.name), el("span", "count muted", ""), el("span", "unread", ""), el("span", "folder muted", state.view?.multi ? "" : col.folder));
     const color = folderColor(col.folder);
     if (color) column.style.setProperty("--folder-color", color);
+    if (!state.view?.search) {
+      const markRead = el("button", "head-btn icon-btn");
+      markRead.title = "Mark all as read";
+      markRead.append(icon("envelope-open"));
+      markRead.hidden = true; // shown when the column has unread emails
+      markRead.addEventListener("click", () => markAllRead(col.folder));
+      head.append(markRead);
+    }
+    const emptyKind = folderKind(col.folder);
+    if (state.view && (emptyKind === "trash" || emptyKind === "junk")) {
+      const empty = el("button", "head-btn danger", emptyKind === "trash" ? "Empty Trash" : "Empty Junk");
+      empty.addEventListener("click", () => emptyFolder(emptyKind));
+      head.append(empty);
+    }
     const cards = el("div", state.view ? "cards rows" : "cards");
     cards.append(el("div", "empty muted", "Loading…"));
     column.append(head);
@@ -340,10 +645,75 @@ async function loadColumn(folder) {
   if (folder === SEARCH_KEY) return runSearch();
   if (folder === ALL_KEY) return loadAllMail();
   try {
-    state.cards[folder] = await invoke("load_column", { folder });
+    state.cards[folder] = await invoke("load_column", { folder, limit: state.limits[folder] || null });
     renderCards(folder);
+    if (state.columns.some((c) => c.folder === folder)) cacheSet("cards:" + folder, state.cards[folder].slice(0, 200));
+    if (folder.toUpperCase() === "INBOX") afterInboxLoaded(state.cards[folder]);
   } catch (e) {
     toast(`Could not load ${folder}: ${e}`);
+  }
+}
+
+// ---------- new Inbox emails: rules and notifications ----------
+
+state.limits = {}; // folder -> how many emails to load ("Load more")
+state.defaultLimit = 200;
+state.rules = [];
+state.notify = "important";
+let inboxKnown = null; // UIDs seen in the Inbox so far (null before the first load)
+const ruleTried = new Set(); // emails a rule already tried to move
+
+/// The first rule that matches an email, if any.
+function ruleFor(card) {
+  for (const r of state.rules) {
+    const hay = r.field === "to" ? card.to : r.field === "subject" ? card.subject : `${card.from} ${card.from_address}`;
+    if (r.contains && r.folder && r.folder.toUpperCase() !== "INBOX" && fold(hay).includes(fold(r.contains))) return r;
+  }
+  return null;
+}
+
+/// Applies the rules to `cards` of the Inbox; returns the emails it moved.
+async function applyRules(cards, { announce = true } = {}) {
+  const byFolder = new Map();
+  for (const card of cards) {
+    const key = card.uid + ":" + card.message_id;
+    const rule = ruleTried.has(key) ? null : ruleFor(card);
+    if (!rule) continue;
+    ruleTried.add(key);
+    if (!byFolder.has(rule.folder)) byFolder.set(rule.folder, []);
+    byFolder.get(rule.folder).push({ folder: "INBOX", card });
+  }
+  let moves = [];
+  for (const [folder, members] of byFolder) moves = moves.concat(await moveMany(members, folder, { quiet: true }));
+  if (announce && moves.length) offerUndo(`Rules moved ${moves.length} email${moves.length === 1 ? "" : "s"}`, moves);
+  return new Set(moves.map((m) => m.message_id));
+}
+
+async function afterInboxLoaded(cards) {
+  const first = inboxKnown === null;
+  const fresh = first ? [] : cards.filter((c) => !inboxKnown.has(c.uid));
+  inboxKnown = new Set(cards.map((c) => c.uid));
+  if (!fresh.length) return;
+  const moved = await applyRules(fresh);
+  const toNotify = fresh.filter(
+    (c) => !c.seen && !moved.has(c.message_id) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
+  );
+  if (!toNotify.length) return;
+  const [title, body] =
+    toNotify.length === 1
+      ? [toNotify[0].from || toNotify[0].from_address, toNotify[0].subject || "(no subject)"]
+      : [`${toNotify.length} new emails`, toNotify.slice(0, 3).map((c) => `${shortName(c.from)}: ${c.subject}`).join("\n")];
+  invoke("notify", { title, body }).catch((e) => console.error("notification failed", e));
+}
+
+/// Keeps rules and notifications working while the Inbox is not on screen.
+async function checkInbox() {
+  try {
+    const cards = await invoke("load_column", { folder: "INBOX", limit: null });
+    state.cards.INBOX = cards;
+    afterInboxLoaded(cards);
+  } catch (e) {
+    console.error(e);
   }
 }
 
@@ -367,6 +737,8 @@ function renderCards(folder) {
   const unread = all.filter((c) => !c.seen).length;
   column.querySelector(".count").textContent = all.length;
   column.querySelector(".unread").textContent = unread ? `${unread} unread` : "";
+  const markRead = column.querySelector(".head-btn.icon-btn");
+  if (markRead) markRead.hidden = !unread;
   // Unread only / Important only are board filters: search results show everything found.
   const searching = !!state.view?.search;
   const list = all.filter(
@@ -389,6 +761,19 @@ function renderCards(folder) {
     }
     return;
   }
+  // "Load more" when the folder probably has older emails than the ones shown.
+  const limit = state.limits[folder] || state.defaultLimit;
+  const loadMore = () => {
+    if (MULTI_KEYS.includes(folder) || all.length < limit) return null;
+    const b = el("button", "load-more", `Load ${state.defaultLimit} more`);
+    b.addEventListener("click", () => {
+      b.disabled = true;
+      b.textContent = "Loading…";
+      state.limits[folder] = limit + state.defaultLimit;
+      loadColumn(folder);
+    });
+    return b;
+  };
   // Search results and All Mail come from several folders: each card carries its own.
   if (state.groupThreads) {
     for (const g of groupByThread(list, folder)) {
@@ -397,6 +782,8 @@ function renderCards(folder) {
   } else {
     for (const card of list) container.append(renderCard(card.__folder || folder, card));
   }
+  const more = loadMore();
+  if (more) container.append(more);
 }
 
 /// Groups cards of a list into conversations (Message-ID, In-Reply-To and
@@ -505,9 +892,18 @@ function renderCard(folder, card, group = null) {
     c.append(actions, fromLine, el("div", "subject", card.subject || "(no subject)"), el("div", "preview", card.preview));
   }
 
-  c.addEventListener("click", () => (kind === "drafts" ? openDraft(folder, card) : openReader(folder, card)));
+  if (members.every((m) => state.selection.has(selKey(m.folder, m.card)))) c.classList.add("multi-selected");
+  c.addEventListener("click", (ev) => {
+    // ⌘/Ctrl-click toggles the selection, Shift-click selects a range.
+    if (ev.metaKey || ev.ctrlKey) return toggleSelection(members, c);
+    if (ev.shiftKey) return selectRange(c);
+    if (state.selection.size) clearSelection();
+    kind === "drafts" ? openDraft(folder, card) : openReader(folder, card);
+  });
   c.addEventListener("dragstart", (ev) => {
-    state.dragging = { folder, uid: card.uid, members };
+    // Dragging a selected card drags the whole selection.
+    const dragged = state.selection.has(selKey(folder, card)) ? [...state.selection.values()] : members;
+    state.dragging = { folder, uid: card.uid, members: dragged };
     ev.dataTransfer.effectAllowed = "move";
     ev.dataTransfer.setData("text/plain", String(card.uid));
     requestAnimationFrame(() => c.classList.add("dragging"));
@@ -562,19 +958,23 @@ async function afterBulkChange() {
 }
 
 /// Moves a whole conversation to another folder.
-async function moveMany(members, to) {
+async function moveMany(members, to, { quiet = false } = {}) {
   dropFromLists(members);
   let failed = 0;
+  const moves = [];
   for (const m of members) {
     try {
       await invoke("move_card", { from: m.folder, uid: m.card.uid, to });
+      moves.push({ message_id: m.card.message_id, now: to, back: m.folder });
     } catch (e) {
       failed++;
       console.error(e);
     }
   }
   if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
+  else if (!quiet) offerUndo(`${members.length} emails moved to ${folderLabel(to)}`, moves);
   await afterBulkChange();
+  return moves;
 }
 
 /// Archives or deletes a whole conversation.
@@ -582,17 +982,19 @@ async function fileMany(members, kind) {
   dropFromLists(members);
   let target = "";
   let failed = 0;
+  const moves = [];
   for (const m of members) {
     if (folderKind(m.folder) === kind) continue; // already there
     try {
       target = await invoke("file_card", { folder: m.folder, uid: m.card.uid, kind });
+      moves.push({ message_id: m.card.message_id, now: target, back: m.folder });
     } catch (e) {
       failed++;
       console.error(e);
     }
   }
   if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
-  else toast(`Conversation moved to ${target || folderLabel(kind)}`, "info");
+  else offerUndo(`${members.length} email${members.length === 1 ? "" : "s"} moved to ${folderLabel(target || kind)}`, moves);
   await afterBulkChange();
 }
 
@@ -632,6 +1034,7 @@ async function moveCard(from, uid, to) {
 
   try {
     await invoke("move_card", { from, uid, to });
+    offerUndo(`Moved to ${folderLabel(to)}`, [{ message_id: card.message_id, now: to, back: from }]);
   } catch (e) {
     toast("Move failed: " + e);
   }
@@ -752,6 +1155,7 @@ const FOLDER_ICONS = { inbox: "inbox", drafts: "drafts", sent: "sent", archive: 
 async function loadFolders() {
   try {
     state.folders = await invoke("list_folders");
+    cacheSet("folders", state.folders);
     renderFolders();
     const inboxUnread = state.folders.find((f) => f.kind === "inbox")?.unseen || 0;
     invoke("set_unread_badge", { count: inboxUnread }).catch(() => {});
@@ -995,13 +1399,17 @@ $("nav-board").addEventListener("click", showBoard);
 $("nav-all").addEventListener("click", openAllMail);
 $("toggle-sidebar").addEventListener("click", toggleSidebar);
 document.addEventListener("keydown", (ev) => {
-  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "b" && !$("board-screen").hidden) {
+  const typing = ev.target.closest?.("input, textarea, [contenteditable='true']");
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "b" && !$("board-screen").hidden && !typing) {
     ev.preventDefault();
     toggleSidebar();
   }
 });
 
-listen("folder-changed", (ev) => scheduleReload(ev.payload));
+listen("folder-changed", (ev) => {
+  if (String(ev.payload).toUpperCase() === "INBOX" && !columnEl(ev.payload)) checkInbox();
+  scheduleReload(ev.payload);
+});
 
 // ---------- reading ----------
 
@@ -1140,15 +1548,22 @@ async function fileCard(folder, card, kind) {
   renderCards(folder);
   try {
     const target = await invoke("file_card", { folder, uid: card.uid, kind });
-    toast(`Moved to ${target}`, "info");
+    offerUndo(`Moved to ${folderLabel(target)}`, [{ message_id: card.message_id, now: target, back: folder }]);
   } catch (e) {
-    toast((kind === "trash" ? "Delete" : "Archive") + " failed: " + e);
+    toast(({ trash: "Delete", junk: "Spam", archive: "Archive" }[kind] || "Move") + " failed: " + e);
   }
   await Promise.all(
     state.columns.concat(visibleColumns()).map((c) => c.folder).filter((f, i, a) => a.indexOf(f) === i && columnEl(f)).map(loadColumn),
   );
   scheduleFolderCounts();
 }
+
+$("reader-spam").addEventListener("click", () => {
+  const { folder, card } = readerCard;
+  closeReader();
+  if (folderKind(folder) === "junk") moveMany([{ folder, card }], "INBOX");
+  else fileCard(folder, card, "junk");
+});
 
 $("reader-trash").addEventListener("click", () => {
   const { folder, card } = readerCard;
@@ -1215,6 +1630,9 @@ async function openReader(folder, card, opts = {}) {
   updateSeenButton();
   $("reader-reply").disabled = $("reader-reply-all").disabled = true;
   $("reader-trash").hidden = folderKind(folder) === "trash";
+  const inJunk = folderKind(folder) === "junk";
+  $("reader-spam").querySelector("span").textContent = inJunk ? "Not spam" : "Spam";
+  $("reader-spam").title = inJunk ? "Move back to the Inbox" : "Move to Junk";
   $("rule-scope").value = "address";
   updateSenderPanel();
   $("reader-subject").textContent = card.subject || "(no subject)";
@@ -1227,6 +1645,7 @@ async function openReader(folder, card, opts = {}) {
   $("reader-date").textContent = formatDate(card.date, true);
   $("reader-toggle").hidden = true;
   $("reader-attachments").hidden = true;
+  $("reader-invite").hidden = true;
   $("reader-load-images").hidden = true;
   $("reader-remote-note").textContent = "";
   $("reader-quote").hidden = true;
@@ -1246,6 +1665,7 @@ async function openReader(folder, card, opts = {}) {
     readerRemoteAllowed = state.loadRemoteImages;
     $("reader-toggle").hidden = !(msg.html && msg.text);
     renderAttachments(folder, card.uid, msg.attachments || []);
+    renderInvite(msg.invite);
     renderReaderBody();
     if (opts.then === "reply") replyTo(false);
     if (!opts.thread) loadThread(folder, card, msg);
@@ -1369,6 +1789,32 @@ $("reader-quote").addEventListener("click", () => {
   renderReaderBody();
 });
 
+/// A plain-text email as readable text: links and email addresses are
+/// clickable, and quoted lines ("> ...") are dimmed.
+function plainTextView(text) {
+  const box = el("div", "plain-text");
+  const link = /(https?:\/\/[^\s<>"')\]]+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/g;
+  for (const line of text.split("\n")) {
+    const target = /^\s*>/.test(line) ? box.appendChild(el("span", "quoted")) : box;
+    let last = 0;
+    for (const m of line.matchAll(link)) {
+      target.append(document.createTextNode(line.slice(last, m.index)));
+      const href = m[0].includes("://") ? m[0] : "mailto:" + m[0];
+      const a = el("a", "", m[0]);
+      a.href = href;
+      a.title = href;
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openLink(href);
+      });
+      target.append(a);
+      last = m.index + m[0].length;
+    }
+    target.append(document.createTextNode(line.slice(last) + "\n"));
+  }
+  return box;
+}
+
 /// Makes the email frame as tall as its content (and keeps it so while images load).
 function fitFrame(frame) {
   const doc = frame.contentDocument;
@@ -1382,6 +1828,25 @@ function fitFrame(frame) {
   fit();
   new ResizeObserver(fit).observe(doc.body);
   for (const img of doc.images) img.addEventListener("load", fit);
+  // Links open in the default browser (web links) or in a new email (mailto).
+  for (const a of doc.querySelectorAll("a[href]")) a.title = a.getAttribute("href");
+  doc.addEventListener("click", (ev) => {
+    const a = ev.target.closest?.("a[href]");
+    if (!a) return;
+    ev.preventDefault();
+    openLink(a.getAttribute("href"));
+  });
+}
+
+function openLink(href) {
+  const url = (href || "").trim();
+  if (/^mailto:/i.test(url)) {
+    const [addr, query] = url.slice(7).split("?");
+    const params = new URLSearchParams(query || "");
+    openComposer({ to: decodeURIComponent(addr), subject: params.get("subject") || "", body: (params.get("body") || "") + signatureBlock() });
+  } else if (/^https?:\/\//i.test(url)) {
+    invoke("open_url", { url }).catch((e) => toast("Could not open the link: " + e));
+  }
 }
 
 function renderReaderBody() {
@@ -1407,7 +1872,7 @@ function renderReaderBody() {
     body.replaceChildren(frame);
     $("reader-toggle").textContent = "Show plain text";
   } else {
-    body.replaceChildren(el("pre", "", text || "(no text)"));
+    body.replaceChildren(plainTextView(text || "(no text)"));
     $("reader-toggle").textContent = "Show HTML version";
   }
   updateRemoteNote();
@@ -1497,7 +1962,7 @@ const MAX_ATTACH_BYTES = 25 * 1024 * 1024; // most mail servers refuse larger em
 function composeSnapshot() {
   return ["compose-to", "compose-cc", "compose-bcc", "compose-subject", "compose-body"]
     .map((id) => $(id).value)
-    .concat(compose.markdown ? "md" : "plain", compose.attachments.map((a) => a.name + ":" + a.size).join("|"))
+    .concat(compose.rich ? $("compose-rich").innerHTML : compose.markdown ? "md" : "plain", compose.attachments.map((a) => a.name + ":" + a.size).join("|"))
     .join("\u0000");
 }
 
@@ -1507,11 +1972,12 @@ function composeDraft() {
     cc: $("compose-cc").value,
     bcc: $("compose-bcc").value,
     subject: $("compose-subject").value,
-    body: $("compose-body").value,
+    body: compose.rich ? richText() : $("compose-body").value,
+    html: compose.rich ? $("compose-rich").innerHTML : null,
     in_reply_to: compose.context?.in_reply_to ?? null,
     references: compose.context?.references ?? [],
     message_id: compose.messageId,
-    markdown: compose.markdown,
+    markdown: !compose.rich && compose.markdown,
     attachments: compose.attachments.map(({ name, mime, data }) => ({ name, mime, data })),
   };
 }
@@ -1545,7 +2011,9 @@ async function saveDraft() {
 
 async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [] } = {}) {
   compose.attachments = attachments;
-  compose.markdown = local.get("composeFormat") === "markdown";
+  const fmt = local.get("composeFormat");
+  compose.markdown = fmt === "markdown";
+  compose.rich = fmt === "rich";
   setPreview(false);
   renderComposeAttachments();
   renderFormat();
@@ -1555,6 +2023,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   $("compose-bcc").value = bcc;
   $("compose-subject").value = subject;
   $("compose-body").value = body;
+  if (compose.rich) $("compose-rich").innerHTML = textToRichHtml(body);
   $("compose-from").textContent = "From: " + state.email;
   setComposeStatus("");
   compose.reply = reply;
@@ -1564,8 +2033,10 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   $("compose-drop").hidden = true;
   compose.messageId = messageId;
   $("composer").hidden = false;
-  const bodyEl = $("compose-body");
-  if (to) {
+  const bodyEl = compose.rich ? $("compose-rich") : $("compose-body");
+  if (to && compose.rich) {
+    bodyEl.focus();
+  } else if (to) {
     bodyEl.focus();
     bodyEl.setSelectionRange(0, 0);
     bodyEl.scrollTop = 0;
@@ -1762,25 +2233,118 @@ for (const type of ["dragover", "drop"]) {
 }
 
 function renderFormat() {
-  $("fmt-plain").classList.toggle("active", !compose.markdown);
-  $("fmt-md").classList.toggle("active", compose.markdown);
-  $("fmt-plain").setAttribute("aria-checked", String(!compose.markdown));
-  $("fmt-md").setAttribute("aria-checked", String(compose.markdown));
-  $("compose-preview").hidden = !compose.markdown;
+  const fmt = compose.rich ? "rich" : compose.markdown ? "markdown" : "plain";
+  for (const [id, f] of [["fmt-plain", "plain"], ["fmt-md", "markdown"], ["fmt-rich", "rich"]]) {
+    $(id).classList.toggle("active", fmt === f);
+    $(id).setAttribute("aria-checked", String(fmt === f));
+  }
+  $("compose-preview").hidden = fmt !== "markdown";
+  $("compose-body").hidden = fmt === "rich" || compose.previewing;
+  $("compose-rich").hidden = fmt !== "rich";
+  $("rich-toolbar").hidden = fmt !== "rich";
   $("compose-body").placeholder = compose.markdown ? "**bold**, *italic*, - lists, [link](https://example.com), # headings, tables or inline HTML" : "";
 }
 
-function setFormat(markdown) {
-  compose.markdown = markdown;
-  local.set("composeFormat", markdown ? "markdown" : "plain");
-  if (!markdown) setPreview(false);
+/// Switches between "plain", "markdown" and "rich", converting what was written.
+async function setFormat(fmt) {
+  const was = compose.rich ? "rich" : compose.markdown ? "markdown" : "plain";
+  if (fmt === was) return;
+  if (fmt === "rich") {
+    const text = $("compose-body").value;
+    $("compose-rich").innerHTML =
+      was === "markdown" ? await invoke("render_markdown", { text }).catch(() => textToRichHtml(text)) : textToRichHtml(text);
+  } else if (was === "rich") {
+    $("compose-body").value = richText();
+  }
+  compose.markdown = fmt === "markdown";
+  compose.rich = fmt === "rich";
+  local.set("composeFormat", fmt);
+  if (fmt !== "markdown") await setPreview(false);
   renderFormat();
+  (compose.rich ? $("compose-rich") : $("compose-body")).focus();
 }
+
+/// Plain text to editor HTML. The signature block becomes the rich signature
+/// when there is one.
+function textToRichHtml(text) {
+  const conv = (t) => escapeHtml(t).replace(/\n/g, "<br>");
+  const marker = state.signature ? "-- \n" + state.signature : null;
+  const pos = marker ? text.indexOf(marker) : -1;
+  if (pos < 0 || !state.signatureHtml) return conv(text);
+  return conv(text.slice(0, pos)) + `<div>-- <br>${state.signatureHtml}</div>` + conv(text.slice(pos + marker.length));
+}
+
+/// The plain-text version of the visual editor.
+function richText() {
+  const ed = $("compose-rich");
+  const hidden = ed.hidden;
+  ed.hidden = false; // innerText needs the element to be rendered
+  const text = ed.innerText.replace(/\u00a0/g, " ");
+  ed.hidden = hidden;
+  return text;
+}
+
+// Visual editor toolbar.
+let richRange = null;
+const rememberRich = () => {
+  const sel = window.getSelection();
+  if (sel.rangeCount && $("compose-rich").contains(sel.anchorNode)) richRange = sel.getRangeAt(0).cloneRange();
+};
+const restoreRich = () => {
+  $("compose-rich").focus();
+  if (!richRange) return;
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(richRange);
+};
+for (const ev of ["keyup", "mouseup", "input"]) $("compose-rich").addEventListener(ev, rememberRich);
+for (const b of document.querySelectorAll("#rich-toolbar [data-rich]")) {
+  b.addEventListener("mousedown", (ev) => ev.preventDefault());
+  b.addEventListener("click", () => {
+    restoreRich();
+    const cmd = b.dataset.rich;
+    if (cmd === "blockquote") document.execCommand("formatBlock", false, "blockquote");
+    else document.execCommand(cmd);
+    rememberRich();
+  });
+}
+$("rich-link").addEventListener("mousedown", (ev) => ev.preventDefault());
+$("rich-link").addEventListener("click", () => {
+  rememberRich();
+  $("rich-link-row").hidden = false;
+  $("rich-link-url").focus();
+});
+$("rich-link-add").addEventListener("click", () => {
+  let url = $("rich-link-url").value.trim();
+  if (url && !/^(https?:|mailto:)/i.test(url)) url = (url.includes("@") ? "mailto:" : "https://") + url;
+  $("rich-link-row").hidden = true;
+  $("rich-link-url").value = "";
+  if (!url) return;
+  restoreRich();
+  if (window.getSelection().isCollapsed) document.execCommand("insertHTML", false, `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`);
+  else document.execCommand("createLink", false, url);
+});
+$("rich-link-url").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    ev.preventDefault();
+    $("rich-link-add").click();
+  }
+});
+// Pasted images go into the email as embedded images.
+$("compose-rich").addEventListener("paste", async (ev) => {
+  const files = [...(ev.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  ev.preventDefault();
+  for (const f of files) {
+    const data = await readFile(f);
+    document.execCommand("insertHTML", false, `<img src="data:${f.type};base64,${data}" alt="" style="max-width:100%">`);
+  }
+});
 
 async function setPreview(on) {
   compose.previewing = on;
   $("compose-preview").classList.toggle("active", on);
-  $("compose-body").hidden = on;
+  $("compose-body").hidden = on || compose.rich;
   $("compose-preview-pane").hidden = !on;
   if (!on) return $("compose-preview-pane").replaceChildren();
   const html = await invoke("render_markdown", { text: $("compose-body").value }).catch((e) => `<p>${escapeHtml(String(e))}</p>`);
@@ -1793,8 +2357,9 @@ async function setPreview(on) {
   $("compose-preview-pane").replaceChildren(frame);
 }
 
-$("fmt-plain").addEventListener("click", () => setFormat(false));
-$("fmt-md").addEventListener("click", () => setFormat(true));
+$("fmt-plain").addEventListener("click", () => setFormat("plain"));
+$("fmt-md").addEventListener("click", () => setFormat("markdown"));
+$("fmt-rich").addEventListener("click", () => setFormat("rich"));
 $("compose-preview").addEventListener("click", () => setPreview(!compose.previewing));
 
 /// "Forward": the original text below a header, with its attachments.
@@ -1938,6 +2503,15 @@ $("open-settings").addEventListener("click", async () => {
     $("set-remote").checked = s.load_remote_images;
     $("set-same-domain").checked = s.important_same_domain;
     $("set-group").checked = s.group_threads;
+    $("set-theme").value = s.theme || "system";
+    $("set-zoom").value = String(s.zoom || 100);
+    $("set-notify").value = s.notify || "important";
+    rulesDraft = (s.rules || []).map((r) => ({ ...r }));
+    columnsDraft = state.columns.map((c) => ({ name: c.name, folder: c.folder }));
+    columnsChanged = false;
+    renderFolderNames();
+    renderRulePrefs();
+    renderColumnPrefs();
     prefsDraft = mergeFolderPrefs(s.folders || []);
     renderFolderPrefs();
     $("set-allow").value = s.important_allow.join("\n");
@@ -1976,14 +2550,23 @@ $("settings-form").addEventListener("submit", async (ev) => {
         important_same_domain: $("set-same-domain").checked,
         group_threads: $("set-group").checked,
         folders: prefsDraft,
+        rules: rulesDraft.filter((r) => r.contains.trim() && r.folder.trim()),
+        notify: $("set-notify").value,
+        theme: $("set-theme").value,
+        zoom: parseInt($("set-zoom").value, 10),
       },
     });
     const saved = await invoke("get_settings");
     state.allow = saved.important_allow;
     state.block = saved.important_block;
     state.sameDomain = saved.important_same_domain;
-    state.groupThreads = saved.group_threads;
-    state.folderPrefs = saved.folders || [];
+    applySettingsState(saved);
+    cacheSet("settings", saved);
+    if (columnsChanged) {
+      await invoke("save_board", { columns: columnsDraft.filter((c) => c.folder.trim()) });
+      $("settings").hidden = true;
+      return openBoard({ fromCache: true });
+    }
     renderFolders();
     renderColumns();
     for (const c of visibleColumns()) loadColumn(c.folder);
@@ -2033,6 +2616,152 @@ $("import-file").addEventListener("change", async () => {
   } catch (e) {
     toast("Import failed: " + e);
   }
+});
+
+// ---------- columns and rules tabs ----------
+
+let columnsDraft = [];
+let columnsChanged = false;
+let rulesDraft = [];
+
+function renderFolderNames() {
+  $("folder-names").replaceChildren(...state.folders.filter((f) => f.selectable).map((f) => Object.assign(document.createElement("option"), { value: f.name })));
+}
+
+function folderSelect(value, onChange) {
+  const sel = document.createElement("select");
+  for (const f of orderedFolders(true).filter((f) => f.selectable)) {
+    sel.append(new Option(f.depth ? "  ".repeat(f.depth) + f.label : f.name.replace(/^INBOX[./]/, "") || f.name, f.name));
+  }
+  sel.value = value;
+  sel.addEventListener("change", () => onChange(sel.value));
+  return sel;
+}
+
+/// A row that can be dragged to reorder `list` (re-rendered by `rerender`).
+function makeSortable(row, list, i, rerender, box) {
+  row.draggable = true;
+  row.addEventListener("dragstart", (ev) => {
+    if (ev.target.closest("input, select")) return ev.preventDefault();
+    sortFrom = { list, i };
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", String(i));
+    requestAnimationFrame(() => row.classList.add("dragging"));
+  });
+  row.addEventListener("dragend", () => {
+    sortFrom = null;
+    for (const r of box.children) r.classList.remove("dragging", "drop-before", "drop-after");
+  });
+  row.addEventListener("dragover", (ev) => {
+    if (sortFrom?.list !== list) return;
+    ev.preventDefault();
+    const r = row.getBoundingClientRect();
+    for (const x of box.children) x.classList.remove("drop-before", "drop-after");
+    row.classList.add(ev.clientY > r.top + r.height / 2 ? "drop-after" : "drop-before");
+  });
+  row.addEventListener("drop", (ev) => {
+    if (sortFrom?.list !== list) return;
+    ev.preventDefault();
+    const r = row.getBoundingClientRect();
+    let to = ev.clientY > r.top + r.height / 2 ? i + 1 : i;
+    const [moved] = list.splice(sortFrom.i, 1);
+    if (sortFrom.i < to) to--;
+    list.splice(to, 0, moved);
+    sortFrom = null;
+    rerender();
+  });
+}
+let sortFrom = null;
+
+function removeButton(onClick) {
+  const b = el("button", "pref-remove");
+  b.type = "button";
+  b.title = "Remove";
+  b.append(icon("close"));
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function renderColumnPrefs() {
+  const box = $("column-prefs");
+  box.replaceChildren();
+  columnsDraft.forEach((c, i) => {
+    const row = el("div", "folder-pref column-pref");
+    const grip = el("span", "fp-grip");
+    grip.append(icon("grip"));
+    const name = el("input");
+    name.value = c.name;
+    name.placeholder = "Column title";
+    name.addEventListener("input", () => {
+      c.name = name.value;
+      columnsChanged = true;
+    });
+    const folder = el("input");
+    folder.value = c.folder;
+    folder.placeholder = "IMAP folder";
+    folder.setAttribute("list", "folder-names");
+    folder.addEventListener("input", () => {
+      c.folder = folder.value;
+      columnsChanged = true;
+    });
+    const remove = removeButton(() => {
+      if (columnsDraft.length === 1) return toast("The board needs at least one column");
+      columnsDraft.splice(i, 1);
+      columnsChanged = true;
+      renderColumnPrefs();
+    });
+    row.append(grip, name, folder, remove);
+    makeSortable(row, columnsDraft, i, () => {
+      columnsChanged = true;
+      renderColumnPrefs();
+    }, box);
+    box.append(row);
+  });
+}
+
+$("add-column").addEventListener("click", () => {
+  columnsDraft.push({ name: "", folder: "" });
+  columnsChanged = true;
+  renderColumnPrefs();
+  $("column-prefs").lastElementChild?.querySelector("input")?.focus();
+});
+
+function renderRulePrefs() {
+  const box = $("rule-prefs");
+  box.replaceChildren();
+  if (!rulesDraft.length) box.append(el("p", "muted small", "No rules yet. Example: when From contains “@github.com”, move to Notifications."));
+  rulesDraft.forEach((r, i) => {
+    const row = el("div", "rule-pref");
+    const field = document.createElement("select");
+    for (const [v, label] of [["from", "When From"], ["to", "When To/Cc"], ["subject", "When Subject"]]) field.append(new Option(label, v));
+    field.value = r.field;
+    field.addEventListener("change", () => (r.field = field.value));
+    const text = el("input");
+    text.value = r.contains;
+    text.placeholder = "contains…";
+    text.addEventListener("input", () => (r.contains = text.value));
+    const folder = folderSelect(r.folder, (v) => (r.folder = v));
+    row.append(field, text, el("span", "", "move to"), folder, removeButton(() => {
+      rulesDraft.splice(i, 1);
+      renderRulePrefs();
+    }));
+    box.append(row);
+  });
+}
+
+$("add-rule").addEventListener("click", () => {
+  const firstFolder = orderedFolders(true).find((f) => f.selectable && f.kind !== "inbox")?.name || "";
+  rulesDraft.push({ field: "from", contains: "", folder: firstFolder });
+  renderRulePrefs();
+  $("rule-prefs").lastElementChild?.querySelector("input")?.focus();
+});
+
+$("run-rules").addEventListener("click", async () => {
+  state.rules = rulesDraft.filter((r) => r.contains.trim() && r.folder.trim());
+  const inbox = state.cards.INBOX || (await invoke("load_column", { folder: "INBOX", limit: null }).catch(() => []));
+  ruleTried.clear();
+  const moved = await applyRules(inbox);
+  if (!moved.size) toast("No email in the Inbox matches the rules", "info");
 });
 
 // ---------- folders tab ----------
@@ -2125,7 +2854,15 @@ function loadSignatureEditor(text, html) {
   showSignatureSource(false);
   $("sig-link-row").hidden = true;
   sigEditor.innerHTML = html || escapeHtml(text || "").replace(/\n/g, "<br>");
+  checkSignatureImages();
 }
+
+/// Warns about images linked from the internet: recipients' apps often block them.
+function checkSignatureImages() {
+  const remote = [...sigEditor.querySelectorAll("img")].some((img) => /^https?:/i.test(img.getAttribute("src") || ""));
+  $("sig-remote-warning").hidden = !remote;
+}
+sigEditor.addEventListener("input", checkSignatureImages);
 
 /// Plain-text and HTML versions of the signature. The HTML version is kept
 /// only when there is real formatting (bold, links, images...).
@@ -2144,7 +2881,10 @@ function showSignatureSource(show) {
   const source = $("sig-source");
   if (show === !source.hidden) return;
   if (show) source.value = sigEditor.innerHTML;
-  else sigEditor.innerHTML = source.value;
+  else {
+    sigEditor.innerHTML = source.value;
+    checkSignatureImages();
+  }
   source.hidden = !show;
   sigEditor.hidden = show;
   $("sig-html").classList.toggle("active", show);

@@ -35,6 +35,24 @@ Written in Rust with [Tauri](https://tauri.app).
   do not hide search results. "Also search in the text" adds the
   email body, which is much slower on servers without a full-text index.
   Esc goes back to the board.
+- Links in emails open in the default browser (mailto links open a new email).
+- Undo after archiving, deleting, marking as spam or moving emails.
+- Board columns are edited from the settings (add, rename, drag to reorder,
+  remove; type a new folder name to create it).
+- "Load more" at the bottom of a column or folder for older emails.
+- macOS notifications for new Inbox emails: only important ones, all, or off.
+- Multiple selection: ⌘/Ctrl-click or Shift-click cards, then Archive, Delete,
+  Spam, Read or Unread from the bar at the bottom, or drag them together.
+  Every column has a "Mark all as read" button.
+- Automatic rules: "when From / To / Subject contains … move to …", applied to
+  new Inbox emails (first match wins), or to the whole Inbox on demand.
+- Spam / Not spam, and "Empty Trash" / "Empty Junk" (with confirmation).
+- Instant start: the board of the last session is shown right away from a local
+  cache, then refreshed from the server.
+- Calendar invitations (.ics) are shown with date, time, place and organizer;
+  answer Accept / Maybe / Decline (sent to the organizer) or add the event to
+  your calendar app.
+- Light, dark or system theme, and four interface sizes.
 - Email reader. Remote images are blocked by default (they can reveal that you
   opened the email): load them per email with "Load images", or always from
   the settings. Inline images embedded in the email are always shown.
@@ -87,8 +105,10 @@ Written in Rust with [Tauri](https://tauri.app).
   attachments).
 - Attach files with the paperclip button or by dropping them on the composer
   (up to about 25 MB in total); attachments are kept in drafts too.
-- Plain text or Markdown body (bold, italic, lists, links, headings, tables and
-  inline HTML), with a preview; Markdown emails are sent as text + HTML. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
+- Plain text, Markdown (bold, italic, lists, links, headings, tables and inline
+  HTML, with a preview) or Rich: a visual editor with bold, italic, underline,
+  lists, quotes and links, where pasted formatting and images are kept. Markdown
+  and Rich emails are sent as text + HTML. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
   credentials as IMAP) and a copy is saved to the Sent folder.
 - Cc and Bcc fields; an optional "Always Bcc" address list is added to every
   new email and reply. Bcc recipients receive the email without being visible
@@ -144,10 +164,12 @@ From the settings button on the board, grouped in tabs:
 - **Account**: sender name, SMTP server and port, export and import of the
   settings, board columns file, disconnecting the account.
 - **Writing**: signature editor, "Always Bcc", address book suggestions.
-- **Reading**: seconds before an opened email is marked as read, grouping by
-  conversation, remote images.
+- **Columns**: the board columns.
+- **Reading**: theme, size, notifications, seconds before an opened email is
+  marked as read, grouping by conversation, remote images.
 - **Important**: colleagues of your domain, "always" and "never important" lists.
 - **Folders**: which folders the sidebar shows, their order and colors.
+- **Rules**: automatic rules for new Inbox emails.
 
 They are stored in `account.toml` and `settings.toml` in the configuration folder
 (`~/Library/Application Support/KanbanMail` on macOS), next to `board.toml`. The
@@ -253,7 +275,7 @@ cargo run -p kanbanmail-cli -- reset
 
 ## Not supported yet
 
-Multiple accounts, a rich-text (WYSIWYG) editor for the email body.
+Multiple accounts, snoozing, keyboard shortcuts, printing.
 
 ## Icons
 

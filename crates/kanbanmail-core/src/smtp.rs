@@ -29,6 +29,9 @@ pub struct Draft {
     /// Files attached to the email.
     #[serde(default)]
     pub attachments: Vec<OutgoingAttachment>,
+    /// Body written in the visual editor (HTML); `body` then holds its plain text.
+    #[serde(default)]
+    pub html: Option<String>,
     /// Message-ID of this email. The composer keeps the same one across draft
     /// saves and the final send, so older draft versions can be found and removed.
     #[serde(default)]
@@ -152,13 +155,51 @@ pub fn markdown_to_html(text: &str) -> String {
     crate::message::sanitize_signature(&out)
 }
 
+/// Text compared loosely: no invisible characters (zero-width spaces, BOM),
+/// non-breaking spaces as spaces, no trailing spaces, no empty lines.
+fn loose(text: &str) -> String {
+    text.replace(['\u{200b}', '\u{200c}', '\u{200d}', '\u{feff}'], "")
+        .replace('\u{a0}', " ")
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Where the signature block ("-- " line + signature text) is in the body, as
+/// (start, length). Small differences (invisible characters, spaces, empty
+/// lines) are ignored; the block ends where a quoted earlier message starts.
+pub fn find_signature(body: &str, signature: &str) -> Option<(usize, usize)> {
+    let wanted = loose(signature);
+    if wanted.is_empty() {
+        return None;
+    }
+    let start = if body.starts_with("-- \n") || body.starts_with("--\n") {
+        0
+    } else {
+        body.find("\n-- \n").or_else(|| body.find("\n--\n")).map(|p| p + 1)?
+    };
+    let sep_len = if body[start..].starts_with("-- \n") { 4 } else { 3 };
+    let rest = &body[start + sep_len..];
+    let end = crate::message::quote_start_text(rest).unwrap_or(rest.len());
+    // Take as many lines as the signature has (loosely), so text written after it stays.
+    let mut taken = 0;
+    for (i, _) in rest[..end].match_indices('\n').map(|(i, s)| (i + s.len(), s)).chain(std::iter::once((end, ""))) {
+        if loose(&rest[..i]) == wanted {
+            taken = i;
+            break;
+        }
+    }
+    (taken > 0).then_some((start, sep_len + taken))
+}
+
 /// The HTML version of the body, if it should have one: when the body is
 /// Markdown, or when a rich signature is present (and its text left unchanged).
 fn html_body(body: &str, markdown: bool, signature: Option<&HtmlSignature>) -> Option<MultiPart> {
     let body = body.replace("\r\n", "\n");
     let sig = signature.filter(|s| !s.html.trim().is_empty() && !s.text.trim().is_empty());
-    let marker = sig.map(|s| format!("-- \n{}", s.text.trim_end().replace("\r\n", "\n")));
-    let split = marker.as_ref().and_then(|m| body.find(m.as_str()).map(|pos| (pos, m.len())));
+    let split = sig.and_then(|s| find_signature(&body, &s.text));
     if !markdown && split.is_none() {
         return None;
     }
@@ -182,6 +223,93 @@ fn html_body(body: &str, markdown: bool, signature: Option<&HtmlSignature>) -> O
         let related = images.into_iter().fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p));
         alternative.multipart(related)
     })
+}
+
+/// Text + HTML from the visual editor; images pasted in it become inline parts.
+fn visual_body(text: &str, html: &str) -> MultiPart {
+    let (clean, images) = extract_inline_images(&crate::message::sanitize_signature(html));
+    let html = format!(
+        "<!doctype html><html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:14px\">{clean}</body></html>"
+    );
+    let html_part = SinglePart::html(html);
+    let alternative = MultiPart::alternative().singlepart(SinglePart::plain(text.to_string()));
+    if images.is_empty() {
+        alternative.singlepart(html_part)
+    } else {
+        alternative.multipart(images.into_iter().fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p)))
+    }
+}
+
+/// Today's date-time in UTC as a calendar value, e.g. 20261027T153000Z.
+fn ics_now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// The answer to a calendar invitation (iTIP REPLY), sent to the organizer.
+/// `response` is "ACCEPTED", "DECLINED" or "TENTATIVE".
+pub fn build_invite_reply(account: &Account, ics: &str, response: &str) -> Result<Message> {
+    let invite = crate::message::parse_ics(ics).ok_or_else(|| anyhow!("this invitation cannot be read"))?;
+    anyhow::ensure!(["ACCEPTED", "DECLINED", "TENTATIVE"].contains(&response), "unknown answer: {response}");
+    anyhow::ensure!(!invite.organizer.is_empty(), "the invitation has no organizer to answer to");
+    // Copy the identifying properties of the event as they are.
+    let mut event_lines = Vec::new();
+    let mut in_event = false;
+    for line in ics.split('\n').map(|l| l.trim_end_matches('\r')) {
+        if line.eq_ignore_ascii_case("BEGIN:VEVENT") {
+            in_event = true;
+            continue;
+        }
+        if line.eq_ignore_ascii_case("END:VEVENT") {
+            break;
+        }
+        let name = line.split([':', ';']).next().unwrap_or("").to_ascii_uppercase();
+        if in_event && ["UID", "SEQUENCE", "DTSTART", "DTEND", "SUMMARY", "ORGANIZER", "RECURRENCE-ID"].contains(&name.as_str()) {
+            event_lines.push(line.to_string());
+        }
+    }
+    let cn = account.display_name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(&account.email);
+    let reply = format!(
+        "BEGIN:VCALENDAR\r\nPRODID:-//KanbanMail//EN\r\nVERSION:2.0\r\nMETHOD:REPLY\r\nBEGIN:VEVENT\r\n{}\r\nDTSTAMP:{}\r\nATTENDEE;PARTSTAT={response};CN=\"{}\":mailto:{}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        event_lines.join("\r\n"),
+        ics_now(),
+        cn.replace('"', "'"),
+        account.email
+    );
+    let verb = match response {
+        "ACCEPTED" => "Accepted",
+        "DECLINED" => "Declined",
+        _ => "Tentative",
+    };
+    let from: Mailbox = match account.display_name.as_deref().filter(|n| !n.trim().is_empty()) {
+        Some(name) => format!("{} <{}>", name.trim(), account.email).parse(),
+        None => account.email.parse(),
+    }
+    .map_err(|_| anyhow!("invalid sender address: {}", account.email))?;
+    let to: Mailbox = invite.organizer.parse().map_err(|_| anyhow!("invalid organizer address: {}", invite.organizer))?;
+    let text = format!("{cn} has {} the invitation: {}", verb.to_lowercase(), invite.summary);
+    let calendar = SinglePart::builder()
+        .header(ContentType::parse("text/calendar; method=REPLY; charset=UTF-8").unwrap())
+        .body(reply);
+    Message::builder()
+        .from(from)
+        .to(to)
+        .subject(format!("{verb}: {}", invite.summary))
+        .date_now()
+        .message_id(Some(new_message_id(&account.email)))
+        .multipart(MultiPart::alternative().singlepart(SinglePart::plain(text)).singlepart(calendar))
+        .context("building the answer failed")
 }
 
 /// The attachments as MIME parts.
@@ -247,7 +375,10 @@ fn build_message(
         None => new_message_id(&account.email),
     };
     builder = builder.message_id(Some(message_id));
-    let content = html_body(&draft.body, draft.markdown, signature);
+    let content = match draft.html.as_deref().filter(|h| !h.trim().is_empty()) {
+        Some(html) => Some(visual_body(&draft.body, html)),
+        None => html_body(&draft.body, draft.markdown, signature),
+    };
     let files = attachment_parts(&draft.attachments)?;
     if files.is_empty() {
         return match content {
@@ -320,6 +451,7 @@ mod tests {
             bcc: "boss@example.com".into(),
             markdown: false,
             attachments: vec![],
+            html: None,
         };
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("From: \"Mario Rossi\" <me@example.com>"), "{raw}");
@@ -339,7 +471,7 @@ mod tests {
     #[test]
     fn draft_allows_missing_and_unfinished_recipients() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![] };
+        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None };
         let raw = String::from_utf8(build_draft(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("To: a@example.com"), "{raw}");
         let empty = Draft { to: String::new(), ..draft };
@@ -350,7 +482,7 @@ mod tests {
     #[test]
     fn rejects_bad_address() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![] };
+        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None };
         assert!(build(&acc, &draft, None).is_err());
     }
 
@@ -372,6 +504,7 @@ mod tests {
             bcc: String::new(),
             markdown: false,
             attachments: vec![],
+            html: None,
         };
         let raw = String::from_utf8(build(&acc, &draft, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/alternative"), "{raw}");
@@ -384,6 +517,38 @@ mod tests {
         let edited = Draft { body: "Hello\n\n-- \nJane".into(), ..draft };
         let raw = String::from_utf8(build(&acc, &edited, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(!raw.contains("multipart"), "{raw}");
+    }
+
+    #[test]
+    fn answers_invitations_and_visual_bodies() {
+        let mut acc = Account::new("mail.example.com".into(), "me@example.com".into());
+        acc.display_name = Some("Me Myself".into());
+        let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:abc@example.com\r\nSEQUENCE:2\r\nDTSTART;TZID=Europe/Rome:20261028T100000\r\nSUMMARY:Kick-off\r\nORGANIZER;CN=Anna:mailto:anna@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let raw = String::from_utf8(build_invite_reply(&acc, ics, "ACCEPTED").unwrap().formatted()).unwrap();
+        assert!(raw.contains("To: anna@example.com") && raw.contains("Subject: Accepted: Kick-off"), "{raw}");
+        assert!(raw.contains("text/calendar; method=REPLY"), "{raw}");
+        assert!(raw.contains("METHOD:REPLY") && raw.contains("UID:abc@example.com") && raw.contains("SEQUENCE:2"), "{raw}");
+        assert!(raw.contains("PARTSTAT=ACCEPTED") && raw.contains("mailto:me@example.com"), "{raw}");
+        assert!(ics_now().len() == 16 && ics_now().ends_with('Z'));
+
+        let draft = Draft {
+            to: "a@example.com".into(), cc: String::new(), bcc: String::new(), subject: "Hi".into(),
+            body: "Hello there".into(), in_reply_to: None, references: vec![], message_id: None, markdown: false,
+            attachments: vec![], html: Some("<p>Hello <b>there</b></p><img src=\"data:image/png;base64,iVBORw0KGgo=\"><script>x</script>".into()),
+        };
+        let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
+        assert!(raw.contains("multipart/related") && raw.contains("<b>there</b>") && !raw.contains("<script"), "{raw}");
+    }
+
+    #[test]
+    fn finds_signature_despite_small_differences() {
+        let sig = "Jane Doe\n\u{200b}\nExample Inc.\u{a0}";
+        let body = "Hello\n\n--\n\nJane Doe\nExample Inc.\n\nOn Monday, Bob wrote:\n> hi\n";
+        let (start, len) = find_signature(body, sig).unwrap();
+        assert_eq!(&body[..start], "Hello\n\n");
+        assert!(body[start + len..].trim_start().starts_with("On Monday"), "{:?}", &body[start + len..]);
+        assert!(find_signature("Hello\n\n-- \nSomeone else\n", sig).is_none());
+        assert!(find_signature("No signature here", sig).is_none());
     }
 
     #[test]
@@ -400,6 +565,7 @@ mod tests {
             message_id: None,
             markdown: true,
             attachments: vec![OutgoingAttachment { name: "notes.txt".into(), mime: "text/plain".into(), data: "aGVsbG8=".into() }],
+            html: None,
         };
         let html = markdown_to_html(&draft.body);
         assert!(html.contains("<strong>team</strong>") && html.contains("<br") && html.contains("<li>one</li>"), "{html}");
@@ -413,3 +579,4 @@ mod tests {
         assert!(raw.contains("multipart/mixed") && !raw.contains("text/html"), "{raw}");
     }
 }
+

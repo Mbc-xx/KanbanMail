@@ -157,6 +157,8 @@ struct BoardInfo {
     columns: Vec<ColumnInfo>,
     config_path: String,
     can_idle: bool,
+    /// How many emails each column loads by default.
+    limit: u32,
 }
 
 /// Reads board.toml, creates missing folders and starts live updates.
@@ -201,6 +203,7 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
         columns,
         config_path: board_path().map_err(err)?.display().to_string(),
         can_idle: caps.idle,
+        limit: board.max_cards_per_column,
     })
 }
 
@@ -268,10 +271,10 @@ async fn poll_folders(app: AppHandle, current: Arc<AtomicU64>, generation: u64, 
 }
 
 #[tauri::command]
-async fn load_column(folder: String, state: State<'_, AppState>) -> CmdResult<Vec<Card>> {
+async fn load_column(folder: String, limit: Option<u32>, state: State<'_, AppState>) -> CmdResult<Vec<Card>> {
     let mut guard = state.inner.lock().await;
     let inner = &mut *guard;
-    let limit = inner.limit.max(1);
+    let limit = limit.unwrap_or(inner.limit).clamp(1, 5000);
     let mut cache = inner.caches.remove(&folder).unwrap_or_default();
     let res = with_retry!(inner, |s, _caps| imap::load_cards(s, &folder, &mut cache, limit));
     inner.caches.insert(folder, cache);
@@ -319,6 +322,10 @@ struct SettingsView {
     important_same_domain: bool,
     group_threads: bool,
     folders: Vec<kanbanmail_core::settings::FolderPref>,
+    rules: Vec<kanbanmail_core::settings::Rule>,
+    notify: String,
+    theme: String,
+    zoom: u32,
 }
 
 #[tauri::command]
@@ -342,6 +349,10 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         important_same_domain: settings.important_same_domain,
         group_threads: settings.group_threads,
         folders: settings.folders,
+        rules: settings.rules,
+        notify: settings.notify,
+        theme: settings.theme,
+        zoom: settings.zoom,
     })
 }
 
@@ -367,6 +378,14 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         important_same_domain: settings.important_same_domain,
         group_threads: settings.group_threads,
         folders: settings.folders,
+        rules: settings
+            .rules
+            .into_iter()
+            .filter(|r| !r.contains.trim().is_empty() && !r.folder.is_empty())
+            .collect(),
+        notify: settings.notify,
+        theme: settings.theme,
+        zoom: settings.zoom.clamp(80, 150),
     }
         .save()
         .map_err(err)
@@ -779,6 +798,105 @@ async fn import_settings(json: String, state: State<'_, AppState>) -> CmdResult<
     }
 }
 
+/// Opens a link of an email in the default browser (web links only).
+#[tauri::command]
+fn open_url(url: String) -> CmdResult<()> {
+    let lower = url.trim().to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) {
+        return Err("only web links can be opened".into());
+    }
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(url.trim()).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url.trim()]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(url.trim()).spawn();
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Undoes a move: the email (found by Message-ID in `now_in`) goes back to `back_to`.
+#[tauri::command]
+async fn undo_move(message_id: String, now_in: String, back_to: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let mut inner = state.inner.lock().await;
+    with_retry!(inner, |s, caps| imap::move_back(s, caps, &message_id, &now_in, &back_to))
+}
+
+#[tauri::command]
+async fn set_seen_many(folder: String, uids: Vec<u32>, seen: bool, state: State<'_, AppState>) -> CmdResult<()> {
+    let mut inner = state.inner.lock().await;
+    with_retry!(inner, |s, _caps| imap::set_seen_many(s, &folder, &uids, seen))
+}
+
+/// Permanently deletes everything in Trash (`kind` = "trash") or Junk ("junk").
+/// Returns how many emails were deleted.
+#[tauri::command]
+async fn empty_folder(kind: String, state: State<'_, AppState>) -> CmdResult<u32> {
+    let mut inner = state.inner.lock().await;
+    let (folder, count) = with_retry!(inner, |s, _caps| imap::empty_folder(s, &kind))?;
+    inner.caches.remove(&folder);
+    Ok(count)
+}
+
+#[derive(Deserialize)]
+struct ColumnSpec {
+    name: String,
+    folder: String,
+}
+
+/// Saves the board columns edited in the settings (the board is then reopened).
+#[tauri::command]
+fn save_board(columns: Vec<ColumnSpec>) -> CmdResult<()> {
+    let mut board = Board::load_or_create().map_err(err)?;
+    board.columns = columns
+        .into_iter()
+        .filter(|c| !c.folder.trim().is_empty())
+        .map(|c| kanbanmail_core::board::Column {
+            name: if c.name.trim().is_empty() { c.folder.clone() } else { c.name.trim().to_string() },
+            folder: c.folder.trim().to_string(),
+        })
+        .collect();
+    board.save().map_err(err)
+}
+
+/// A desktop notification (macOS asks for permission the first time).
+#[tauri::command]
+fn notify(title: String, body: String, app: AppHandle) -> CmdResult<()> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+}
+
+/// Answers a calendar invitation ("ACCEPTED", "DECLINED", "TENTATIVE") to its organizer.
+#[tauri::command]
+async fn respond_invite(folder: String, uid: u32, response: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let (raw, account, password) = {
+        let mut inner = state.inner.lock().await;
+        let raw = with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?;
+        (raw, inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+    };
+    let invite = kanbanmail_core::message::parse_view(&raw).invite.ok_or("this email has no invitation")?;
+    let message = smtp::build_invite_reply(&account, &invite.ics, &response).map_err(err)?;
+    smtp::send(&account, &password, &message).await.map_err(err)
+}
+
+/// Opens the invitation with the default calendar app (Calendar on macOS).
+#[tauri::command]
+async fn add_to_calendar(folder: String, uid: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    let raw = {
+        let mut inner = state.inner.lock().await;
+        with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?
+    };
+    let invite = kanbanmail_core::message::parse_view(&raw).invite.ok_or("this email has no invitation")?;
+    let path = std::env::temp_dir().join(format!("kanbanmail-{}.ics", uid));
+    std::fs::write(&path, invite.ics).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(&path).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("cmd").args(["/C", "start", ""]).arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(&path).spawn();
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn open_contacts_privacy() {
     contacts::open_privacy_settings();
@@ -786,6 +904,7 @@ fn open_contacts_privacy() {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -813,6 +932,14 @@ fn main() {
             search_emails,
             open_contacts_privacy,
             load_all_mail,
+            open_url,
+            undo_move,
+            set_seen_many,
+            empty_folder,
+            save_board,
+            notify,
+            respond_invite,
+            add_to_calendar,
             render_markdown,
             attachment_data,
             export_settings,
