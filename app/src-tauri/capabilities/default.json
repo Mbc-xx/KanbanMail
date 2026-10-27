@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Permessi della finestra principale",
+  "description": "Permissions of the main window",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

@@ -89,6 +89,8 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 700; font-size: 16px; }
+.topbar > * { flex-shrink: 0; white-space: nowrap; }
+.topbar #sync-status { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .spacer { flex: 1; }
 .footer { padding: 6px 16px; font-size: 12px; border-top: 1px solid var(--border); }
 
@@ -102,7 +104,9 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   min-height: 0;
 }
 .column {
-  flex: 1 0 260px;
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 160px;
   max-width: 380px;
   display: flex;
   flex-direction: column;
@@ -117,8 +121,10 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   padding: 10px 12px 6px;
 }
 .column-head h2 { margin: 0; font-size: 14px; }
+.column-head { min-width: 0; white-space: nowrap; }
+.column-head h2 { overflow: hidden; text-overflow: ellipsis; }
 .column-head .count { font-size: 12px; }
-.column-head .folder { margin-left: auto; font-size: 11px; }
+.column-head .folder { margin-left: auto; font-size: 11px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .cards {
   flex: 1;
   overflow-y: auto;
@@ -137,7 +143,7 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 32px 8px 10px;
+  padding: 8px 10px;
   cursor: pointer;
   user-select: none;
 }
@@ -145,7 +151,7 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 .card.dragging { opacity: 0.4; }
 .card.busy { opacity: 0.6; pointer-events: none; }
 .card.pinned { background: var(--pinned-bg); border-color: var(--pin); }
-.card .from-line { display: flex; gap: 8px; font-size: 12px; color: var(--muted); }
+.card .from-line { display: flex; gap: 8px; font-size: 12px; color: var(--muted); padding-right: 70px; }
 .card .from { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .date { flex-shrink: 0; }
 .card .subject { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -158,21 +164,38 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.pin-btn {
+/* Quick actions on each card. */
+.card-actions {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  gap: 1px;
+  border-radius: 6px;
+  background: inherit;
+}
+.card-btn {
   border: none;
   background: transparent;
   padding: 2px 4px;
   font-size: 14px;
-  opacity: 0.25;
+  line-height: 1.2;
+  opacity: 0.3;
   filter: grayscale(1);
 }
-.pin-btn:hover { opacity: 0.8; }
+.card-btn:hover { opacity: 1; filter: none; background: var(--panel); }
 .card.pinned .pin-btn { opacity: 1; filter: none; }
+/* Narrow columns: archive/delete only on hover, over the date. */
+.cards { container-type: inline-size; }
+@container (max-width: 230px) {
+  .card .from-line { padding-right: 22px; }
+  .card .archive-btn, .card .trash-btn { display: none; }
+  .card:hover .archive-btn, .card:hover .trash-btn { display: inline-block; }
+  .card:hover .card-actions { box-shadow: -10px 0 8px -4px var(--card); }
+  .card.pinned:hover .card-actions { box-shadow: -10px 0 8px -4px var(--pinned-bg); }
+}
 
-/* Lettura */
+/* Reader */
 .reader-backdrop {
   position: fixed;
   inset: 0;
@@ -272,7 +295,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .settings-card textarea { font: inherit; font-weight: normal; resize: vertical; }
 .settings-buttons { display: flex; gap: 8px; align-items: center; }
 
-/* Menu laterale */
+/* Sidebar */
 .body-row { flex: 1; display: flex; min-height: 0; }
 .sidebar {
   width: 220px;
@@ -304,6 +327,29 @@ button:disabled { opacity: 0.6; cursor: default; }
 .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item .badge { font-size: 11px; color: var(--accent); font-weight: 600; }
 .column.wide { max-width: none; flex: 1 1 auto; }
+.column.sized { max-width: none; }
+.col-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -8px;
+  width: 10px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+}
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+}
+.col-resizer:hover::after, .col-resizer.active::after { background: var(--accent); }
+body.resizing { cursor: col-resize; user-select: none; }
 
 .suggestions {
   position: fixed;

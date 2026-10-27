@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSContactsUsageDescription</key>
-  <string>KanbanMail usa la rubrica per suggerire gli indirizzi mentre scrivi una mail. I contatti non lasciano il tuo computer.</string>
+  <string>KanbanMail uses your contacts to suggest addresses while you write an email. Your contacts never leave your computer.</string>
 </dict>
 </plist>

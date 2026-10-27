@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,134 +7,134 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- Primo avvio: dati dell'account -->
+  <!-- First run: account details -->
   <section id="login" class="screen" hidden>
     <form id="login-form" class="login-card">
       <h1>KanbanMail</h1>
-      <p class="muted">Collega la tua casella email. La password viene salvata nel portachiavi del sistema.</p>
-      <label>Indirizzo email
+      <p class="muted">Connect your mailbox. The password is stored in the system keychain.</p>
+      <label>Email address
         <input id="login-email" type="email" autocomplete="username" required>
       </label>
-      <label>Server IMAP (porta 993, SSL/TLS)
-        <input id="login-server" type="text" placeholder="mail.tuodominio.it" required>
+      <label>IMAP server (port 993, SSL/TLS)
+        <input id="login-server" type="text" placeholder="mail.yourdomain.com" required>
       </label>
       <label>Password
         <input id="login-password" type="password" autocomplete="current-password" required>
       </label>
       <p id="login-error" class="error" hidden></p>
-      <button id="login-submit" type="submit" class="primary">Collegati</button>
+      <button id="login-submit" type="submit" class="primary">Connect</button>
     </form>
   </section>
 
   <!-- Board -->
   <section id="board-screen" class="screen" hidden>
     <header class="topbar">
-      <button id="toggle-sidebar" title="Mostra/nascondi cartelle (Ctrl/⌘+B)">☰</button>
+      <button id="toggle-sidebar" title="Show/hide folders (Ctrl/⌘+B)">☰</button>
       <div class="brand">KanbanMail</div>
       <div id="sync-status" class="muted"></div>
       <div class="spacer"></div>
-      <label class="toggle"><input id="only-unread" type="checkbox"> Solo non lette</label>
-      <button id="compose" class="primary" title="Scrivi una nuova mail">✉ Nuova mail</button>
-      <button id="refresh" title="Aggiorna tutte le colonne">↻ Aggiorna</button>
-      <button id="open-settings" title="Impostazioni">⚙</button>
+      <label class="toggle"><input id="only-unread" type="checkbox"> Unread only</label>
+      <button id="compose" class="primary" title="Write a new email">✉ New email</button>
+      <button id="refresh" title="Refresh all columns">↻ Refresh</button>
+      <button id="open-settings" title="Settings">⚙</button>
     </header>
     <div class="body-row">
       <aside id="sidebar" class="sidebar">
         <button id="nav-board" class="nav-item active">▦ Board</button>
-        <div class="nav-title muted">Cartelle</div>
+        <div class="nav-title muted">Folders</div>
         <nav id="folder-list"></nav>
       </aside>
       <main id="board" class="board"></main>
     </div>
-    <footer class="footer muted"><span id="account-email"></span> · colonne configurabili in <code id="config-path"></code> (riavvia l'app dopo le modifiche).</footer>
+    <footer class="footer muted"><span id="account-email"></span> · columns are configured in <code id="config-path"></code> (restart the app after editing).</footer>
   </section>
 
-  <!-- Caricamento iniziale -->
+  <!-- Initial loading -->
   <section id="loading" class="screen center">
-    <p class="muted" id="loading-text">Avvio…</p>
+    <p class="muted" id="loading-text">Starting…</p>
   </section>
 
-  <!-- Lettura di una mail -->
+  <!-- Reading an email -->
   <div id="reader" class="reader-backdrop" hidden>
     <article class="reader">
       <header class="reader-head">
         <h2 id="reader-subject"></h2>
-        <button id="reader-close" title="Chiudi (Esc)">✕</button>
+        <button id="reader-close" title="Close (Esc)">✕</button>
       </header>
       <dl class="reader-meta">
-        <dt>Da</dt><dd id="reader-from"></dd>
-        <dt>A</dt><dd id="reader-to"></dd>
+        <dt>From</dt><dd id="reader-from"></dd>
+        <dt>To</dt><dd id="reader-to"></dd>
         <dt id="reader-cc-label">Cc</dt><dd id="reader-cc"></dd>
-        <dt>Data</dt><dd id="reader-date"></dd>
+        <dt>Date</dt><dd id="reader-date"></dd>
       </dl>
       <div class="reader-actions">
-        <button id="reader-reply">↩ Rispondi</button>
-        <button id="reader-reply-all">↩ Rispondi a tutti</button>
+        <button id="reader-reply">↩ Reply</button>
+        <button id="reader-reply-all">↩ Reply all</button>
         <button id="reader-seen"></button>
-        <button id="reader-trash" title="Sposta nel cestino">🗑 Elimina</button>
+        <button id="reader-trash" title="Move to trash">🗑 Delete</button>
         <span id="reader-seen-hint" class="muted"></span>
       </div>
       <div class="reader-tools">
-        <span class="muted">Immagini e contenuti remoti bloccati.</span>
+        <span class="muted">Images and remote content blocked.</span>
         <button id="reader-toggle" hidden></button>
       </div>
       <div id="reader-body" class="reader-body"></div>
     </article>
   </div>
 
-  <!-- Scrittura di una mail -->
+  <!-- Writing an email -->
   <div id="composer" class="reader-backdrop" hidden>
     <form id="compose-form" class="reader composer">
       <header class="reader-head">
-        <h2 id="compose-title">Nuova mail</h2>
-        <button type="button" id="compose-close" title="Chiudi">✕</button>
+        <h2 id="compose-title">New email</h2>
+        <button type="button" id="compose-close" title="Close">✕</button>
       </header>
       <div class="compose-fields">
-        <label>A <input id="compose-to" type="text" placeholder="nome@esempio.it, altro@esempio.it" autocomplete="off" required></label>
+        <label>To <input id="compose-to" type="text" placeholder="name@example.com, other@example.com" autocomplete="off" required></label>
         <label>Cc <input id="compose-cc" type="text" autocomplete="off"></label>
-        <label>Oggetto <input id="compose-subject" type="text"></label>
+        <label>Subject <input id="compose-subject" type="text"></label>
       </div>
       <textarea id="compose-body" spellcheck="true"></textarea>
       <footer class="compose-foot">
         <span class="muted" id="compose-from"></span>
         <span class="spacer"></span>
-        <button type="button" id="compose-cancel">Annulla</button>
-        <button type="submit" id="compose-send" class="primary">Invia</button>
+        <button type="button" id="compose-cancel">Cancel</button>
+        <button type="submit" id="compose-send" class="primary">Send</button>
       </footer>
     </form>
   </div>
 
-  <!-- Impostazioni -->
+  <!-- Settings -->
   <div id="settings" class="reader-backdrop" hidden>
     <form id="settings-form" class="login-card settings-card">
-      <h2>Impostazioni</h2>
+      <h2>Settings</h2>
       <p class="muted" id="settings-email"></p>
-      <label>Nome mittente (facoltativo)
-        <input id="set-name" type="text" placeholder="Mario Rossi">
+      <label>Sender name (optional)
+        <input id="set-name" type="text" placeholder="Jane Doe">
       </label>
-      <label>Server SMTP per l'invio
+      <label>SMTP server for sending
         <input id="set-smtp" type="text" required>
       </label>
-      <label>Porta SMTP
+      <label>SMTP port
         <select id="set-port">
           <option value="465">465 (SSL/TLS)</option>
           <option value="587">587 (STARTTLS)</option>
         </select>
       </label>
-      <label>Firma
-        <textarea id="set-signature" rows="4" placeholder="Mario Rossi&#10;Azienda S.r.l. · +39 ..."></textarea>
+      <label>Signature
+        <textarea id="set-signature" rows="4" placeholder="Jane Doe&#10;Example Inc. · +1 ..."></textarea>
       </label>
-      <label class="toggle"><input id="set-contacts" type="checkbox"> Suggerisci indirizzi dalla rubrica (Contatti di macOS)</label>
-      <label>Segna come letta dopo (secondi)
+      <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
+      <label>Mark as read after (seconds)
         <input id="set-seconds" type="number" min="0" max="600" step="1">
       </label>
-      <label class="toggle"><input id="set-never" type="checkbox"> Mai in automatico (solo a mano)</label>
-      <p class="muted small">Colonne: modifica <code id="settings-config-path"></code> e riavvia l'app.</p>
+      <label class="toggle"><input id="set-never" type="checkbox"> Never automatically (manual only)</label>
+      <p class="muted small">Columns: edit <code id="settings-config-path"></code> and restart the app.</p>
       <div class="settings-buttons">
-        <button type="button" id="logout" class="danger">Scollega account</button>
+        <button type="button" id="logout" class="danger">Disconnect account</button>
         <span class="spacer"></span>
-        <button type="button" id="settings-cancel">Annulla</button>
-        <button type="submit" class="primary">Salva</button>
+        <button type="button" id="settings-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
       </div>
     </form>
   </div>

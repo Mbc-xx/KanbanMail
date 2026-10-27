@@ -1,10 +1,11 @@
-//! Test da riga di comando: si collega al server IMAP ed elenca le cartelle.
+//! Command-line test tool: connects to the IMAP server and lists folders.
 //!
-//! Uso:
-//!   kanbanmail-cli          collega (chiede i dati la prima volta)
-//!   kanbanmail-cli reset    dimentica account e password salvati
-//!   kanbanmail-cli board    mostra le colonne della board e le prime mail
-//!   kanbanmail-cli invio    prova il login SMTP e trova la cartella Inviata (non invia nulla)
+//! Usage:
+//!   kanbanmail-cli          connect (asks for details the first time)
+//!   kanbanmail-cli reset    forget the saved account and password
+//!   kanbanmail-cli board    show board columns and their first emails
+//!   kanbanmail-cli smtp     test the SMTP login and find the Sent folder (sends nothing)
+//!   kanbanmail-cli folders  list all folders with their kind and unread count
 
 use anyhow::Result;
 use kanbanmail_core::{account::Account, imap, secret};
@@ -33,7 +34,7 @@ async fn main() -> Result<()> {
         }
         let path = kanbanmail_core::account::config_dir()?.join("account.toml");
         let _ = std::fs::remove_file(path);
-        println!("Account e password dimenticati.");
+        println!("Account and password forgotten.");
         return Ok(());
     }
 
@@ -41,50 +42,50 @@ async fn main() -> Result<()> {
     let (account, password, is_new) = match &saved {
         Some(acc) => match secret::get_password(&acc.email)? {
             Some(p) => {
-                println!("Uso l'account salvato: {} su {}", acc.email, acc.server);
+                println!("Using saved account: {} on {}", acc.email, acc.server);
                 (acc.clone(), p, false)
             }
             None => (acc.clone(), rpassword::prompt_password("Password: ")?, true),
         },
         None => {
-            println!("Prima configurazione.");
-            let email = ask("Indirizzo email", None)?;
+            println!("First-time setup.");
+            let email = ask("Email address", None)?;
             let guess = email.split('@').nth(1).map(|d| format!("mail.{d}"));
-            let server = ask("Server IMAP", guess.as_deref())?;
-            let password = rpassword::prompt_password("Password (non viene mostrata): ")?;
+            let server = ask("IMAP server", guess.as_deref())?;
+            let password = rpassword::prompt_password("Password (hidden): ")?;
             (Account::new(server, email), password, true)
         }
     };
 
-    println!("Mi collego a {}:{} ...", account.server, account.port);
+    println!("Connecting to {}:{} ...", account.server, account.port);
     let mut session = imap::connect(&account, &password).await?;
-    println!("Login riuscito!\n");
+    println!("Login successful!\n");
 
     if is_new {
         account.save()?;
         secret::set_password(&account.email, &password)?;
-        println!("Dati salvati (password nel portachiavi).\n");
+        println!("Details saved (password in the keychain).\n");
     }
 
     let caps = imap::capabilities(&mut session).await?;
     let has = |c: &str| caps.iter().any(|x| x.to_uppercase().contains(c));
-    println!("Il server supporta MOVE: {}", if has("MOVE") { "sì" } else { "no" });
-    println!("Il server supporta IDLE: {}\n", if has("IDLE") { "sì" } else { "no" });
+    println!("Server supports MOVE: {}", if has("MOVE") { "yes" } else { "no" });
+    println!("Server supports IDLE: {}\n", if has("IDLE") { "yes" } else { "no" });
 
-    println!("Cartelle sul server:");
+    println!("Folders on the server:");
     for f in imap::list_folders(&mut session).await? {
         println!("  - {f}");
     }
 
-    if std::env::args().nth(1).as_deref() == Some("invio") {
-        println!("\nCartella posta inviata: {}", imap::sent_folder(&mut session).await?);
-        println!("Provo il login SMTP su {}:{} ...", account.smtp_host(), account.smtp_port);
+    if std::env::args().nth(1).as_deref() == Some("smtp") {
+        println!("\nSent folder: {}", imap::sent_folder(&mut session).await?);
+        println!("Testing SMTP login on {}:{} ...", account.smtp_host(), account.smtp_port);
         kanbanmail_core::smtp::test_login(&account, &password).await?;
-        println!("Login SMTP riuscito (nessuna mail inviata).");
+        println!("SMTP login successful (no email sent).");
     }
 
-    if std::env::args().nth(1).as_deref() == Some("cartelle") {
-        println!("\nCestino: {}", imap::trash_folder(&mut session).await?);
+    if std::env::args().nth(1).as_deref() == Some("folders") {
+        println!("\nTrash: {}", imap::trash_folder(&mut session).await?);
         for f in imap::folder_tree(&mut session).await? {
             let unseen = f.unseen.filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
             println!("{}{} [{}]{unseen}", "  ".repeat(f.depth + 1), f.label, f.kind);
@@ -107,7 +108,7 @@ async fn print_board(session: &mut imap::Session) -> Result<()> {
     for (col, folder) in board.columns.iter().zip(&folders) {
         let mut cache = imap::FolderCache::default();
         let cards = imap::load_cards(session, folder, &mut cache, board.max_cards_per_column).await?;
-        println!("\n== {} ({folder}): {} mail", col.name, cards.len());
+        println!("\n== {} ({folder}): {} emails", col.name, cards.len());
         for c in cards.iter().take(3) {
             let pin = if c.flagged { "📌 " } else { "" };
             let preview: String = c.preview.chars().take(60).collect();
@@ -119,8 +120,8 @@ async fn print_board(session: &mut imap::Session) -> Result<()> {
     }
     if let Some((folder, uid)) = first {
         let m = imap::load_message(session, &folder, uid).await?;
-        println!("\nLettura di prova ({folder} uid {uid}): oggetto {:?}, testo {} caratteri, html {}",
-            m.subject, m.text.map_or(0, |t| t.len()), m.html.map_or("assente".into(), |h| format!("{} caratteri", h.len())));
+        println!("\nTest read ({folder} uid {uid}): subject {:?}, text {} chars, html {}",
+            m.subject, m.text.map_or(0, |t| t.len()), m.html.map_or("none".into(), |h| format!("{} chars", h.len())));
     }
     Ok(())
 }

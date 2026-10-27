@@ -1,4 +1,4 @@
-//! Invio delle mail via SMTP (porta 465 SSL/TLS oppure 587 STARTTLS).
+//! Sending email over SMTP (port 465 SSL/TLS or 587 STARTTLS).
 
 use crate::account::Account;
 use anyhow::{anyhow, Context, Result};
@@ -7,7 +7,7 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::Deserialize;
 
-/// Una mail scritta nell'app. Gli indirizzi sono separati da virgola.
+/// An email written in the app. Addresses are comma-separated.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Draft {
     pub to: String,
@@ -15,7 +15,7 @@ pub struct Draft {
     pub cc: String,
     pub subject: String,
     pub body: String,
-    /// Message-ID della mail a cui si risponde (per tenere il filo della conversazione).
+    /// Message-ID of the email being replied to (keeps the conversation threaded).
     #[serde(default)]
     pub in_reply_to: Option<String>,
     #[serde(default)]
@@ -26,7 +26,7 @@ fn parse_list(list: &str) -> Result<Vec<Mailbox>> {
     list.split([',', ';'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.parse::<Mailbox>().map_err(|_| anyhow!("indirizzo non valido: {s}")))
+        .map(|s| s.parse::<Mailbox>().map_err(|_| anyhow!("invalid address: {s}")))
         .collect()
 }
 
@@ -34,17 +34,17 @@ fn angle(id: &str) -> String {
     if id.starts_with('<') { id.to_string() } else { format!("<{id}>") }
 }
 
-/// Costruisce il messaggio (testo semplice, UTF-8).
+/// Builds the message (plain text, UTF-8).
 pub fn build(account: &Account, draft: &Draft) -> Result<Message> {
     let from: Mailbox = match account.display_name.as_deref().filter(|n| !n.trim().is_empty()) {
         Some(name) => format!("{} <{}>", name.trim(), account.email).parse(),
         None => account.email.parse(),
     }
-    .map_err(|_| anyhow!("indirizzo mittente non valido: {}", account.email))?;
+    .map_err(|_| anyhow!("invalid sender address: {}", account.email))?;
 
     let to = parse_list(&draft.to)?;
     let cc = parse_list(&draft.cc)?;
-    anyhow::ensure!(!to.is_empty(), "manca il destinatario");
+    anyhow::ensure!(!to.is_empty(), "missing recipient");
 
     let mut builder = Message::builder().from(from).subject(draft.subject.trim()).date_now();
     for m in to {
@@ -68,7 +68,7 @@ pub fn build(account: &Account, draft: &Draft) -> Result<Message> {
     builder
         .header(ContentType::TEXT_PLAIN)
         .body(draft.body.clone())
-        .context("costruzione del messaggio fallita")
+        .context("building the message failed")
 }
 
 fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
@@ -78,7 +78,7 @@ fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tok
     } else {
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
     }
-    .with_context(|| format!("server SMTP non valido: {host}"))?;
+    .with_context(|| format!("invalid SMTP server: {host}"))?;
     Ok(builder
         .port(account.smtp_port)
         .credentials(Credentials::new(account.email.clone(), password.to_string()))
@@ -86,23 +86,23 @@ fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tok
         .build())
 }
 
-/// Si collega al server SMTP e fa il login, senza inviare nulla.
+/// Connects to the SMTP server and logs in, without sending anything.
 pub async fn test_login(account: &Account, password: &str) -> Result<()> {
     let ok = transport(account, password)?
         .test_connection()
         .await
-        .with_context(|| format!("login SMTP su {}:{} fallito", account.smtp_host(), account.smtp_port))?;
-    anyhow::ensure!(ok, "il server SMTP non risponde");
+        .with_context(|| format!("SMTP login to {}:{} failed", account.smtp_host(), account.smtp_port))?;
+    anyhow::ensure!(ok, "the SMTP server does not respond");
     Ok(())
 }
 
-/// Invia il messaggio.
+/// Sends the message.
 pub async fn send(account: &Account, password: &str, message: &Message) -> Result<()> {
     let host = account.smtp_host();
     transport(account, password)?
         .send(message.clone())
         .await
-        .with_context(|| format!("invio tramite {host}:{} fallito", account.smtp_port))?;
+        .with_context(|| format!("sending via {host}:{} failed", account.smtp_port))?;
     Ok(())
 }
 
@@ -117,7 +117,7 @@ mod tests {
         let draft = Draft {
             to: "a@example.com".into(),
             cc: "b@example.com; c@example.com".into(),
-            subject: "Re: Prova àèì".into(),
+            subject: "Re: Test àèì".into(),
             body: "Ciao\n> citato".into(),
             in_reply_to: Some("orig@example.com".into()),
             references: vec!["first@example.com".into()],
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn rejects_bad_address() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "non-un-indirizzo".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![] };
+        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![] };
         assert!(build(&acc, &draft).is_err());
     }
 }

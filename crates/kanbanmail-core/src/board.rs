@@ -1,5 +1,5 @@
-//! Colonne della board, lette da `board.toml` nella cartella di configurazione.
-//! Se il file non esiste viene creato con le colonne predefinite.
+//! Board columns, read from `board.toml` in the configuration folder.
+//! If the file does not exist it is created with the default columns.
 
 use crate::account::config_dir;
 use anyhow::{Context, Result};
@@ -8,16 +8,16 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Column {
-    /// Nome mostrato in cima alla colonna.
+    /// Title shown at the top of the column.
     pub name: String,
-    /// Cartella IMAP. Su server che mettono tutto sotto `INBOX.`
-    /// basta scrivere `Todo`: l'app trova (o crea) `INBOX.Todo`.
+    /// IMAP folder. On servers that keep everything under `INBOX.`,
+    /// writing `Todo` is enough: the app finds (or creates) `INBOX.Todo`.
     pub folder: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Board {
-    /// Quante mail (le più recenti) caricare per colonna.
+    /// How many emails (the most recent) to load per column.
     #[serde(default = "default_limit")]
     pub max_cards_per_column: u32,
     #[serde(rename = "column")]
@@ -28,12 +28,12 @@ fn default_limit() -> u32 {
     200
 }
 
-const DEFAULT_BOARD: &str = r#"# Colonne della board KanbanMail.
-# Ogni blocco [[column]] è una colonna: "name" è il titolo mostrato,
-# "folder" è la cartella IMAP. Se la cartella non esiste, l'app la crea.
-# Dopo aver modificato questo file, riavvia l'app.
+const DEFAULT_BOARD: &str = r#"# KanbanMail board columns.
+# Each [[column]] block is a column: "name" is the title shown,
+# "folder" is the IMAP folder. If the folder does not exist, the app creates it.
+# Restart the app after editing this file.
 
-# Quante mail (le più recenti) mostrare al massimo per colonna.
+# Maximum number of emails (the most recent) shown per column.
 max_cards_per_column = 200
 
 [[column]]
@@ -63,13 +63,13 @@ impl Board {
         if !path.exists() {
             std::fs::create_dir_all(path.parent().unwrap())?;
             std::fs::write(&path, DEFAULT_BOARD)
-                .with_context(|| format!("scrittura di {}", path.display()))?;
+                .with_context(|| format!("writing {}", path.display()))?;
         }
         let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("lettura di {}", path.display()))?;
+            .with_context(|| format!("reading {}", path.display()))?;
         let board: Board = toml::from_str(&text)
-            .with_context(|| format!("{} non valido", path.display()))?;
-        anyhow::ensure!(!board.columns.is_empty(), "board.toml non definisce colonne");
+            .with_context(|| format!("invalid {}", path.display()))?;
+        anyhow::ensure!(!board.columns.is_empty(), "board.toml defines no columns");
         Ok(board)
     }
 }

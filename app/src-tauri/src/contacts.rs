@@ -1,5 +1,5 @@
-//! Rubrica di sistema, usata solo per suggerire indirizzi mentre si scrive.
-//! Per ora supportata solo su macOS (app Contatti); altrove restituisce un elenco vuoto.
+//! System address book, used only to suggest addresses while writing.
+//! Currently macOS only (Contacts app); elsewhere it returns an empty list.
 
 use serde::Serialize;
 
@@ -9,8 +9,8 @@ pub struct Contact {
     pub email: String,
 }
 
-/// Legge tutti i contatti con un indirizzo email. La prima volta macOS chiede il permesso.
-/// Va chiamata fuori dal thread principale: può restare in attesa della risposta.
+/// Reads every contact that has an email address. macOS asks for permission the first time.
+/// Call it off the main thread: it may block while waiting for the answer.
 #[cfg(target_os = "macos")]
 pub fn system_contacts() -> Result<Vec<Contact>, String> {
     use block2::RcBlock;
@@ -29,7 +29,13 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
     unsafe {
         let status = CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts);
         if status == CNAuthorizationStatus::Denied || status == CNAuthorizationStatus::Restricted {
-            return Err("accesso ai Contatti negato: abilitalo in Impostazioni di Sistema → Privacy e sicurezza → Contatti".into());
+            return Err(concat!(
+                "macOS denied access to Contacts. If you are running the development build (started from Terminal), ",
+                "the permission is requested for Terminal rather than KanbanMail: it will work in the installed app. ",
+                "Otherwise enable it in System Settings → Privacy & Security → Contacts. ",
+                "Suggestions from email senders still work."
+            )
+            .into());
         }
         let store = CNContactStore::new();
         let keys: [&ProtocolObject<dyn CNKeyDescriptor>; 4] = [
@@ -58,7 +64,7 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
         drop(block);
         if !ok {
             let msg = error.map(|e| e.localizedDescription().to_string()).unwrap_or_default();
-            return Err(format!("lettura dei Contatti non riuscita: {msg}"));
+            return Err(format!("reading Contacts failed: {msg}"));
         }
         Ok(out.into_inner())
     }

@@ -1,4 +1,4 @@
-//! Logica condivisa di KanbanMail: configurazione, credenziali e accesso IMAP.
+//! Shared KanbanMail logic: configuration, credentials, IMAP and SMTP.
 
 pub mod account;
 pub mod board;

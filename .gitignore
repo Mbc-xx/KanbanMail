@@ -4,3 +4,4 @@ dist/
 .DS_Store
 app/node_modules/
 app/src-tauri/gen/
+.claude/

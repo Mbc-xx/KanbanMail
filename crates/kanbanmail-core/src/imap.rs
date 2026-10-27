@@ -1,4 +1,4 @@
-//! Connessione IMAP su TLS (porta 993).
+//! IMAP over TLS (port 993).
 
 use crate::account::Account;
 use anyhow::{anyhow, Context, Result};
@@ -11,7 +11,7 @@ use tokio_rustls::TlsConnector;
 
 pub type Session = async_imap::Session<TlsStream<TcpStream>>;
 
-/// Apre la connessione TLS e fa il login. Restituisce una sessione autenticata.
+/// Opens the TLS connection and logs in. Returns an authenticated session.
 pub async fn connect(account: &Account, password: &str) -> Result<Session> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -22,20 +22,20 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session> {
 
     let tcp = TcpStream::connect((account.server.as_str(), account.port))
         .await
-        .with_context(|| format!("impossibile raggiungere {}:{}", account.server, account.port))?;
+        .with_context(|| format!("cannot reach {}:{}", account.server, account.port))?;
     let name = ServerName::try_from(account.server.clone())
-        .map_err(|_| anyhow!("nome server non valido: {}", account.server))?;
+        .map_err(|_| anyhow!("invalid server name: {}", account.server))?;
     let tls = connector
         .connect(name, tcp)
         .await
-        .context("connessione TLS fallita (certificato o server errato?)")?;
+        .context("TLS connection failed (wrong certificate or server?)")?;
 
     let mut client = async_imap::Client::new(tls);
-    // Il server manda per primo il saluto "* OK ..." che va letto prima del login.
+    // The server sends a "* OK ..." greeting first, which must be read before logging in.
     client
         .read_response()
         .await
-        .context("nessun saluto dal server IMAP")?;
+        .context("no greeting from the IMAP server")?;
 
     client
         .login(&account.email, password)
@@ -43,12 +43,12 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session> {
         .map_err(|(e, _)| anyhow!("login rifiutato: {e}"))
 }
 
-/// Elenca i nomi di tutte le cartelle IMAP.
+/// Lists the names of all IMAP folders.
 pub async fn list_folders(session: &mut Session) -> Result<Vec<String>> {
     let names: Vec<_> = session
         .list(Some(""), Some("*"))
         .await
-        .context("comando LIST fallito")?
+        .context("LIST command failed")?
         .try_collect()
         .await?;
     let mut out: Vec<String> = names.iter().map(|n| n.name().to_string()).collect();
@@ -56,15 +56,15 @@ pub async fn list_folders(session: &mut Session) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Capacità annunciate dal server (es. MOVE, IDLE).
+/// Capabilities announced by the server (e.g. MOVE, IDLE).
 pub async fn capabilities(session: &mut Session) -> Result<Vec<String>> {
-    let caps = session.capabilities().await.context("comando CAPABILITY fallito")?;
+    let caps = session.capabilities().await.context("CAPABILITY command failed")?;
     let mut out: Vec<String> = caps.iter().map(|c| format!("{c:?}")).collect();
     out.sort();
     Ok(out)
 }
 
-/// Cosa sa fare il server: decide come spostare e come aggiornarsi.
+/// What the server supports: decides how to move and how to stay up to date.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServerCaps {
     pub r#move: bool,
@@ -73,7 +73,7 @@ pub struct ServerCaps {
 }
 
 pub async fn server_caps(session: &mut Session) -> Result<ServerCaps> {
-    let caps = session.capabilities().await.context("comando CAPABILITY fallito")?;
+    let caps = session.capabilities().await.context("CAPABILITY command failed")?;
     Ok(ServerCaps {
         r#move: caps.has_str("MOVE"),
         idle: caps.has_str("IDLE"),
@@ -81,13 +81,13 @@ pub async fn server_caps(session: &mut Session) -> Result<ServerCaps> {
     })
 }
 
-/// Trova la cartella reale sul server per ogni nome richiesto, creando quelle
-/// mancanti. Esempio: su SiteGround "Todo" diventa "INBOX.Todo".
+/// Finds the real server folder for each requested name, creating missing
+/// ones. Example: on SiteGround "Todo" becomes "INBOX.Todo".
 pub async fn resolve_folders(session: &mut Session, wanted: &[String]) -> Result<Vec<String>> {
     let names: Vec<_> = session
         .list(Some(""), Some("*"))
         .await
-        .context("comando LIST fallito")?
+        .context("LIST command failed")?
         .try_collect()
         .await?;
     let delim = names
@@ -96,7 +96,7 @@ pub async fn resolve_folders(session: &mut Session, wanted: &[String]) -> Result
         .unwrap_or_else(|| ".".into());
     let existing: Vec<String> = names.iter().map(|n| n.name().to_string()).collect();
     let prefix = format!("INBOX{delim}");
-    // Il server vuole tutte le cartelle dentro INBOX?
+    // Does the server keep every folder inside INBOX?
     let others: Vec<&String> = existing.iter().filter(|n| !n.eq_ignore_ascii_case("INBOX")).collect();
     let uses_prefix = !others.is_empty() && others.iter().all(|n| n.starts_with(&prefix));
 
@@ -115,22 +115,22 @@ pub async fn resolve_folders(session: &mut Session, wanted: &[String]) -> Result
         session
             .create(&target)
             .await
-            .with_context(|| format!("impossibile creare la cartella {target}"))?;
+            .with_context(|| format!("cannot create folder {target}"))?;
         session.subscribe(&target).await.ok();
         out.push(target);
     }
     Ok(out)
 }
 
-/// Card già scaricate di una cartella, per non riscaricarle a ogni aggiornamento.
+/// Cards already downloaded for a folder, so they are not fetched again on every refresh.
 #[derive(Debug, Default)]
 pub struct FolderCache {
     uid_validity: Option<u32>,
     cards: std::collections::HashMap<u32, crate::message::Card>,
 }
 
-/// Carica le card più recenti di una cartella (al massimo `limit`).
-/// Scarica solo le mail nuove; per le altre aggiorna solo i flag.
+/// Loads the most recent cards of a folder (at most `limit`).
+/// Downloads only new emails; for the others only the flags are refreshed.
 pub async fn load_cards(
     session: &mut Session,
     folder: &str,
@@ -142,7 +142,7 @@ pub async fn load_cards(
     let mailbox = session
         .select(folder)
         .await
-        .with_context(|| format!("impossibile aprire la cartella {folder}"))?;
+        .with_context(|| format!("cannot open folder {folder}"))?;
     if mailbox.uid_validity != cache.uid_validity {
         cache.cards.clear();
         cache.uid_validity = mailbox.uid_validity;
@@ -154,11 +154,11 @@ pub async fn load_cards(
     let start = mailbox.exists.saturating_sub(limit.max(1) - 1).max(1);
     let range = format!("{start}:*");
 
-    // 1) Elenco UID + flag (leggero).
+    // 1) UIDs + flags (lightweight).
     let flags: Vec<_> = session
         .fetch(&range, "(UID FLAGS)")
         .await
-        .context("lettura dei flag fallita")?
+        .context("reading flags failed")?
         .try_collect()
         .await?;
     let mut current = std::collections::HashMap::new();
@@ -169,14 +169,14 @@ pub async fn load_cards(
         current.insert(uid, (flagged, seen));
     }
 
-    // 2) Scarica l'inizio (32 KB) solo delle mail che non abbiamo ancora.
+    // 2) Download the first 32 KB, only for emails we do not have yet.
     let missing: Vec<u32> = current.keys().filter(|u| !cache.cards.contains_key(u)).copied().collect();
     for chunk in missing.chunks(50) {
         let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let fetched: Vec<_> = session
             .uid_fetch(&set, "(UID INTERNALDATE BODY.PEEK[]<0.32768>)")
             .await
-            .context("lettura delle mail fallita")?
+            .context("reading emails failed")?
             .try_collect()
             .await?;
         for f in fetched {
@@ -198,40 +198,40 @@ pub async fn load_cards(
             c.clone()
         })
         .collect();
-    // Prima le mail con pin, poi dalla più recente.
+    // Pinned emails first, then newest first.
     cards.sort_by(|a, b| b.flagged.cmp(&a.flagged).then(b.date.cmp(&a.date)));
     Ok(cards)
 }
 
-/// Scarica la mail completa per la vista di lettura (senza segnarla come letta).
+/// Downloads the full email for the reader (without marking it as read).
 pub async fn load_message(session: &mut Session, folder: &str, uid: u32) -> Result<crate::message::MessageView> {
-    session.select(folder).await.with_context(|| format!("impossibile aprire {folder}"))?;
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
     let fetched: Vec<_> = session
         .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
         .await
-        .context("lettura della mail fallita")?
+        .context("reading the email failed")?
         .try_collect()
         .await?;
     let raw = fetched
         .iter()
         .find_map(|f| f.body())
-        .ok_or_else(|| anyhow!("la mail non esiste più (spostata da un altro programma?)"))?;
+        .ok_or_else(|| anyhow!("the email no longer exists (moved by another program?)"))?;
     Ok(crate::message::parse_view(raw))
 }
 
-/// Sposta una mail: MOVE se il server lo supporta, altrimenti COPY + \Deleted + EXPUNGE.
+/// Moves an email: MOVE if the server supports it, otherwise COPY + \Deleted + EXPUNGE.
 pub async fn move_message(session: &mut Session, caps: ServerCaps, from: &str, uid: u32, to: &str) -> Result<()> {
-    session.select(from).await.with_context(|| format!("impossibile aprire {from}"))?;
+    session.select(from).await.with_context(|| format!("cannot open {from}"))?;
     let set = uid.to_string();
     if caps.r#move {
-        session.uid_mv(&set, to).await.context("spostamento (MOVE) fallito")?;
+        session.uid_mv(&set, to).await.context("MOVE failed")?;
         return Ok(());
     }
-    session.uid_copy(&set, to).await.context("copia (COPY) fallita")?;
+    session.uid_copy(&set, to).await.context("COPY failed")?;
     let _: Vec<_> = session
         .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")
         .await
-        .context("marcatura \\Deleted fallita")?
+        .context("setting \\Deleted failed")?
         .try_collect()
         .await?;
     if caps.uidplus {
@@ -242,46 +242,46 @@ pub async fn move_message(session: &mut Session, caps: ServerCaps, from: &str, u
     Ok(())
 }
 
-/// Attiva o disattiva il pin (flag IMAP \Flagged).
+/// Turns the pin (IMAP \Flagged flag) on or off.
 pub async fn set_flagged(session: &mut Session, folder: &str, uid: u32, flagged: bool) -> Result<()> {
-    session.select(folder).await.with_context(|| format!("impossibile aprire {folder}"))?;
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
     let op = if flagged { "+FLAGS.SILENT (\\Flagged)" } else { "-FLAGS.SILENT (\\Flagged)" };
     let _: Vec<_> = session
         .uid_store(uid.to_string(), op)
         .await
-        .context("modifica del pin fallita")?
+        .context("changing the pin failed")?
         .try_collect()
         .await?;
     Ok(())
 }
 
-/// Resta in attesa di novità su una cartella. Torna quando il server segnala
-/// un cambiamento oppure dopo `max_wait`. Restituisce la sessione per riusarla.
+/// Waits for changes in a folder. Returns when the server reports a change
+/// or after `max_wait`. Gives the session back so it can be reused.
 pub async fn wait_for_change(mut session: Session, folder: &str, max_wait: std::time::Duration) -> Result<Session> {
-    session.select(folder).await.with_context(|| format!("impossibile aprire {folder}"))?;
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
     let mut idle = session.idle();
-    idle.init().await.context("IDLE non avviato")?;
+    idle.init().await.context("IDLE did not start")?;
     let (wait, _stop) = idle.wait_with_timeout(max_wait);
-    wait.await.context("IDLE interrotto")?;
-    idle.done().await.context("chiusura IDLE fallita")
+    wait.await.context("IDLE interrupted")?;
+    idle.done().await.context("ending IDLE failed")
 }
 
-/// Segna una mail come letta o non letta (flag \Seen).
+/// Marks an email as read or unread (\Seen flag).
 pub async fn set_seen(session: &mut Session, folder: &str, uid: u32, seen: bool) -> Result<()> {
-    session.select(folder).await.with_context(|| format!("impossibile aprire {folder}"))?;
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
     let op = if seen { "+FLAGS.SILENT (\\Seen)" } else { "-FLAGS.SILENT (\\Seen)" };
     let _: Vec<_> = session
         .uid_store(uid.to_string(), op)
         .await
-        .context("modifica letto/non letto fallita")?
+        .context("changing read state failed")?
         .try_collect()
         .await?;
     Ok(())
 }
 
-/// Segna una mail come "risposta inviata" (flag \Answered).
+/// Marks an email as answered (\Answered flag).
 pub async fn set_answered(session: &mut Session, folder: &str, uid: u32) -> Result<()> {
-    session.select(folder).await.with_context(|| format!("impossibile aprire {folder}"))?;
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
     let _: Vec<_> = session
         .uid_store(uid.to_string(), "+FLAGS.SILENT (\\Answered)")
         .await?
@@ -290,14 +290,14 @@ pub async fn set_answered(session: &mut Session, folder: &str, uid: u32) -> Resu
     Ok(())
 }
 
-/// Trova la cartella della posta inviata: quella marcata \Sent dal server,
-/// altrimenti per nome (Sent, Inviata, Sent Messages...). Se non c'è, la crea.
+/// Finds the sent-mail folder: the one the server marks \Sent, otherwise
+/// by name (Sent, Inviata, Sent Messages...). Creates it if missing.
 pub async fn sent_folder(session: &mut Session) -> Result<String> {
     use async_imap::types::NameAttribute;
     let names: Vec<_> = session
         .list(Some(""), Some("*"))
         .await
-        .context("comando LIST fallito")?
+        .context("LIST command failed")?
         .try_collect()
         .await?;
     if let Some(n) = names.iter().find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::Sent))) {
@@ -315,26 +315,26 @@ pub async fn sent_folder(session: &mut Session) -> Result<String> {
     Ok(resolved.into_iter().next().unwrap())
 }
 
-/// Salva una copia della mail inviata nella cartella indicata, già segnata come letta.
+/// Saves a copy of a sent email to the given folder, already marked as read.
 pub async fn append_sent(session: &mut Session, folder: &str, raw: &[u8]) -> Result<()> {
     session
         .append(folder, Some("(\\Seen)"), None, raw)
         .await
-        .with_context(|| format!("copia in {folder} non riuscita"))
+        .with_context(|| format!("saving a copy to {folder} failed"))
 }
 
-/// Una cartella per il menu laterale.
+/// A folder for the sidebar.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FolderInfo {
-    /// Nome completo sul server, es. "INBOX.Clienti.Rossi".
+    /// Full name on the server, e.g. "INBOX.Clients.Smith".
     pub name: String,
-    /// Nome da mostrare (ultimo pezzo), es. "Rossi".
+    /// Display name (last segment), e.g. "Smith".
     pub label: String,
-    /// Livello di annidamento (0 = principale).
+    /// Nesting level (0 = top level).
     pub depth: usize,
-    /// inbox, sent, trash, junk, drafts, archive oppure "".
+    /// inbox, sent, trash, junk, drafts, archive or "".
     pub kind: String,
-    /// La cartella può contenere mail (alcune sono solo "contenitori").
+    /// Whether the folder can hold emails (some are only containers).
     pub selectable: bool,
     pub unseen: Option<u32>,
 }
@@ -365,13 +365,13 @@ fn folder_kind(name: &str, attrs: &[async_imap::types::NameAttribute<'_>], delim
     }
 }
 
-/// Tutte le cartelle, ordinate ad albero, con il numero di non lette.
+/// All folders, sorted as a tree, with unread counts.
 pub async fn folder_tree(session: &mut Session) -> Result<Vec<FolderInfo>> {
     use async_imap::types::NameAttribute;
     let names: Vec<_> = session
         .list(Some(""), Some("*"))
         .await
-        .context("comando LIST fallito")?
+        .context("LIST command failed")?
         .try_collect()
         .await?;
     let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".").to_string();
@@ -380,7 +380,7 @@ pub async fn folder_tree(session: &mut Session) -> Result<Vec<FolderInfo>> {
         .iter()
         .map(|n| {
             let name = n.name().to_string();
-            // Su server con tutto dentro INBOX mostriamo le sottocartelle come principali.
+            // On servers that keep everything inside INBOX, show its subfolders as top level.
             let shown = name.strip_prefix(&prefix).unwrap_or(&name);
             let depth = shown.matches(delim.as_str()).count();
             FolderInfo {
@@ -393,8 +393,8 @@ pub async fn folder_tree(session: &mut Session) -> Result<Vec<FolderInfo>> {
             }
         })
         .collect();
-    // INBOX per prima, poi le cartelle speciali, poi le altre in ordine alfabetico.
-    // Ogni sottocartella segue la cartella principale a cui appartiene.
+    // INBOX first, then special folders, then the rest alphabetically.
+    // Each subfolder follows its top-level parent.
     let rank = |k: &str| match k {
         "inbox" => 0,
         "drafts" => 1,
@@ -425,17 +425,26 @@ pub async fn folder_tree(session: &mut Session) -> Result<Vec<FolderInfo>> {
     Ok(out)
 }
 
-/// Cartella del cestino: quella marcata \Trash dal server, altrimenti per nome.
-/// Se non esiste la crea.
-pub async fn trash_folder(session: &mut Session) -> Result<String> {
-    use async_imap::types::NameAttribute;
+/// Special folder ("trash" or "archive"): first the one the server marks
+/// (\Trash, \Archive), then by well-known name. Creates it if missing.
+pub async fn special_folder(session: &mut Session, kind: &str) -> Result<String> {
+    let default_name = match kind {
+        "trash" => "Trash",
+        "archive" => "Archive",
+        _ => anyhow::bail!("unknown special folder: {kind}"),
+    };
     let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
-    if let Some(n) = names.iter().find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::Trash))) {
-        return Ok(n.name().to_string());
-    }
     let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".").to_string();
-    if let Some(n) = names.iter().find(|n| folder_kind(n.name(), &[], &delim) == "trash") {
+    let by_attribute = names
+        .iter()
+        .find(|n| !n.attributes().is_empty() && folder_kind("", n.attributes(), &delim) == kind);
+    let by_name = || names.iter().find(|n| folder_kind(n.name(), &[], &delim) == kind);
+    if let Some(n) = by_attribute.or_else(by_name) {
         return Ok(n.name().to_string());
     }
-    Ok(resolve_folders(session, &["Trash".to_string()]).await?.remove(0))
+    Ok(resolve_folders(session, &[default_name.to_string()]).await?.remove(0))
+}
+
+pub async fn trash_folder(session: &mut Session) -> Result<String> {
+    special_folder(session, "trash").await
 }

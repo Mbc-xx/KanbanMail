@@ -1,4 +1,4 @@
-//! Preferenze dell'app in `settings.toml` (scritto dall'app stessa).
+//! App preferences in `settings.toml` (written by the app itself).
 
 use crate::account::config_dir;
 use anyhow::{Context, Result};
@@ -6,14 +6,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// Dopo quanti secondi di lettura una mail viene segnata come letta.
-    /// 0 = subito, -1 = mai (solo a mano).
+    /// Seconds of reading after which an email is marked as read.
+    /// 0 = immediately, -1 = never (manual only).
     #[serde(default = "default_mark_read")]
     pub mark_read_after_seconds: i32,
-    /// Firma aggiunta in fondo alle mail nuove e alle risposte.
+    /// Signature appended to new emails and replies.
     #[serde(default)]
     pub signature: String,
-    /// Suggerire gli indirizzi dalla rubrica del sistema operativo.
+    /// Suggest addresses from the operating system address book.
     #[serde(default)]
     pub use_system_contacts: bool,
 }
@@ -35,7 +35,7 @@ impl Settings {
             return Ok(Settings::default());
         }
         let text = std::fs::read_to_string(&path)?;
-        toml::from_str(&text).with_context(|| format!("{} non valido", path.display()))
+        toml::from_str(&text).with_context(|| format!("invalid {}", path.display()))
     }
 
     pub fn save(&self) -> Result<()> {

@@ -1,30 +1,30 @@
-//! Interpretazione dei messaggi (MIME) per card e vista di lettura.
+//! Message (MIME) parsing for cards and the reader.
 
 use mail_parser::MessageParser;
 use serde::Serialize;
 
-/// Una card della board.
+/// A board card.
 #[derive(Debug, Clone, Serialize)]
 pub struct Card {
     pub uid: u32,
     pub from: String,
     pub from_address: String,
     pub subject: String,
-    /// Secondi dal 1970 (UTC), 0 se sconosciuta.
+    /// Seconds since 1970 (UTC), 0 if unknown.
     pub date: i64,
     pub preview: String,
     pub flagged: bool,
     pub seen: bool,
 }
 
-/// Il contenuto completo di una mail, per la vista di lettura.
+/// The full content of an email, for the reader.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageView {
     pub from: String,
-    /// Indirizzo a cui rispondere (Reply-To se presente, altrimenti From).
+    /// Address to reply to (Reply-To if present, otherwise From).
     pub reply_address: String,
     pub to: String,
-    /// Indirizzi in To e Cc, per "Rispondi a tutti".
+    /// Addresses in To and Cc, for "Reply all".
     pub all_recipients: Vec<String>,
     pub cc: String,
     pub message_id: Option<String>,
@@ -32,7 +32,7 @@ pub struct MessageView {
     pub subject: String,
     pub date: i64,
     pub text: Option<String>,
-    /// HTML ripulito: niente script, niente immagini o risorse remote.
+    /// Sanitized HTML: no scripts, no remote images or resources.
     pub html: Option<String>,
 }
 
@@ -56,7 +56,7 @@ fn recipients(list: Option<mail_parser::AddressList<'_>>) -> String {
     .unwrap_or_default()
 }
 
-/// Costruisce una card dai primi byte del messaggio (può essere troncato).
+/// Builds a card from the first bytes of a message (may be truncated).
 pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date: i64) -> Card {
     let parsed = MessageParser::default().parse(raw);
     let from_address = parsed
@@ -93,14 +93,14 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             cc: String::new(),
             message_id: None,
             references: Vec::new(),
-            subject: "(messaggio non leggibile)".into(),
+            subject: "(unreadable message)".into(),
             date: 0,
             text: Some(String::from_utf8_lossy(raw).into_owned()),
             html: None,
         };
     };
-    // L'HTML "vero" solo se il messaggio ne contiene uno: mail-parser altrimenti
-    // lo genera dal testo, e in quel caso preferiamo mostrare il testo semplice.
+    // Use HTML only if the message really has some: otherwise mail-parser
+    // generates it from the text, and we prefer showing plain text.
     let has_real_html = m
         .html_body()
         .any(|p| matches!(p.kind(), mail_parser::PartKind::Html));
@@ -142,8 +142,8 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
     }
 }
 
-/// Toglie script, form, iframe e ogni riferimento a risorse esterne.
-/// Le immagini restano solo se incorporate come `data:` (nessuna richiesta di rete).
+/// Strips scripts, forms, iframes and every reference to external resources.
+/// Images survive only when embedded as `data:` (no network requests).
 fn sanitize_html(html: &str) -> String {
     ammonia::Builder::default()
         .url_schemes(["data", "mailto"].into_iter().collect())

@@ -1,55 +1,58 @@
 # KanbanMail
 
-Un "companion kanban" per la tua casella email IMAP: ogni colonna della board
-è una cartella IMAP, e trascinare una mail da una colonna all'altra la sposta
-davvero sul server. Scritto in Rust con [Tauri](https://tauri.app).
+A kanban companion for your IMAP mailbox: every board column is an IMAP folder,
+and dragging an email from one column to another really moves it on the server.
+Written in Rust with [Tauri](https://tauri.app).
 
-> Stato: **in sviluppo** (prima versione della board).
+> Status: **in development**.
 
-## Funzionalità (MVP)
+## Features
 
-- Configurazione al primo avvio (server, email, password).
-- Password salvata nel portachiavi del sistema operativo, mai in chiaro.
-- Colonne definite in un file TOML (nome visualizzato → cartella IMAP);
-  le cartelle mancanti vengono create.
-- Card con mittente, oggetto, data e anteprima.
-- Drag & drop tra colonne = spostamento sul server (MOVE, oppure COPY + \Deleted + EXPUNGE).
-- Pin tramite il flag IMAP `\Flagged`: icona 📌 sulla card; le mail con pin stanno in cima.
-- Aggiornamento automatico (IDLE o polling ogni 60 s).
-- Lettura della mail, con immagini e contenuti remoti bloccati.
-- Menu laterale con tutte le cartelle (Cestino, Inviata, Spam, sottocartelle…)
-  e il numero di non lette; si nasconde con ☰ o Ctrl/⌘+B. Un clic apre la
-  cartella; trascinare una card su una cartella del menu ve la sposta.
-- "Elimina" sposta la mail nel Cestino.
-- Mail non lette evidenziate (barra blu e grassetto), contatore per colonna e
-  filtro "Solo non lette".
-- Una mail aperta viene segnata come letta dopo un numero di secondi
-  configurabile (0 = subito, oppure mai); si può anche segnare a mano letta/non letta.
-- Scrittura di nuove mail e risposta ("Rispondi" / "Rispondi a tutti") in testo
-  semplice, con citazione del messaggio originale. L'invio usa SMTP (porta 465
-  SSL/TLS o 587 STARTTLS, stesse credenziali IMAP) e una copia viene salvata
-  nella cartella della posta inviata.
-- Firma automatica nelle mail nuove e nelle risposte.
-- Suggerimento degli indirizzi mentre scrivi: dai mittenti delle mail caricate
-  e, se attivato, dalla rubrica di sistema (per ora solo Contatti di macOS;
-  la prima volta macOS chiede il permesso).
+- First-run setup (server, email, password).
+- Password stored in the operating system keychain, never in plain text.
+- Columns defined in a TOML file (display name → IMAP folder); missing folders
+  are created.
+- Cards show sender, subject, date and a preview.
+- Drag & drop between columns moves the email on the server (MOVE, or
+  COPY + `\Deleted` + EXPUNGE).
+- Pin via the IMAP `\Flagged` flag: 📌 icon on the card; pinned emails stay on top.
+- Live updates (IDLE, or polling every 60 s).
+- Email reader with images and remote content blocked.
+- Sidebar with every folder (Trash, Sent, Junk, subfolders…) and unread counts;
+  hide it with ☰ or Ctrl/⌘+B. Click a folder to open it; drop a card on a
+  sidebar folder to move it there.
+- Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
+  In narrow columns, archive/delete appear on hover.
+- Resizable columns: drag the right edge (minimum 160 px); double-click the edge
+  to return to automatic width.
+- Unread emails highlighted (blue bar and bold), unread count per column and an
+  "Unread only" filter.
+- An opened email is marked as read after a configurable number of seconds
+  (0 = immediately, or never); read/unread can also be toggled by hand.
+- Write new emails and reply ("Reply" / "Reply all") in plain text, quoting the
+  original message. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
+  credentials as IMAP) and a copy is saved to the Sent folder.
+- Signature added to new emails and replies.
+- Address suggestions while writing: from the senders of loaded emails and,
+  if enabled, from the system address book (macOS Contacts only for now;
+  macOS asks for permission the first time).
 
-## Requisiti
+## Requirements
 
-- [Rust](https://rustup.rs) (stabile)
-- Node.js (servirà per l'interfaccia della board)
+- [Rust](https://rustup.rs) (stable)
+- Node.js (for the Tauri CLI)
 - macOS: Xcode Command Line Tools (`xcode-select --install`)
 
-## Struttura
+## Layout
 
 ```
-crates/kanbanmail-core   logica condivisa: account, board, portachiavi, IMAP, parsing MIME
-crates/kanbanmail-cli    test da riga di comando
-app/src-tauri         app desktop (backend Tauri)
-app/ui                interfaccia (HTML/CSS/JS, nessuna libreria esterna)
+crates/kanbanmail-core   shared logic: account, board, keychain, IMAP, SMTP, MIME parsing
+crates/kanbanmail-cli    command-line test tool
+app/src-tauri            desktop app (Tauri backend)
+app/ui                   user interface (HTML/CSS/JS, no external libraries)
 ```
 
-## Avviare l'app
+## Running the app
 
 ```bash
 cd app
@@ -57,24 +60,24 @@ npm install
 npx tauri dev
 ```
 
-Per creare l'app installabile (`.app` / `.dmg` su macOS):
+To build the installable app (`.app` / `.dmg` on macOS):
 
 ```bash
 cd app
 npx tauri build
 ```
 
-## Impostazioni
+## Settings
 
-Dal pulsante ⚙ nella board: nome del mittente, server e porta SMTP, firma,
-uso della rubrica di sistema, secondi dopo cui una mail aperta diventa "letta",
-e scollegamento dell'account.
-Sono salvate in `account.toml` e `settings.toml` nella cartella di configurazione.
+From the ⚙ button on the board: sender name, SMTP server and port, signature,
+system address book, seconds before an opened email is marked as read, and
+disconnecting the account. They are stored in `account.toml` and
+`settings.toml` in the configuration folder.
 
-## Configurare le colonne
+## Configuring columns
 
-Al primo avvio viene creato `board.toml` nella cartella di configurazione
-(`~/Library/Application Support/KanbanMail` su macOS):
+On first run, `board.toml` is created in the configuration folder
+(`~/Library/Application Support/KanbanMail` on macOS):
 
 ```toml
 max_cards_per_column = 200
@@ -88,57 +91,63 @@ name = "Todo"
 folder = "Todo"
 ```
 
-Su server che tengono tutte le cartelle dentro `INBOX` (come SiteGround/Dovecot)
-basta scrivere `Todo`: l'app usa o crea `INBOX.Todo`. Si può anche indicare il
-nome completo, es. `folder = "INBOX.In Attesa"`. Dopo una modifica, riavvia l'app.
+On servers that keep every folder inside `INBOX` (such as SiteGround/Dovecot),
+writing `Todo` is enough: the app uses or creates `INBOX.Todo`. You can also
+give the full name, e.g. `folder = "INBOX.Waiting"`. Restart the app after
+editing.
 
-## Aggiornamento automatico
+## Live updates
 
-Se il server supporta IDLE, l'app tiene aperta una connessione per colonna e
-viene avvisata subito dei cambiamenti (anche quelli fatti da altri programmi).
-Altrimenti controlla ogni 60 secondi. Alcuni server limitano le connessioni
-simultanee: con molte colonne e altri client aperti potresti raggiungere il limite.
+If the server supports IDLE, the app keeps one connection open per column and
+is notified of changes right away (including those made by other clients).
+Otherwise it checks every 60 seconds. Some servers limit simultaneous
+connections: with many columns and other clients open you may hit that limit.
 
-## Sicurezza della lettura
+## Reading safely
 
-L'HTML delle mail viene ripulito (niente script, moduli o link a risorse esterne)
-e mostrato in un riquadro isolato che non può caricare nulla dalla rete:
-le immagini remote (e i "pixel spia") restano bloccate.
+Email HTML is sanitized (no scripts, forms or links to external resources) and
+shown in an isolated frame that cannot load anything from the network: remote
+images (and tracking pixels) stay blocked.
 
-## Test da riga di comando
+## Command-line tool
 
 ```bash
 cargo run -p kanbanmail-cli
 ```
 
-La prima volta chiede email, server e password. Se il login riesce, salva
-server ed email in `account.toml` nella cartella di configurazione
-(`~/Library/Application Support/KanbanMail` su macOS) e la password nel portachiavi.
-Le volte successive si collega da solo.
+The first time it asks for email, server and password. If login succeeds, it
+saves server and email to `account.toml` in the configuration folder and the
+password to the keychain. Later runs connect on their own.
 
-Per vedere le colonne della board e le prime mail di ognuna:
+Show the board columns and the first emails of each:
 
 ```bash
 cargo run -p kanbanmail-cli -- board
 ```
 
-Per provare il login SMTP e vedere quale cartella riceve le mail inviate
-(senza inviare nulla):
+List every folder with its kind and unread count:
 
 ```bash
-cargo run -p kanbanmail-cli -- invio
+cargo run -p kanbanmail-cli -- folders
 ```
 
-Per dimenticare account e password:
+Test the SMTP login and find the folder that receives sent emails (sends nothing):
+
+```bash
+cargo run -p kanbanmail-cli -- smtp
+```
+
+Forget the saved account and password:
 
 ```bash
 cargo run -p kanbanmail-cli -- reset
 ```
 
-## Non ancora supportato
+## Not supported yet
 
-Allegati (lettura e invio), scrittura in HTML, inoltro, bozze, più account.
+Attachments (reading and sending), HTML composing, forwarding, drafts, multiple
+accounts.
 
-## Licenza
+## License
 
 [MIT](LICENSE)

@@ -1,5 +1,5 @@
-//! Dati dell'account (server, porta, email) salvati in `account.toml`.
-//! La password NON sta qui: vive nel portachiavi del sistema (vedi `secret`).
+//! Account details (server, port, email) stored in `account.toml`.
+//! The password is NOT here: it lives in the system keychain (see `secret`).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,10 @@ pub struct Account {
     #[serde(default = "default_port")]
     pub port: u16,
     pub email: String,
-    /// Nome mostrato come mittente nelle mail inviate (facoltativo).
+    /// Name shown as sender on outgoing emails (optional).
     #[serde(default)]
     pub display_name: Option<String>,
-    /// Server SMTP per l'invio; se assente si usa lo stesso server IMAP.
+    /// SMTP server for sending; defaults to the IMAP server.
     #[serde(default)]
     pub smtp_server: Option<String>,
     /// 465 = SSL/TLS diretto, 587 = STARTTLS.
@@ -30,12 +30,12 @@ fn default_smtp_port() -> u16 {
     465
 }
 
-/// Cartella di configurazione dell'app, es. `~/Library/Application Support/KanbanMail` su macOS.
+/// App configuration folder, e.g. `~/Library/Application Support/KanbanMail` on macOS.
 pub fn config_dir() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "KanbanMail")
-        .context("impossibile determinare la cartella di configurazione")?;
+        .context("cannot determine the configuration folder")?;
     let dir = dirs.config_dir().to_path_buf();
-    // L'app si chiamava MailMau: alla prima esecuzione spostiamo i vecchi file.
+    // The app used to be called MailMau: on first run, move the old files over.
     if !dir.exists() {
         if let Some(old) = directories::ProjectDirs::from("", "", OLD_APP_NAME) {
             if old.config_dir().exists() {
@@ -46,7 +46,7 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Nome precedente dell'app, usato solo per recuperare i dati salvati.
+/// Previous app name, used only to recover saved data.
 pub(crate) const OLD_APP_NAME: &str = concat!("Mail", "Mau");
 
 fn account_path() -> Result<PathBuf> {
@@ -68,15 +68,15 @@ impl Account {
             return Ok(None);
         }
         let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("lettura di {}", path.display()))?;
-        Ok(Some(toml::from_str(&text).context("account.toml non valido")?))
+            .with_context(|| format!("reading {}", path.display()))?;
+        Ok(Some(toml::from_str(&text).context("invalid account.toml")?))
     }
 
     pub fn save(&self) -> Result<()> {
         let path = account_path()?;
         std::fs::create_dir_all(path.parent().unwrap())?;
         std::fs::write(&path, toml::to_string_pretty(self)?)
-            .with_context(|| format!("scrittura di {}", path.display()))?;
+            .with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 }

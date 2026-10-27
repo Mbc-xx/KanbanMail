@@ -1,4 +1,4 @@
-// Interfaccia di KanbanMail. Parla con il backend Rust tramite `invoke`.
+// KanbanMail user interface. Talks to the Rust backend through `invoke`.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
@@ -8,18 +8,18 @@ const state = {
   columns: [], // [{ name, folder }]
   cards: {}, // folder -> [card]
   dragging: null, // { folder, uid }
-  pendingReload: new Set(), // cartelle da ricaricare finito il trascinamento
+  pendingReload: new Set(), // folders to reload once dragging ends
   reloadTimers: {},
-  email: "", // indirizzo dell'account
-  markReadAfter: 3, // secondi; -1 = mai
+  email: "", // account address
+  markReadAfter: 3, // seconds; -1 = never
   signature: "",
   onlyUnread: false,
-  view: null, // null = board; altrimenti { folder, label } della cartella aperta dal menu
-  folders: [], // cartelle per il menu laterale
-  contacts: [], // [{ name, email }] dalla rubrica di sistema
+  view: null, // null = board; otherwise { folder, label } of the folder opened from the sidebar
+  folders: [], // folders for the sidebar
+  contacts: [], // [{ name, email }] from the system address book
 };
 
-// Preferenze solo locali (aspetto), non importanti se si perdono.
+// Local-only preferences (appearance); harmless if lost.
 const local = {
   get(key) {
     try { return localStorage.getItem(key); } catch (_) { return null; }
@@ -29,7 +29,7 @@ const local = {
   },
 };
 
-// ---------- utilità ----------
+// ---------- utilities ----------
 
 function show(screenId) {
   for (const id of ["login", "board-screen", "loading"]) $(id).hidden = id !== screenId;
@@ -48,13 +48,13 @@ function toast(message, kind = "error") {
 function formatDate(ts, long = false) {
   if (!ts) return "";
   const d = new Date(ts * 1000);
-  if (long) return d.toLocaleString("it-IT", { dateStyle: "full", timeStyle: "short" });
+  if (long) return d.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
   const now = new Date();
   if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   }
   const sameYear = d.getFullYear() === now.getFullYear();
-  return d.toLocaleDateString("it-IT", sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
 }
 
 function el(tag, className, text) {
@@ -68,7 +68,7 @@ function setSyncStatus(text) {
   $("sync-status").textContent = text;
 }
 
-// ---------- avvio e login ----------
+// ---------- startup and login ----------
 
 async function start() {
   show("loading");
@@ -105,7 +105,7 @@ $("login-form").addEventListener("submit", async (ev) => {
   showLoginError("");
   const btn = $("login-submit");
   btn.disabled = true;
-  btn.textContent = "Mi collego…";
+  btn.textContent = "Connecting…";
   try {
     await invoke("login", {
       server: $("login-server").value,
@@ -120,12 +120,12 @@ $("login-form").addEventListener("submit", async (ev) => {
     showLoginError(String(e));
   } finally {
     btn.disabled = false;
-    btn.textContent = "Collegati";
+    btn.textContent = "Connect";
   }
 });
 
 $("logout").addEventListener("click", async () => {
-  if (!confirm("Vuoi davvero scollegare l'account? La password verrà tolta dal portachiavi.")) return;
+  if (!confirm("Disconnect this account? The password will be removed from the keychain.")) return;
   await invoke("forget_account").catch((e) => toast(String(e)));
   $("settings").hidden = true;
   state.columns = [];
@@ -137,7 +137,7 @@ $("logout").addEventListener("click", async () => {
 
 async function openBoard() {
   show("loading");
-  $("loading-text").textContent = "Preparo le colonne…";
+  $("loading-text").textContent = "Preparing columns…";
   try {
     const info = await invoke("open_board");
     state.columns = info.columns;
@@ -149,7 +149,7 @@ async function openBoard() {
       state.signature = settings.signature;
       if (settings.use_system_contacts) loadContacts();
     } catch (_) {}
-    setSyncStatus(info.can_idle ? "Aggiornamento automatico attivo (IDLE)" : "Aggiornamento ogni 60 secondi");
+    setSyncStatus(info.can_idle ? "Live updates on (IDLE)" : "Refreshing every 60 seconds");
     $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
     state.view = null;
     renderColumns();
@@ -158,7 +158,7 @@ async function openBoard() {
     await Promise.all(state.columns.map((c) => loadColumn(c.folder)));
   } catch (e) {
     show("login");
-    showLoginError("Impossibile aprire la board: " + e);
+    showLoginError("Could not open the board: " + e);
   }
 }
 
@@ -176,11 +176,71 @@ function renderColumns() {
     const head = el("header", "column-head");
     head.append(el("h2", "", col.name), el("span", "count muted", ""), el("span", "unread", ""), el("span", "folder muted", col.folder));
     const cards = el("div", "cards");
-    cards.append(el("div", "empty muted", "Caricamento…"));
+    cards.append(el("div", "empty muted", "Loading…"));
     column.append(head, cards);
+    if (!state.view) setupResizer(column);
     setupDropTarget(column);
     board.append(column);
   }
+}
+
+// ---------- column width ----------
+
+const COL_MIN = 160;
+const COL_MAX = 900;
+
+function applyColumnWidth(column, width) {
+  if (width) {
+    column.style.flex = `0 0 ${width}px`;
+    column.classList.add("sized");
+  } else {
+    column.style.flex = "";
+    column.classList.remove("sized");
+  }
+}
+
+/// Handle on the right edge: drag to resize, double-click to go back to automatic width.
+function setupResizer(column) {
+  const key = "colwidth:" + column.dataset.folder;
+  const saved = parseInt(local.get(key), 10);
+  if (saved >= COL_MIN) applyColumnWidth(column, saved);
+
+  const handle = el("div", "col-resizer");
+  handle.title = "Drag to resize · double-click for automatic width";
+  column.append(handle);
+
+  let lastDown = 0;
+  handle.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    // Double-click detected by hand: preventDefault can suppress "dblclick".
+    if (ev.timeStamp - lastDown < 350) {
+      lastDown = 0;
+      applyColumnWidth(column, 0);
+      try { localStorage.removeItem(key); } catch (_) {}
+      return;
+    }
+    lastDown = ev.timeStamp;
+    handle.setPointerCapture(ev.pointerId);
+    handle.classList.add("active");
+    document.body.classList.add("resizing");
+    const startX = ev.clientX;
+    const startW = column.getBoundingClientRect().width;
+    let moved = false;
+    const move = (e) => {
+      moved = true;
+      const w = Math.round(Math.min(COL_MAX, Math.max(COL_MIN, startW + e.clientX - startX)));
+      applyColumnWidth(column, w);
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.classList.remove("active");
+      document.body.classList.remove("resizing");
+      if (moved) local.set(key, String(Math.round(column.getBoundingClientRect().width)));
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up, { once: true });
+    handle.addEventListener("pointercancel", up, { once: true });
+  });
 }
 
 function columnEl(folder) {
@@ -192,14 +252,14 @@ async function loadColumn(folder) {
     state.cards[folder] = await invoke("load_column", { folder });
     renderCards(folder);
   } catch (e) {
-    toast(`Errore nel caricare ${folder}: ${e}`);
+    toast(`Could not load ${folder}: ${e}`);
   }
 }
 
-/// Ricarica una cartella dopo un avviso dal server, raggruppando avvisi ravvicinati.
+/// Reloads a folder after a server notification, batching notifications close together.
 function scheduleReload(folder) {
   scheduleFolderCounts();
-  if (!columnEl(folder)) return; // non visibile in questo momento
+  if (!columnEl(folder)) return; // not visible right now
   if (state.dragging) {
     state.pendingReload.add(folder);
     return;
@@ -214,12 +274,12 @@ function renderCards(folder) {
   const all = state.cards[folder] || [];
   const unread = all.filter((c) => !c.seen).length;
   column.querySelector(".count").textContent = all.length;
-  column.querySelector(".unread").textContent = unread ? `${unread} non lett${unread === 1 ? "a" : "e"}` : "";
+  column.querySelector(".unread").textContent = unread ? `${unread} unread` : "";
   const list = state.onlyUnread ? all.filter((c) => !c.seen) : all;
   const container = column.querySelector(".cards");
   container.replaceChildren();
   if (!list.length) {
-    container.append(el("div", "empty muted", state.onlyUnread && all.length ? "Nessuna mail non letta" : "Nessuna mail"));
+    container.append(el("div", "empty muted", state.onlyUnread && all.length ? "No unread emails" : "No emails"));
     return;
   }
   for (const card of list) container.append(renderCard(folder, card));
@@ -233,14 +293,23 @@ function renderCard(folder, card) {
   c.dataset.uid = card.uid;
 
   const fromLine = el("div", "from-line");
-  fromLine.append(el("span", "from", card.from || "(mittente sconosciuto)"), el("span", "date", formatDate(card.date)));
-  const pin = el("button", "pin-btn", "📌");
-  pin.title = card.flagged ? "Togli il pin" : "Metti il pin (in cima alla colonna)";
-  pin.addEventListener("click", (ev) => {
-    ev.stopPropagation();
-    togglePin(folder, card, c);
-  });
-  c.append(pin, fromLine, el("div", "subject", card.subject || "(senza oggetto)"), el("div", "preview", card.preview));
+  fromLine.append(el("span", "from", card.from || "(unknown sender)"), el("span", "date", formatDate(card.date)));
+  const actions = el("div", "card-actions");
+  const action = (cls, icon, title, run) => {
+    const b = el("button", "card-btn " + cls, icon);
+    b.title = title;
+    b.draggable = false;
+    b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      run();
+    });
+    actions.append(b);
+  };
+  const kind = folderKind(folder);
+  if (kind !== "archive") action("archive-btn", "🗄", "Archive", () => fileCard(folder, card, "archive"));
+  if (kind !== "trash") action("trash-btn", "🗑", "Delete (move to trash)", () => fileCard(folder, card, "trash"));
+  action("pin-btn", "📌", card.flagged ? "Unpin" : "Pin (keep at the top of the column)", () => togglePin(folder, card, c));
+  c.append(actions, fromLine, el("div", "subject", card.subject || "(no subject)"), el("div", "preview", card.preview));
 
   c.addEventListener("click", () => openReader(folder, card));
   c.addEventListener("dragstart", (ev) => {
@@ -279,7 +348,7 @@ function setupDropTarget(column) {
 }
 
 async function moveCard(from, uid, to) {
-  // Spostamento "ottimistico": la card cambia colonna subito, poi conferma dal server.
+  // Optimistic move: the card changes column immediately, then the server confirms.
   const list = state.cards[from] || [];
   const idx = list.findIndex((c) => c.uid === uid);
   if (idx < 0) return;
@@ -294,7 +363,7 @@ async function moveCard(from, uid, to) {
   try {
     await invoke("move_card", { from, uid, to });
   } catch (e) {
-    toast("Spostamento non riuscito: " + e);
+    toast("Move failed: " + e);
   }
   await Promise.all([from, to].filter((f) => columnEl(f)).map(loadColumn));
   scheduleFolderCounts();
@@ -306,7 +375,7 @@ async function togglePin(folder, card, cardEl) {
   try {
     await invoke("set_pin", { folder, uid: card.uid, pinned });
   } catch (e) {
-    toast("Pin non modificato: " + e);
+    toast("Pin not changed: " + e);
   }
   await loadColumn(folder);
 }
@@ -321,7 +390,7 @@ $("refresh").addEventListener("click", () => {
   loadFolders();
 });
 
-// ---------- menu laterale ----------
+// ---------- sidebar ----------
 
 const FOLDER_ICONS = { inbox: "📥", drafts: "📝", sent: "📤", archive: "🗄", junk: "⚠️", trash: "🗑" };
 
@@ -330,7 +399,7 @@ async function loadFolders() {
     state.folders = await invoke("list_folders");
     renderFolders();
   } catch (e) {
-    toast("Errore nel leggere le cartelle: " + e);
+    toast("Could not read folders: " + e);
   }
 }
 
@@ -407,9 +476,9 @@ document.addEventListener("keydown", (ev) => {
 
 listen("folder-changed", (ev) => scheduleReload(ev.payload));
 
-// ---------- lettura ----------
+// ---------- reading ----------
 
-// Nell'anteprima HTML: niente script, niente rete, solo stili e immagini incorporate.
+// In the HTML view: no scripts, no network, only inline styles and embedded images.
 const FRAME_CSP =
   "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";
 
@@ -427,14 +496,14 @@ function stopSeenTimer() {
 }
 
 function updateSeenButton() {
-  $("reader-seen").textContent = readerCard.card.seen ? "Segna come non letta" : "Segna come letta";
+  $("reader-seen").textContent = readerCard.card.seen ? "Mark as unread" : "Mark as read";
 }
 
-/// Cambia lo stato letto/non letto sul server e aggiorna subito la card.
+/// Changes read/unread on the server and updates the card right away.
 async function setSeen(folder, card, seen) {
   stopSeenTimer();
   card.seen = seen;
-  // La colonna potrebbe essere stata ricaricata nel frattempo: aggiorna anche la copia attuale.
+  // The column may have been reloaded meanwhile: update the current copy too.
   const live = (state.cards[folder] || []).find((c) => c.uid === card.uid);
   if (live) live.seen = seen;
   scheduleFolderCounts();
@@ -443,7 +512,7 @@ async function setSeen(folder, card, seen) {
   try {
     await invoke("set_seen", { folder, uid: card.uid, seen });
   } catch (e) {
-    toast("Stato letto/non letto non modificato: " + e);
+    toast("Read state not changed: " + e);
     await loadColumn(folder);
   }
 }
@@ -454,7 +523,7 @@ function startSeenTimer(folder, card) {
   if (card.seen || secs < 0) return;
   if (secs === 0) return void setSeen(folder, card, true);
   let left = secs;
-  const hint = () => ($("reader-seen-hint").textContent = `Sarà segnata come letta tra ${left} s`);
+  const hint = () => ($("reader-seen-hint").textContent = `Will be marked as read in ${left} s`);
   hint();
   seenCountdown = setInterval(() => {
     left -= 1;
@@ -463,19 +532,30 @@ function startSeenTimer(folder, card) {
   seenTimer = setTimeout(() => setSeen(folder, card, true), secs * 1000);
 }
 
-$("reader-trash").addEventListener("click", async () => {
-  const { folder, card } = readerCard;
-  closeReader();
+function folderKind(folder) {
+  return state.folders.find((f) => f.name === folder)?.kind || "";
+}
+
+/// Moves the email to the trash (kind "trash") or the archive ("archive").
+async function fileCard(folder, card, kind) {
   state.cards[folder] = (state.cards[folder] || []).filter((c) => c.uid !== card.uid);
   renderCards(folder);
   try {
-    const trash = await invoke("trash_card", { folder, uid: card.uid });
-    toast(`Spostata in ${trash}`, "info");
+    const target = await invoke("file_card", { folder, uid: card.uid, kind });
+    toast(`Moved to ${target}`, "info");
   } catch (e) {
-    toast("Eliminazione non riuscita: " + e);
+    toast((kind === "trash" ? "Delete" : "Archive") + " failed: " + e);
   }
-  await loadColumn(folder);
+  await Promise.all(
+    state.columns.concat(visibleColumns()).map((c) => c.folder).filter((f, i, a) => a.indexOf(f) === i && columnEl(f)).map(loadColumn),
+  );
   scheduleFolderCounts();
+}
+
+$("reader-trash").addEventListener("click", () => {
+  const { folder, card } = readerCard;
+  closeReader();
+  fileCard(folder, card, "trash");
 });
 
 $("reader-seen").addEventListener("click", () => {
@@ -488,21 +568,20 @@ async function openReader(folder, card) {
   readerMessage = null;
   updateSeenButton();
   $("reader-reply").disabled = $("reader-reply-all").disabled = true;
-  const kind = state.folders.find((f) => f.name === folder)?.kind;
-  $("reader-trash").hidden = kind === "trash";
-  $("reader-subject").textContent = card.subject || "(senza oggetto)";
+  $("reader-trash").hidden = folderKind(folder) === "trash";
+  $("reader-subject").textContent = card.subject || "(no subject)";
   $("reader-from").textContent = card.from;
   $("reader-to").textContent = "";
   $("reader-cc").textContent = "";
   $("reader-cc").hidden = $("reader-cc-label").hidden = true;
   $("reader-date").textContent = formatDate(card.date, true);
   $("reader-toggle").hidden = true;
-  $("reader-body").replaceChildren(el("pre", "muted", "Caricamento…"));
+  $("reader-body").replaceChildren(el("pre", "muted", "Loading…"));
   $("reader").hidden = false;
   try {
     const msg = await invoke("read_message", { folder, uid: card.uid });
     readerMessage = msg;
-    $("reader-subject").textContent = msg.subject || "(senza oggetto)";
+    $("reader-subject").textContent = msg.subject || "(no subject)";
     $("reader-from").textContent = msg.from;
     $("reader-to").textContent = msg.to;
     $("reader-cc").textContent = msg.cc;
@@ -523,7 +602,7 @@ function renderReaderBody() {
   const body = $("reader-body");
   if (readerMode === "html" && msg.html) {
     const frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", ""); // nessuno script, nessuna navigazione
+    frame.setAttribute("sandbox", ""); // no scripts, no navigation
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.srcdoc =
       `<!doctype html><html><head><meta charset="utf-8">` +
@@ -531,10 +610,10 @@ function renderReaderBody() {
       `<style>body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;margin:16px;color:#1c1f24;overflow-wrap:anywhere}img{max-width:100%}</style>` +
       `</head><body>${msg.html}</body></html>`;
     body.replaceChildren(frame);
-    $("reader-toggle").textContent = "Mostra testo semplice";
+    $("reader-toggle").textContent = "Show plain text";
   } else {
-    body.replaceChildren(el("pre", "", msg.text || "(nessun testo)"));
-    $("reader-toggle").textContent = "Mostra versione HTML";
+    body.replaceChildren(el("pre", "", msg.text || "(no text)"));
+    $("reader-toggle").textContent = "Show HTML version";
   }
 }
 
@@ -561,9 +640,9 @@ document.addEventListener("keydown", (ev) => {
   else if (!$("reader").hidden) closeReader();
 });
 
-// ---------- scrittura e risposta ----------
+// ---------- writing and replying ----------
 
-let composeReply = null; // { folder, uid } della mail a cui si risponde
+let composeReply = null; // { folder, uid } of the email being replied to
 let composeContext = null; // { in_reply_to, references }
 let composeInitial = "";
 
@@ -571,13 +650,13 @@ function composeSnapshot() {
   return ["compose-to", "compose-cc", "compose-subject", "compose-body"].map((id) => $(id).value).join("\u0000");
 }
 
-function openComposer({ to = "", cc = "", subject = "", body = "", reply = null, context = null, title = "Nuova mail" } = {}) {
+function openComposer({ to = "", cc = "", subject = "", body = "", reply = null, context = null, title = "New email" } = {}) {
   $("compose-title").textContent = title;
   $("compose-to").value = to;
   $("compose-cc").value = cc;
   $("compose-subject").value = subject;
   $("compose-body").value = body;
-  $("compose-from").textContent = "Da: " + state.email;
+  $("compose-from").textContent = "From: " + state.email;
   composeReply = reply;
   composeContext = context;
   composeInitial = composeSnapshot();
@@ -593,11 +672,11 @@ function openComposer({ to = "", cc = "", subject = "", body = "", reply = null,
 }
 
 function closeComposer(force = false) {
-  if (!force && composeSnapshot() !== composeInitial && !confirm("Chiudere senza inviare? Il testo scritto andrà perso.")) return;
+  if (!force && composeSnapshot() !== composeInitial && !confirm("Close without sending? What you wrote will be lost.")) return;
   $("composer").hidden = true;
 }
 
-/// Firma nel formato standard: "-- " su una riga da sola, poi il testo.
+/// Signature in the standard format: "-- " on a line of its own, then the text.
 function signatureBlock() {
   return state.signature ? `\n\n-- \n${state.signature}` : "";
 }
@@ -606,7 +685,7 @@ function quote(msg) {
   const text = msg.text || "";
   const when = msg.date ? formatDate(msg.date, true) : "";
   const quoted = text.replace(/\s+$/, "").split("\n").map((l) => "> " + l).join("\n");
-  return `\n\n${when ? "Il " + when + ", " : ""}${msg.from} ha scritto:\n${quoted}\n`;
+  return `\n\n${when ? "On " + when + ", " : ""}${msg.from} wrote:\n${quoted}\n`;
 }
 
 function replyTo(all) {
@@ -634,7 +713,7 @@ function replyTo(all) {
     body: signatureBlock() + quote(msg),
     reply: { folder: readerCard.folder, uid: readerCard.card.uid },
     context: { in_reply_to: msg.message_id, references: msg.references },
-    title: all ? "Rispondi a tutti" : "Rispondi",
+    title: all ? "Reply all" : "Reply",
   });
 }
 
@@ -646,10 +725,10 @@ $("compose-cancel").addEventListener("click", () => closeComposer());
 
 $("compose-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  if (!$("compose-subject").value.trim() && !confirm("La mail non ha oggetto. Inviarla comunque?")) return;
+  if (!$("compose-subject").value.trim() && !confirm("This email has no subject. Send it anyway?")) return;
   const btn = $("compose-send");
   btn.disabled = true;
-  btn.textContent = "Invio…";
+  btn.textContent = "Sending…";
   try {
     const result = await invoke("send_mail", {
       draft: {
@@ -664,16 +743,16 @@ $("compose-form").addEventListener("submit", async (ev) => {
     });
     closeComposer(true);
     if (result.warning) toast(result.warning);
-    else toast(`Mail inviata (copia salvata in ${result.saved_to})`, "info");
+    else toast(`Email sent (copy saved to ${result.saved_to})`, "info");
   } catch (e) {
-    toast("Invio non riuscito: " + e);
+    toast("Sending failed: " + e);
   } finally {
     btn.disabled = false;
-    btn.textContent = "Invia";
+    btn.textContent = "Send";
   }
 });
 
-// ---------- impostazioni ----------
+// ---------- settings ----------
 
 $("open-settings").addEventListener("click", async () => {
   try {
@@ -716,13 +795,13 @@ $("settings-form").addEventListener("submit", async (ev) => {
     state.markReadAfter = seconds;
     state.signature = $("set-signature").value.trimEnd();
     $("settings").hidden = true;
-    toast("Impostazioni salvate", "info");
+    toast("Settings saved", "info");
   } catch (e) {
-    toast("Impostazioni non salvate: " + e);
+    toast("Settings not saved: " + e);
   }
 });
 
-// ---------- suggerimenti indirizzi ----------
+// ---------- address suggestions ----------
 
 async function loadContacts() {
   try {
@@ -733,7 +812,7 @@ async function loadContacts() {
   }
 }
 
-/// Tutti gli indirizzi conosciuti: rubrica + mittenti delle mail caricate.
+/// All known addresses: address book + senders of the loaded emails.
 function addressPool() {
   const seen = new Map();
   for (const c of state.contacts) {
@@ -784,7 +863,7 @@ function showSuggestions(input) {
       const li = el("li", i === 0 ? "active" : "");
       li.append(el("span", "", c.name || c.email), el("span", "s-email", c.name ? c.email : ""));
       li.addEventListener("mousedown", (ev) => {
-        ev.preventDefault(); // non togliere il focus al campo
+        ev.preventDefault(); // keep focus in the field
         pickSuggestion(i);
       });
       return li;
@@ -802,7 +881,7 @@ function pickSuggestion(i) {
   const c = suggest.items[i];
   if (!input || !c) return;
   const { start } = currentToken(input);
-  // Il nome va tra parentesi angolari solo se non contiene caratteri che confondono l'elenco.
+  // Use "Name <address>" only when the name has no characters that would break the list.
   const entry = c.name && !/[,;"<>]/.test(c.name) ? `${c.name} <${c.email}>` : c.email;
   const before = input.value.slice(0, start);
   const after = input.value.slice(input.selectionStart).replace(/^[^,;]*[,;]?\s*/, "");

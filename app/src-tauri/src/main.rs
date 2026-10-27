@@ -1,4 +1,4 @@
-// Niente finestra di console su Windows nelle versioni di rilascio.
+// No console window on Windows in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod contacts;
@@ -21,8 +21,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
 
-/// Stato condiviso dell'app. Una sola connessione IMAP per i comandi,
-/// più una connessione per colonna dedicata all'attesa di novità (IDLE).
+/// Shared app state. One IMAP connection for commands, plus one
+/// connection per column dedicated to waiting for changes (IDLE).
 #[derive(Default)]
 struct Inner {
     account: Option<Account>,
@@ -36,7 +36,7 @@ struct Inner {
 #[derive(Default)]
 struct AppState {
     inner: Mutex<Inner>,
-    /// Cambia a ogni login/logout: i vecchi "osservatori" si fermano.
+    /// Changes on every login/logout: old watchers stop.
     generation: Arc<AtomicU64>,
 }
 
@@ -50,7 +50,7 @@ impl Inner {
     async fn ensure_session(&mut self) -> anyhow::Result<&mut Session> {
         if self.session.is_none() {
             let (Some(acc), Some(pw)) = (&self.account, &self.password) else {
-                anyhow::bail!("nessun account configurato");
+                anyhow::bail!("no account configured");
             };
             let mut s = imap::connect(acc, pw).await?;
             self.caps = imap::server_caps(&mut s).await?;
@@ -60,8 +60,8 @@ impl Inner {
     }
 }
 
-/// Esegue un'operazione IMAP; se fallisce (es. connessione caduta)
-/// si ricollega e riprova una volta.
+/// Runs an IMAP operation; if it fails (e.g. dropped connection)
+/// reconnects and retries once.
 macro_rules! with_retry {
     ($inner:ident, |$s:ident, $caps:ident| $body:expr) => {{
         let mut attempt = 0;
@@ -77,7 +77,7 @@ macro_rules! with_retry {
             match res {
                 Ok(v) => break Ok(v),
                 Err(e) if attempt < 2 => {
-                    eprintln!("errore IMAP, mi ricollego: {e:#}");
+                    eprintln!("IMAP error, reconnecting: {e:#}");
                     $inner.session = None;
                 }
                 Err(e) => break Err(err(e)),
@@ -93,7 +93,7 @@ struct Status {
     server: Option<String>,
 }
 
-/// L'account è già salvato (file + portachiavi)?
+/// Is the account already saved (file + keychain)?
 #[tauri::command]
 async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
     let acc = Account::load().map_err(err)?;
@@ -116,7 +116,7 @@ async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
     })
 }
 
-/// Prova il login; se riesce salva server ed email su file e la password nel portachiavi.
+/// Tries to log in; on success saves server and email to file and the password to the keychain.
 #[tauri::command]
 async fn login(server: String, email: String, password: String, state: State<'_, AppState>) -> CmdResult<()> {
     let account = Account::new(server.trim().to_string(), email.trim().to_string());
@@ -129,7 +129,7 @@ async fn login(server: String, email: String, password: String, state: State<'_,
     Ok(())
 }
 
-/// Dimentica account e password (per cambiare account o correggere i dati).
+/// Forgets account and password (to switch account or fix the details).
 #[tauri::command]
 async fn forget_account(state: State<'_, AppState>) -> CmdResult<()> {
     state.generation.fetch_add(1, Ordering::SeqCst);
@@ -159,7 +159,7 @@ struct BoardInfo {
     can_idle: bool,
 }
 
-/// Legge board.toml, crea le cartelle mancanti e avvia l'aggiornamento automatico.
+/// Reads board.toml, creates missing folders and starts live updates.
 #[tauri::command]
 async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<BoardInfo> {
     let board = Board::load_or_create().map_err(err)?;
@@ -195,8 +195,8 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
     })
 }
 
-/// Osserva una cartella: con IDLE il server ci avvisa appena cambia qualcosa,
-/// altrimenti controlliamo ogni 60 secondi. A ogni novità avvisiamo l'interfaccia.
+/// Watches a folder: with IDLE the server tells us as soon as something changes,
+/// otherwise we check every 60 seconds. Every change is reported to the UI.
 async fn watch_folder(
     app: AppHandle,
     current: Arc<AtomicU64>,
@@ -217,7 +217,7 @@ async fn watch_folder(
                 None => match imap::connect(&account, &password).await {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("[{folder}] connessione per IDLE fallita: {e:#}");
+                        eprintln!("[{folder}] IDLE connection failed: {e:#}");
                         tokio::time::sleep(Duration::from_secs(60)).await;
                         continue;
                     }
@@ -227,10 +227,10 @@ async fn watch_folder(
             match tokio::time::timeout(Duration::from_secs(10 * 60), wait).await {
                 Ok(Ok(s)) => session = Some(s),
                 Ok(Err(e)) => {
-                    eprintln!("[{folder}] IDLE interrotto: {e:#}");
+                    eprintln!("[{folder}] IDLE interrupted: {e:#}");
                     tokio::time::sleep(Duration::from_secs(10)).await;
                 }
-                Err(_) => {} // nessuna risposta: riapriamo la connessione al giro dopo
+                Err(_) => {} // no answer: reopen the connection on the next round
             }
         }
         if alive() {
@@ -291,7 +291,7 @@ struct SettingsView {
 #[tauri::command]
 async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
     let inner = state.inner.lock().await;
-    let acc = inner.account.as_ref().ok_or("nessun account configurato")?;
+    let acc = inner.account.as_ref().ok_or("no account configured")?;
     let settings = Settings::load().map_err(err)?;
     Ok(SettingsView {
         email: acc.email.clone(),
@@ -307,7 +307,7 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
 #[tauri::command]
 async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> CmdResult<()> {
     let mut inner = state.inner.lock().await;
-    let acc = inner.account.as_mut().ok_or("nessun account configurato")?;
+    let acc = inner.account.as_mut().ok_or("no account configured")?;
     let name = settings.display_name.trim();
     acc.display_name = (!name.is_empty()).then(|| name.to_string());
     let smtp = settings.smtp_server.trim();
@@ -323,7 +323,7 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         .map_err(err)
 }
 
-/// La mail a cui si sta rispondendo, per segnarla come "risposta".
+/// The email being replied to, so it can be marked as answered.
 #[derive(Deserialize)]
 struct ReplyTarget {
     folder: String,
@@ -332,9 +332,9 @@ struct ReplyTarget {
 
 #[derive(Serialize)]
 struct SendResult {
-    /// Cartella in cui è stata salvata la copia.
+    /// Folder the copy was saved to.
     saved_to: Option<String>,
-    /// Problema non grave (la mail è partita ma non è stata salvata).
+    /// Non-fatal problem (the email was sent but not saved).
     warning: Option<String>,
 }
 
@@ -343,14 +343,14 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, Ap
     let (account, password) = {
         let inner = state.inner.lock().await;
         (
-            inner.account.clone().ok_or("nessun account configurato")?,
+            inner.account.clone().ok_or("no account configured")?,
             inner.password.clone().unwrap_or_default(),
         )
     };
     let message = smtp::build(&account, &draft).map_err(err)?;
     smtp::send(&account, &password, &message).await.map_err(err)?;
 
-    // La mail è partita: da qui in poi gli errori sono solo avvisi.
+    // The email has been sent: from here on errors are only warnings.
     let raw = message.formatted();
     let mut inner = state.inner.lock().await;
     let saved: Result<String, String> = with_retry!(inner, |s, _caps| async {
@@ -363,7 +363,7 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, Ap
     }
     Ok(match saved {
         Ok(folder) => SendResult { saved_to: Some(folder), warning: None },
-        Err(e) => SendResult { saved_to: None, warning: Some(format!("Mail inviata, ma la copia non è stata salvata: {e}")) },
+        Err(e) => SendResult { saved_to: None, warning: Some(format!("Email sent, but the copy was not saved: {e}")) },
     })
 }
 
@@ -373,19 +373,20 @@ async fn list_folders(state: State<'_, AppState>) -> CmdResult<Vec<imap::FolderI
     with_retry!(inner, |s, _caps| imap::folder_tree(s))
 }
 
-/// Sposta la mail nel cestino. Restituisce il nome della cartella cestino.
+/// Moves the email to the trash (`kind` = "trash") or the archive ("archive").
+/// Returns the destination folder name.
 #[tauri::command]
-async fn trash_card(folder: String, uid: u32, state: State<'_, AppState>) -> CmdResult<String> {
+async fn file_card(folder: String, uid: u32, kind: String, state: State<'_, AppState>) -> CmdResult<String> {
     let mut inner = state.inner.lock().await;
     with_retry!(inner, |s, caps| async {
-        let trash = imap::trash_folder(s).await?;
-        anyhow::ensure!(trash != folder, "la mail è già nel cestino");
-        imap::move_message(s, caps, &folder, uid, &trash).await?;
-        Ok(trash)
+        let target = imap::special_folder(s, &kind).await?;
+        anyhow::ensure!(target != folder, "the email is already in {target}");
+        imap::move_message(s, caps, &folder, uid, &target).await?;
+        Ok(target)
     })
 }
 
-/// Contatti della rubrica di sistema (solo se attivato nelle impostazioni).
+/// Contacts from the system address book (only when enabled in settings).
 #[tauri::command]
 async fn system_contacts() -> CmdResult<Vec<contacts::Contact>> {
     if !Settings::load().map_err(err)?.use_system_contacts {
@@ -413,9 +414,9 @@ fn main() {
             save_settings,
             send_mail,
             list_folders,
-            trash_card,
+            file_card,
             system_contacts
         ])
         .run(tauri::generate_context!())
-        .expect("errore all'avvio di KanbanMail");
+        .expect("error while starting KanbanMail");
 }
