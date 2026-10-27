@@ -6,6 +6,8 @@
 //!   kanbanmail-cli board    show board columns and their first emails
 //!   kanbanmail-cli smtp     test the SMTP login and find the Sent folder (sends nothing)
 //!   kanbanmail-cli folders  list all folders with their kind and unread count
+//!   kanbanmail-cli drafts   save a test draft twice, check one copy is kept, then delete it
+//!   kanbanmail-cli thread   show the conversation of the newest Inbox email that is a reply
 
 use anyhow::Result;
 use kanbanmail_core::{account::Account, imap, secret};
@@ -92,11 +94,79 @@ async fn main() -> Result<()> {
         }
     }
 
+    if std::env::args().nth(1).as_deref() == Some("thread") {
+        test_thread(&mut session).await?;
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("drafts") {
+        test_drafts(&mut session, &account).await?;
+    }
+
     if std::env::args().nth(1).as_deref() == Some("board") {
         print_board(&mut session).await?;
     }
 
     session.logout().await.ok();
+    Ok(())
+}
+
+async fn test_thread(session: &mut imap::Session) -> Result<()> {
+    let mut cache = imap::FolderCache::default();
+    let cards = imap::load_cards(session, "INBOX", &mut cache, 100).await?;
+    let reply = cards.iter().find(|c| c.subject.to_lowercase().starts_with("re:"));
+    let Some(card) = reply else {
+        println!("No reply found among the newest 100 Inbox emails.");
+        return Ok(());
+    };
+    let view = imap::load_message(session, "INBOX", card.uid).await?;
+    let mut folders = vec!["INBOX".to_string()];
+    for kind in ["sent", "archive"] {
+        if let Some(f) = imap::find_special_folder(session, kind).await? {
+            folders.push(f);
+        }
+    }
+    let started = std::time::Instant::now();
+    let thread = imap::load_thread(session, view.message_id.as_deref(), &view.references, &folders).await?;
+    println!("\nConversation of \"{}\" ({} references), searched {:?} in {:?}:", view.subject, view.references.len(), folders, started.elapsed());
+    for e in &thread {
+        println!("  [{} uid {}] {} | {}", e.folder, e.card.uid, e.card.from, e.card.subject);
+    }
+    println!("Quoted text found: html {} / text {}", view.html_main.is_some(), view.text_main.is_some());
+    Ok(())
+}
+
+async fn test_drafts(session: &mut imap::Session, account: &Account) -> Result<()> {
+    use kanbanmail_core::smtp::{self, Draft};
+    let caps = imap::server_caps(session).await?;
+    let id = smtp::new_message_id(&account.email);
+    let mut draft = Draft {
+        to: String::new(),
+        cc: String::new(),
+        subject: "KanbanMail draft test".into(),
+        body: "first version".into(),
+        in_reply_to: None,
+        references: vec![],
+        message_id: Some(id.clone()),
+    };
+    let folder = imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
+    draft.body = "second version".into();
+    imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
+    let mut cache = imap::FolderCache::default();
+    let copies = imap::load_cards(session, &folder, &mut cache, 50)
+        .await?
+        .into_iter()
+        .filter(|c| c.subject == "KanbanMail draft test")
+        .collect::<Vec<_>>();
+    println!("\nDrafts folder: {folder}");
+    println!("Copies after two saves: {} (expected 1), preview: {:?}", copies.len(), copies.first().map(|c| &c.preview));
+    imap::delete_draft(session, caps, &id).await?;
+    let mut cache = imap::FolderCache::default();
+    let left = imap::load_cards(session, &folder, &mut cache, 50)
+        .await?
+        .into_iter()
+        .filter(|c| c.subject == "KanbanMail draft test")
+        .count();
+    println!("Copies after delete: {left} (expected 0)");
     Ok(())
 }
 

@@ -17,22 +17,46 @@ Written in Rust with [Tauri](https://tauri.app).
   COPY + `\Deleted` + EXPUNGE).
 - Pin via the IMAP `\Flagged` flag: 📌 icon on the card; pinned emails stay on top.
 - Live updates (IDLE, or polling every 60 s).
-- Email reader with images and remote content blocked.
+- Email reader. Remote images are blocked by default (they can reveal that you
+  opened the email): load them per email with "Load images", or always from
+  the settings. Inline images embedded in the email are always shown.
+- Attachments listed in the reader with their size; click one to save it to
+  your Downloads folder (it is then shown in Finder). Cards with attachments
+  show a paperclip.
 - Sidebar with every folder (Trash, Sent, Junk, subfolders…) and unread counts;
-  hide it with ☰ or Ctrl/⌘+B. Click a folder to open it; drop a card on a
-  sidebar folder to move it there.
+  hide it with the sidebar button or Ctrl/⌘+B. Click a folder to open it as a
+  compact list with a reading pane on the right (drag the divider to resize);
+  drop a card on a sidebar folder to move it there. On the board, emails open
+  in a popup.
+- Conversations: when you open an email, the other emails of the same thread
+  (found through Message-ID / References in the folder, Inbox, Sent, Archive
+  and the board columns, among the most recent 2000 emails of each) appear as
+  compact rows above and below it. Click a row to open that email, or its
+  reply button to answer it directly. Quoted earlier messages inside an email
+  are hidden behind "Show quoted text".
 - Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
   In narrow columns, archive/delete appear on hover.
 - Resizable columns: drag the right edge (minimum 160 px); double-click the edge
   to return to automatic width.
 - Unread emails highlighted (blue bar and bold), unread count per column and an
-  "Unread only" filter.
+  "Unread only" filter. The number of unread Inbox emails is shown as a badge
+  on the app icon in the Dock.
 - An opened email is marked as read after a configurable number of seconds
   (0 = immediately, or never); read/unread can also be toggled by hand.
+- The compose area is always light, like the reader.
 - Write new emails and reply ("Reply" / "Reply all") in plain text, quoting the
   original message. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
   credentials as IMAP) and a copy is saved to the Sent folder.
-- Signature added to new emails and replies.
+- Signature added to new emails and replies, with a rich editor in the
+  settings (bold, italic, underline, links, images, or paste one from another
+  email client; the HTML source can be edited too). When the signature has
+  formatting, the email is sent as plain text + HTML, with signature images
+  embedded as inline attachments. Editing the signature text inside an email
+  sends that email as plain text only.
+- Drafts: while writing, the email is saved to the Drafts folder every 15
+  seconds (only when it changed). Closing the composer keeps the draft;
+  "Discard" deletes it; sending removes it. Click a card in Drafts to keep
+  writing it. Only the latest version is kept on the server.
 - Address suggestions while writing: from the senders of loaded emails and,
   if enabled, from the system address book (macOS Contacts only for now;
   macOS asks for permission the first time).
@@ -137,6 +161,18 @@ Test the SMTP login and find the folder that receives sent emails (sends nothing
 cargo run -p kanbanmail-cli -- smtp
 ```
 
+Save a test draft twice, check that only one copy is kept, then delete it:
+
+```bash
+cargo run -p kanbanmail-cli -- drafts
+```
+
+Show the conversation of the newest reply in the Inbox (read-only):
+
+```bash
+cargo run -p kanbanmail-cli -- thread
+```
+
 Forget the saved account and password:
 
 ```bash
@@ -145,8 +181,13 @@ cargo run -p kanbanmail-cli -- reset
 
 ## Not supported yet
 
-Attachments (reading and sending), HTML composing, forwarding, drafts, multiple
+Sending attachments, HTML formatting in the email body, forwarding, multiple
 accounts.
+
+## Icons
+
+The interface uses a small set of original line icons drawn as inline SVG
+(`app/ui/index.html`), so no icon font or external file is loaded.
 
 ## License
 

@@ -15,6 +15,20 @@ pub struct Card {
     pub preview: String,
     pub flagged: bool,
     pub seen: bool,
+    /// The email seems to carry attachments (best guess from its first bytes).
+    pub has_attachments: bool,
+    /// Message-ID header, used to group conversations.
+    pub message_id: Option<String>,
+}
+
+/// An attachment that can be downloaded from the reader.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttachmentInfo {
+    /// Position among the message attachments, used to download it.
+    pub index: usize,
+    pub name: String,
+    pub mime: String,
+    pub size: usize,
 }
 
 /// The full content of an email, for the reader.
@@ -28,12 +42,22 @@ pub struct MessageView {
     pub all_recipients: Vec<String>,
     pub cc: String,
     pub message_id: Option<String>,
+    pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub subject: String,
     pub date: i64,
     pub text: Option<String>,
-    /// Sanitized HTML: no scripts, no remote images or resources.
+    /// Sanitized HTML: no scripts or forms. Remote images are kept in the
+    /// markup but only load if the reader allows them (see the UI).
     pub html: Option<String>,
+    /// The HTML references remote images or other remote resources.
+    pub has_remote_content: bool,
+    /// The HTML without the quoted earlier messages, when a quote was found.
+    pub html_main: Option<String>,
+    /// The text without the quoted earlier messages, when a quote was found.
+    pub text_main: Option<String>,
+    /// Attachments to download (inline images shown in the HTML are left out).
+    pub attachments: Vec<AttachmentInfo>,
 }
 
 fn sender(list: Option<mail_parser::AddressList<'_>>) -> String {
@@ -65,6 +89,11 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
         .and_then(|l| l.first())
         .and_then(|m| m.address().map(str::to_string))
         .unwrap_or_default();
+    let has_attachments = parsed.as_ref().is_some_and(|m| {
+        m.content_type().is_some_and(|ct| {
+            ct.ctype().eq_ignore_ascii_case("multipart") && ct.subtype().is_some_and(|s| s.eq_ignore_ascii_case("mixed"))
+        }) || m.attachments().any(|p| p.content_id().is_none())
+    });
     let (from, subject, date, preview) = match &parsed {
         Some(m) => {
             let preview = m
@@ -80,7 +109,8 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
         }
         None => (String::new(), String::new(), fallback_date, String::new()),
     };
-    Card { uid, from, from_address, subject, date, preview, flagged, seen }
+    let message_id = parsed.as_ref().and_then(|m| m.message_id()).map(str::to_string);
+    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id }
 }
 
 pub fn parse_view(raw: &[u8]) -> MessageView {
@@ -92,11 +122,16 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             all_recipients: Vec::new(),
             cc: String::new(),
             message_id: None,
+            in_reply_to: None,
             references: Vec::new(),
             subject: "(unreadable message)".into(),
             date: 0,
             text: Some(String::from_utf8_lossy(raw).into_owned()),
             html: None,
+            has_remote_content: false,
+            html_main: None,
+            text_main: None,
+            attachments: Vec::new(),
         };
     };
     // Use HTML only if the message really has some: otherwise mail-parser
@@ -104,6 +139,17 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
     let has_real_html = m
         .html_body()
         .any(|p| matches!(p.kind(), mail_parser::PartKind::Html));
+    let raw_html = if has_real_html { m.body_html(0).map(|h| h.into_owned()) } else { None };
+    let html = raw_html.as_deref().map(|h| sanitize_html(&inline_cid_images(&m, h)));
+    let html_main = raw_html
+        .as_deref()
+        .and_then(|h| quote_start_html(h).map(|pos| sanitize_html(&inline_cid_images(&m, &h[..pos]))))
+        .filter(|main| !html_to_plain(main).trim().is_empty());
+    let text = m.body_text(0).map(|t| t.into_owned());
+    let text_main = text
+        .as_deref()
+        .and_then(|t| quote_start_text(t).map(|pos| t[..pos].trim_end().to_string()))
+        .filter(|main| !main.trim().is_empty());
     let first_address = |l: Option<mail_parser::AddressList<'_>>| {
         l.and_then(|l| l.first()).and_then(|m| m.address().map(str::to_string))
     };
@@ -130,25 +176,245 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
         all_recipients,
         cc: recipients(m.cc()),
         message_id,
+        in_reply_to: m.in_reply_to().and_then(|r| r.get(0)).map(str::to_string),
         references,
         subject: m.subject().unwrap_or_default().to_string(),
         date: m.date().map(|d| d.to_timestamp()).unwrap_or(0),
-        text: m.body_text(0).map(|t| t.into_owned()),
-        html: if has_real_html {
-            m.body_html(0).map(|h| sanitize_html(&h))
-        } else {
-            None
-        },
+        text,
+        text_main,
+        html_main,
+        has_remote_content: html.as_deref().is_some_and(has_remote_content),
+        attachments: list_attachments(&m, raw_html.as_deref()),
+        html,
     }
 }
 
-/// Strips scripts, forms, iframes and every reference to external resources.
-/// Images survive only when embedded as `data:` (no network requests).
+fn mime_of(part: &mail_parser::MessagePart<'_>) -> String {
+    part.content_type()
+        .map(|ct| match ct.subtype() {
+            Some(sub) => format!("{}/{}", ct.ctype(), sub),
+            None => ct.ctype().to_string(),
+        })
+        .unwrap_or_else(|| "application/octet-stream".into())
+        .to_lowercase()
+}
+
+/// Inline images referenced by the HTML (`cid:`) become `data:` URIs, so they
+/// show without any network access.
+fn inline_cid_images(m: &mail_parser::Message<'_>, html: &str) -> String {
+    use base64::Engine;
+    let mut out = html.to_string();
+    for part in m.attachments() {
+        let (Some(cid), true) = (part.content_id(), mime_of(&part).starts_with("image/")) else {
+            continue;
+        };
+        let needle = format!("cid:{cid}");
+        if out.contains(&needle) {
+            let data = base64::engine::general_purpose::STANDARD.encode(part.decoded());
+            out = out.replace(&needle, &format!("data:{};base64,{data}", mime_of(&part)));
+        }
+    }
+    out
+}
+
+fn list_attachments(m: &mail_parser::Message<'_>, raw_html: Option<&str>) -> Vec<AttachmentInfo> {
+    m.attachments()
+        .enumerate()
+        .filter(|(_, p)| {
+            // Images already shown inside the HTML are not listed.
+            !matches!((p.content_id(), raw_html), (Some(cid), Some(h)) if h.contains(&format!("cid:{cid}")))
+        })
+        .map(|(index, p)| AttachmentInfo {
+            index,
+            name: p
+                .attachment_name()
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("attachment-{}", index + 1)),
+            mime: mime_of(&p),
+            size: p.decoded_len(),
+        })
+        .collect()
+}
+
+/// Name and content of the `index`-th attachment.
+pub fn attachment(raw: &[u8], index: usize) -> Option<(String, Vec<u8>)> {
+    let m = MessageParser::default().parse(raw)?;
+    let part = m.attachments().nth(index)?;
+    let name = part
+        .attachment_name()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("attachment-{}", index + 1));
+    Some((name, part.decoded().into_owned()))
+}
+
+fn has_remote_content(html: &str) -> bool {
+    let lower = html.to_ascii_lowercase();
+    ["src=\"http", "src='http", "url(http", "url(\"http", "url('http", "background=\"http"]
+        .iter()
+        .any(|p| lower.contains(p))
+}
+
+/// Cleans a signature written or pasted in the settings editor.
+pub fn sanitize_signature(html: &str) -> String {
+    ammonia::Builder::default()
+        .url_schemes(["data", "mailto", "http", "https"].into_iter().collect())
+        .add_generic_attributes(["style", "align", "width", "height"])
+        .link_rel(Some("noopener noreferrer"))
+        .clean(html)
+        .to_string()
+}
+
+/// Strips scripts, forms and iframes. Remote image addresses are kept: whether
+/// they load is decided by the reader's Content-Security-Policy.
 fn sanitize_html(html: &str) -> String {
     ammonia::Builder::default()
-        .url_schemes(["data", "mailto"].into_iter().collect())
+        .url_schemes(["data", "mailto", "http", "https", "cid"].into_iter().collect())
         .add_generic_attributes(["style", "align", "bgcolor", "width", "height"])
         .link_rel(Some("noopener noreferrer"))
         .clean(html)
         .to_string()
+}
+
+/// Rough visible text of some HTML (only used to check a part is not empty).
+fn html_to_plain(html: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ")
+}
+
+/// Where the quoted earlier messages start in an HTML body, as written by the
+/// most common mail clients (Gmail, Apple Mail, Outlook, Thunderbird, Yahoo).
+pub fn quote_start_html(html: &str) -> Option<usize> {
+    // ASCII lowercasing keeps byte offsets unchanged.
+    let lower = html.to_ascii_lowercase();
+    let markers = [
+        "<div class=\"gmail_quote",
+        "<blockquote type=\"cite\"",
+        "<div id=\"divrplyfwdmsg\"",
+        "<div id=\"appendonsend\"",
+        "<hr id=\"stopspelling\"",
+        "<div class=\"moz-cite-prefix\"",
+        "<div class=\"yahoo_quoted\"",
+        "<blockquote class=\"gmail_quote\"",
+    ];
+    let mut best = markers.iter().filter_map(|m| lower.find(m)).min();
+    // Outlook desktop: a reply header box with a thin top border.
+    for border in ["border-top:solid #e1e1e1 1.0pt", "border-top:solid #b5c4df 1.0pt"] {
+        if let Some(pos) = lower.find(border) {
+            let start = lower[..pos].rfind("<div").unwrap_or(pos);
+            best = Some(best.map_or(start, |b| b.min(start)));
+        }
+    }
+    // Apple Mail and others write "On ..., X wrote:" right before the quote.
+    if let Some(b) = best {
+        if let Some(attr) = lower[..b].rfind("<div") {
+            let between = html_to_plain(&html[attr..b]);
+            let t = between.trim().to_lowercase();
+            if t.ends_with("wrote:") || t.ends_with("ha scritto:") || t.ends_with("a écrit :") || t.ends_with("schrieb:") {
+                best = Some(attr);
+            }
+        }
+    }
+    best.filter(|&b| b > 0)
+}
+
+/// Where the quoted earlier messages start in a plain-text body.
+pub fn quote_start_text(text: &str) -> Option<usize> {
+    let mut offset = 0;
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        let lower = t.to_lowercase();
+        let next = lines.get(i + 1).map(|l| l.trim().to_lowercase()).unwrap_or_default();
+        let header_block = (lower.starts_with("from:") || lower.starts_with("da:") || lower.starts_with("de:"))
+            && (next.starts_with("sent:") || next.starts_with("date:") || next.starts_with("inviato:") || next.starts_with("data:") || next.starts_with("to:") || next.starts_with("a:"));
+        let wrote = (lower.starts_with("on ") && lower.ends_with("wrote:"))
+            || ((lower.starts_with("il ") || lower.starts_with("in data ")) && lower.ends_with("ha scritto:"))
+            || lower.ends_with("a écrit :")
+            || lower.ends_with("schrieb:");
+        let separator = lower.contains("original message") || lower.contains("messaggio originale");
+        // A run of "> " lines that lasts until the end of the message.
+        let quote_tail = t.starts_with('>')
+            && lines[i..].iter().all(|l| l.trim().is_empty() || l.trim_start().starts_with('>'));
+        if offset > 0 && (header_block || wrote || separator || quote_tail) {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &[u8] = b"From: Anna <anna@example.com>\r\n\
+To: me@example.com\r\n\
+Subject: Report\r\n\
+Content-Type: multipart/mixed; boundary=\"outer\"\r\n\
+\r\n\
+--outer\r\n\
+Content-Type: multipart/related; boundary=\"inner\"\r\n\
+\r\n\
+--inner\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p>Logo: <img src=\"cid:logo@x\"> remote: <img src=\"https://tracker.example/p.gif\"></p><script>alert(1)</script>\r\n\
+--inner\r\n\
+Content-Type: image/png\r\n\
+Content-ID: <logo@x>\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+iVBORw0KGgo=\r\n\
+--inner--\r\n\
+--outer\r\n\
+Content-Type: application/pdf; name=\"report.pdf\"\r\n\
+Content-Disposition: attachment; filename=\"report.pdf\"\r\n\
+Content-Transfer-Encoding: base64\r\n\
+\r\n\
+JVBERi0xLjQ=\r\n\
+--outer--\r\n";
+
+    #[test]
+    fn inline_images_attachments_and_remote_content() {
+        let v = parse_view(SAMPLE);
+        let html = v.html.unwrap();
+        assert!(html.contains("data:image/png;base64,iVBORw0KGgo="), "{html}");
+        assert!(html.contains("https://tracker.example/p.gif"), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(v.has_remote_content);
+        assert_eq!(v.attachments.len(), 1, "{:?}", v.attachments);
+        assert_eq!(v.attachments[0].name, "report.pdf");
+        assert_eq!(v.attachments[0].mime, "application/pdf");
+        let (name, bytes) = attachment(SAMPLE, v.attachments[0].index).unwrap();
+        assert_eq!(name, "report.pdf");
+        assert_eq!(bytes, b"%PDF-1.4");
+        assert!(parse_card(1, SAMPLE, false, false, 0).has_attachments);
+    }
+
+    #[test]
+    fn finds_quoted_text() {
+        let gmail = "<div>Thanks!</div><br><div class=\"gmail_quote\"><div>On Mon, Bob wrote:</div><blockquote>old</blockquote></div>";
+        assert_eq!(&gmail[..quote_start_html(gmail).unwrap()], "<div>Thanks!</div><br>");
+        let apple = "<div>Ok</div><div><br><div>On 27 Oct 2026, at 10:00, Ann wrote:</div><br><blockquote type=\"cite\">old</blockquote></div>";
+        assert!(apple[..quote_start_html(apple).unwrap()].ends_with("<div>Ok</div><div><br>"));
+        assert_eq!(quote_start_html("<p>no quote here</p>"), None);
+
+        let text = "Sounds good.\n\nOn Mon, 26 Oct 2026, Bob wrote:\n> hi\n> there\n";
+        assert_eq!(&text[..quote_start_text(text).unwrap()], "Sounds good.\n\n");
+        let it = "Va bene.\nIl giorno lun 26 ott 2026, Bob ha scritto:\n> ciao\n";
+        assert_eq!(&it[..quote_start_text(it).unwrap()], "Va bene.\n");
+        let outlook = "Ciao\n\nDa: Bob\nInviato: lunedì\nA: me\n\nold";
+        assert_eq!(&outlook[..quote_start_text(outlook).unwrap()], "Ciao\n\n");
+        assert_eq!(quote_start_text("> only a quote\n"), None);
+        assert_eq!(quote_start_text("No quote.\nJust text.\n"), None);
+    }
 }

@@ -203,6 +203,21 @@ pub async fn load_cards(
     Ok(cards)
 }
 
+/// Downloads the raw email (without marking it as read).
+pub async fn load_raw(session: &mut Session, folder: &str, uid: u32) -> Result<Vec<u8>> {
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    let fetched: Vec<_> = session
+        .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
+        .await
+        .context("reading the email failed")?
+        .try_collect()
+        .await?;
+    fetched
+        .iter()
+        .find_map(|f| f.body().map(<[u8]>::to_vec))
+        .ok_or_else(|| anyhow!("the email no longer exists (moved by another program?)"))
+}
+
 /// Downloads the full email for the reader (without marking it as read).
 pub async fn load_message(session: &mut Session, folder: &str, uid: u32) -> Result<crate::message::MessageView> {
     session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
@@ -425,26 +440,183 @@ pub async fn folder_tree(session: &mut Session) -> Result<Vec<FolderInfo>> {
     Ok(out)
 }
 
-/// Special folder ("trash" or "archive"): first the one the server marks
-/// (\Trash, \Archive), then by well-known name. Creates it if missing.
-pub async fn special_folder(session: &mut Session, kind: &str) -> Result<String> {
-    let default_name = match kind {
-        "trash" => "Trash",
-        "archive" => "Archive",
-        _ => anyhow::bail!("unknown special folder: {kind}"),
-    };
+/// Special folder ("trash", "archive", "drafts", "sent"): first the one the
+/// server marks (\\Trash, \\Archive...), then by well-known name. `None` if missing.
+pub async fn find_special_folder(session: &mut Session, kind: &str) -> Result<Option<String>> {
     let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
     let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".").to_string();
     let by_attribute = names
         .iter()
         .find(|n| !n.attributes().is_empty() && folder_kind("", n.attributes(), &delim) == kind);
     let by_name = || names.iter().find(|n| folder_kind(n.name(), &[], &delim) == kind);
-    if let Some(n) = by_attribute.or_else(by_name) {
-        return Ok(n.name().to_string());
+    Ok(by_attribute.or_else(by_name).map(|n| n.name().to_string()))
+}
+
+/// Like [`find_special_folder`], but creates the folder if it does not exist.
+pub async fn special_folder(session: &mut Session, kind: &str) -> Result<String> {
+    let default_name = match kind {
+        "trash" => "Trash",
+        "archive" => "Archive",
+        "drafts" => "Drafts",
+        "sent" => "Sent",
+        _ => anyhow::bail!("unknown special folder: {kind}"),
+    };
+    if let Some(found) = find_special_folder(session, kind).await? {
+        return Ok(found);
     }
     Ok(resolve_folders(session, &[default_name.to_string()]).await?.remove(0))
 }
 
 pub async fn trash_folder(session: &mut Session) -> Result<String> {
     special_folder(session, "trash").await
+}
+
+/// UIDs in the selected folder whose Message-ID header matches `message_id`.
+async fn uids_by_message_id(session: &mut Session, message_id: &str) -> Result<Vec<u32>> {
+    let bare = message_id.trim().trim_start_matches('<').trim_end_matches('>');
+    anyhow::ensure!(!bare.is_empty() && !bare.contains('"') && !bare.contains('\\'), "invalid Message-ID");
+    let mut uids: Vec<u32> = session
+        .uid_search(format!("HEADER Message-ID \"{bare}\""))
+        .await
+        .context("SEARCH failed")?
+        .into_iter()
+        .collect();
+    uids.sort_unstable();
+    Ok(uids)
+}
+
+async fn delete_uids(session: &mut Session, caps: ServerCaps, uids: &[u32]) -> Result<()> {
+    if uids.is_empty() {
+        return Ok(());
+    }
+    let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let _: Vec<_> = session
+        .uid_store(&set, "+FLAGS.SILENT (\\Deleted)")
+        .await
+        .context("setting \\Deleted failed")?
+        .try_collect()
+        .await?;
+    if caps.uidplus {
+        let _: Vec<_> = session.uid_expunge(&set).await?.try_collect().await?;
+    } else {
+        let _: Vec<_> = session.expunge().await?.try_collect().await?;
+    }
+    Ok(())
+}
+
+/// Saves a draft to the Drafts folder and removes its older versions
+/// (same Message-ID). Returns the Drafts folder name.
+pub async fn save_draft(session: &mut Session, caps: ServerCaps, raw: &[u8], message_id: &str) -> Result<String> {
+    let folder = special_folder(session, "drafts").await?;
+    session
+        .append(&folder, Some("(\\Draft \\Seen)"), None, raw)
+        .await
+        .with_context(|| format!("saving the draft to {folder} failed"))?;
+    session.select(&folder).await.with_context(|| format!("cannot open {folder}"))?;
+    let uids = uids_by_message_id(session, message_id).await?;
+    // The newest copy has the highest UID: keep it, remove the others.
+    if let Some((_, older)) = uids.split_last() {
+        delete_uids(session, caps, older).await?;
+    }
+    Ok(folder)
+}
+
+/// Removes every copy of a draft (after sending it, or when it is discarded).
+pub async fn delete_draft(session: &mut Session, caps: ServerCaps, message_id: &str) -> Result<()> {
+    let folder = special_folder(session, "drafts").await?;
+    session.select(&folder).await.with_context(|| format!("cannot open {folder}"))?;
+    let uids = uids_by_message_id(session, message_id).await?;
+    delete_uids(session, caps, &uids).await
+}
+
+/// How many of the most recent emails of each folder a conversation search looks at.
+const THREAD_SEARCH_DEPTH: u32 = 2000;
+
+/// One email of a conversation, with the folder it lives in.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ThreadEntry {
+    pub folder: String,
+    pub card: crate::message::Card,
+}
+
+fn bare_id(id: &str) -> String {
+    id.trim().trim_start_matches('<').trim_end_matches('>').to_string()
+}
+
+/// `OR a OR b c` from a list of IMAP search keys.
+fn or_chain(keys: &[String]) -> String {
+    match keys {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first, rest @ ..] => format!("OR {first} {}", or_chain(rest)),
+    }
+}
+
+/// Finds the other emails of a conversation: those the message refers to
+/// (References / In-Reply-To) and those that refer to the same thread, in the
+/// given folders. Returns them oldest first, without duplicates.
+pub async fn load_thread(
+    session: &mut Session,
+    message_id: Option<&str>,
+    references: &[String],
+    folders: &[String],
+) -> Result<Vec<ThreadEntry>> {
+    let mut ids: Vec<String> = references.iter().map(|r| bare_id(r)).collect();
+    if let Some(id) = message_id {
+        ids.push(bare_id(id));
+    }
+    ids.retain(|id| !id.is_empty() && !id.contains('"') && !id.contains('\\'));
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Keep the search short: the thread root plus the most recent references.
+    let root = ids[0].clone();
+    let recent: Vec<String> = ids.iter().rev().take(15).cloned().collect();
+    let mut keys: Vec<String> = recent.iter().map(|id| format!("HEADER Message-ID \"{id}\"")).collect();
+    keys.push(format!("HEADER References \"{root}\""));
+    keys.push(format!("HEADER In-Reply-To \"{root}\""));
+    let query = or_chain(&keys);
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for folder in folders {
+        let Ok(mailbox) = session.examine(folder).await else {
+            continue; // folder missing or not selectable: skip it
+        };
+        if mailbox.exists == 0 {
+            continue;
+        }
+        // Header searches scan every message: only look at the most recent ones,
+        // where ongoing conversations almost always are.
+        let start = mailbox.exists.saturating_sub(THREAD_SEARCH_DEPTH - 1).max(1);
+        let Ok(found) = session.uid_search(format!("{start}:* ({query})")).await else { continue };
+        let mut uids: Vec<u32> = found.into_iter().collect();
+        if uids.is_empty() {
+            continue;
+        }
+        uids.sort_unstable();
+        let set = uids.iter().rev().take(50).map(u32::to_string).collect::<Vec<_>>().join(",");
+        let fetched: Vec<_> = session
+            .uid_fetch(&set, "(UID FLAGS INTERNALDATE BODY.PEEK[]<0.32768>)")
+            .await
+            .context("reading the conversation failed")?
+            .try_collect()
+            .await?;
+        for f in fetched {
+            use async_imap::types::Flag;
+            let Some(uid) = f.uid else { continue };
+            let date = f.internal_date().map(|d| d.timestamp()).unwrap_or(0);
+            let flagged = f.flags().any(|x| matches!(x, Flag::Flagged));
+            let seen = f.flags().any(|x| matches!(x, Flag::Seen));
+            let card = crate::message::parse_card(uid, f.body().unwrap_or_default(), flagged, seen, date);
+            // The same email can sit in several folders (e.g. Inbox and Archive).
+            let key = card.message_id.clone().map(|id| bare_id(&id)).unwrap_or_else(|| format!("{folder}/{uid}"));
+            if seen_ids.insert(key) {
+                out.push(ThreadEntry { folder: folder.clone(), card });
+            }
+        }
+    }
+    out.sort_by_key(|e| e.card.date);
+    Ok(out)
 }

@@ -286,6 +286,8 @@ struct SettingsView {
     mark_read_after_seconds: i32,
     signature: String,
     use_system_contacts: bool,
+    signature_html: String,
+    load_remote_images: bool,
 }
 
 #[tauri::command]
@@ -301,6 +303,8 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         mark_read_after_seconds: settings.mark_read_after_seconds,
         signature: settings.signature,
         use_system_contacts: settings.use_system_contacts,
+        signature_html: settings.signature_html,
+        load_remote_images: settings.load_remote_images,
     })
 }
 
@@ -318,6 +322,8 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         mark_read_after_seconds: settings.mark_read_after_seconds.max(-1),
         signature: settings.signature.trim_end().to_string(),
         use_system_contacts: settings.use_system_contacts,
+        signature_html: kanbanmail_core::message::sanitize_signature(&settings.signature_html),
+        load_remote_images: settings.load_remote_images,
     }
         .save()
         .map_err(err)
@@ -347,7 +353,8 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, Ap
             inner.password.clone().unwrap_or_default(),
         )
     };
-    let message = smtp::build(&account, &draft).map_err(err)?;
+    let signature = Settings::load().map_err(err)?.html_signature();
+    let message = smtp::build(&account, &draft, signature.as_ref()).map_err(err)?;
     smtp::send(&account, &password, &message).await.map_err(err)?;
 
     // The email has been sent: from here on errors are only warnings.
@@ -361,10 +368,135 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, Ap
     if let Some(r) = reply {
         let _ = with_retry!(inner, |s, _caps| imap::set_answered(s, &r.folder, r.uid));
     }
+    if let Some(id) = draft.message_id.as_deref().filter(|s| !s.is_empty()) {
+        if let Err(e) = with_retry!(inner, |s, caps| imap::delete_draft(s, caps, id)) {
+            eprintln!("could not remove the draft after sending: {e}");
+        }
+    }
     Ok(match saved {
         Ok(folder) => SendResult { saved_to: Some(folder), warning: None },
         Err(e) => SendResult { saved_to: None, warning: Some(format!("Email sent, but the copy was not saved: {e}")) },
     })
+}
+
+/// A fresh Message-ID for a new email, used for its drafts and the final send.
+#[tauri::command]
+async fn new_message_id(state: State<'_, AppState>) -> CmdResult<String> {
+    let inner = state.inner.lock().await;
+    let acc = inner.account.as_ref().ok_or("no account configured")?;
+    Ok(smtp::new_message_id(&acc.email))
+}
+
+/// Saves the email being written to the Drafts folder, replacing its previous version.
+/// Returns the Drafts folder name.
+#[tauri::command]
+async fn save_draft(draft: Draft, state: State<'_, AppState>) -> CmdResult<String> {
+    let id = draft.message_id.clone().filter(|s| !s.is_empty()).ok_or("draft without Message-ID")?;
+    let mut inner = state.inner.lock().await;
+    let account = inner.account.clone().ok_or("no account configured")?;
+    let signature = Settings::load().map_err(err)?.html_signature();
+    let raw = smtp::build_draft(&account, &draft, signature.as_ref()).map_err(err)?.formatted();
+    with_retry!(inner, |s, caps| imap::save_draft(s, caps, &raw, &id))
+}
+
+/// The other emails of the conversation of `folder`/`uid`, looked up in the
+/// board columns, Inbox, Sent and Archive. Oldest first; includes the email itself.
+#[tauri::command]
+async fn load_thread(
+    folder: String,
+    message_id: Option<String>,
+    references: Vec<String>,
+    columns: Vec<String>,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<imap::ThreadEntry>> {
+    let mut inner = state.inner.lock().await;
+    with_retry!(inner, |s, _caps| async {
+        let mut folders = vec![folder.clone(), "INBOX".to_string()];
+        for kind in ["sent", "archive"] {
+            if let Some(f) = imap::find_special_folder(s, kind).await? {
+                folders.push(f);
+            }
+        }
+        folders.extend(columns.iter().cloned());
+        let mut unique = Vec::new();
+        for f in folders {
+            if !unique.contains(&f) {
+                unique.push(f);
+            }
+        }
+        imap::load_thread(s, message_id.as_deref(), &references, &unique).await
+    })
+}
+
+/// Shows the number of unread Inbox emails on the app icon (Dock on macOS,
+/// taskbar on Windows/Linux where supported). 0 removes the badge.
+#[tauri::command]
+fn set_unread_badge(count: u32, window: tauri::WebviewWindow) -> CmdResult<()> {
+    window
+        .set_badge_count((count > 0).then_some(count as i64))
+        .map_err(|e| e.to_string())
+}
+
+/// Saves an attachment to the Downloads folder and shows it in the file manager.
+/// Returns the saved file path.
+#[tauri::command]
+async fn save_attachment(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<String> {
+    let raw = {
+        let mut inner = state.inner.lock().await;
+        with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?
+    };
+    let (name, bytes) = kanbanmail_core::message::attachment(&raw, index).ok_or("attachment not found")?;
+    let dir = directories::UserDirs::new()
+        .and_then(|d| d.download_dir().map(|p| p.to_path_buf()))
+        .ok_or("cannot find the Downloads folder")?;
+    let path = unique_path(&dir, &safe_file_name(&name));
+    std::fs::write(&path, bytes).map_err(|e| format!("cannot save {}: {e}", path.display()))?;
+    reveal_in_file_manager(&path);
+    Ok(path.display().to_string())
+}
+
+/// Keeps only characters that are safe in a file name on every system.
+fn safe_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
+    if cleaned.is_empty() { "attachment".into() } else { cleaned }
+}
+
+/// `name.pdf`, or `name (1).pdf`, `name (2).pdf`... if it already exists.
+fn unique_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (name.to_string(), String::new()),
+    };
+    (1..)
+        .map(|n| dir.join(format!("{stem} ({n}){ext}")))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+fn reveal_in_file_manager(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if let Some(dir) = path.parent() {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+    }
+}
+
+/// Removes every saved version of a draft.
+#[tauri::command]
+async fn discard_draft(message_id: String, state: State<'_, AppState>) -> CmdResult<()> {
+    let mut inner = state.inner.lock().await;
+    with_retry!(inner, |s, caps| imap::delete_draft(s, caps, &message_id))
 }
 
 #[tauri::command]
@@ -415,6 +547,12 @@ fn main() {
             send_mail,
             list_folders,
             file_card,
+            new_message_id,
+            save_draft,
+            discard_draft,
+            save_attachment,
+            load_thread,
+            set_unread_badge,
             system_contacts
         ])
         .run(tauri::generate_context!())

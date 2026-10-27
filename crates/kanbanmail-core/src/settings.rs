@@ -16,6 +16,12 @@ pub struct Settings {
     /// Suggest addresses from the operating system address book.
     #[serde(default)]
     pub use_system_contacts: bool,
+    /// Rich version of the signature (HTML, images as `data:` URIs). Empty = plain text only.
+    #[serde(default)]
+    pub signature_html: String,
+    /// Load remote images in every email without asking.
+    #[serde(default)]
+    pub load_remote_images: bool,
 }
 
 fn default_mark_read() -> i32 {
@@ -24,11 +30,18 @@ fn default_mark_read() -> i32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { mark_read_after_seconds: default_mark_read(), signature: String::new(), use_system_contacts: false }
+        Settings { mark_read_after_seconds: default_mark_read(), signature: String::new(), use_system_contacts: false, signature_html: String::new(), load_remote_images: false }
     }
 }
 
 impl Settings {
+    pub fn html_signature(&self) -> Option<crate::smtp::HtmlSignature> {
+        (!self.signature_html.trim().is_empty()).then(|| crate::smtp::HtmlSignature {
+            text: self.signature.clone(),
+            html: self.signature_html.clone(),
+        })
+    }
+
     pub fn load() -> Result<Settings> {
         let path = config_dir()?.join("settings.toml");
         if !path.exists() {

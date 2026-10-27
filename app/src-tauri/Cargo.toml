@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+directories = "6.0.0"
 kanbanmail-core = { version = "0.1.0", path = "../../crates/kanbanmail-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

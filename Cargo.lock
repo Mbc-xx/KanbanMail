@@ -2155,6 +2155,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "block2",
+ "directories",
  "kanbanmail-core",
  "objc2",
  "objc2-contacts",
@@ -2183,6 +2184,7 @@ dependencies = [
  "ammonia",
  "anyhow",
  "async-imap",
+ "base64 0.23.1",
  "directories",
  "futures",
  "keyring",

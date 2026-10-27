@@ -7,6 +7,33 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Line icons (24×24, stroke = currentColor), referenced with <use href="#i-name"> -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+    <symbol id="i-sidebar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></symbol>
+    <symbol id="i-compose" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/><path d="M17.5 3.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16M15 4v16"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2.4-7A2 2 0 0 1 7.3 4.6h9.4a2 2 0 0 1 1.9 1.4L21 13v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 13h5l1.5 2.5h5L16 13h5"/></symbol>
+    <symbol id="i-sent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3L10 14"/><path d="M21 3l-6.5 18-4.5-7-7-4.5z"/></symbol>
+    <symbol id="i-drafts" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="4" rx="1.5"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/></symbol>
+    <symbol id="i-junk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.6L2.9 17.5A2 2 0 0 0 4.6 20.5h14.8a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4M12 17h.01"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 5v2"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/><path d="M12 14v7"/></symbol>
+    <symbol id="i-reply" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5"/><path d="M4 12h10a6 6 0 0 1 6 6v1"/></symbol>
+    <symbol id="i-reply-all" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7l-5 5 5 5M7 7l-5 5 5 5"/><path d="M7 12h7a6 6 0 0 1 6 6v1"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-photo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-9 8"/></symbol>
+    <symbol id="i-envelope" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></symbol>
+    <symbol id="i-envelope-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10l9-6 9 6v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10l9 6 9-6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 8l-4 4 4 4M16 8l4 4-4 4"/></symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><path d="M15 4l5 5-9 9H7l-3-3z"/></symbol>
+  </svg>
   <!-- First run: account details -->
   <section id="login" class="screen" hidden>
     <form id="login-form" class="login-card">
@@ -29,18 +56,18 @@
   <!-- Board -->
   <section id="board-screen" class="screen" hidden>
     <header class="topbar">
-      <button id="toggle-sidebar" title="Show/hide folders (Ctrl/⌘+B)">☰</button>
+      <button id="toggle-sidebar" class="icon-btn" title="Show/hide folders (Ctrl/⌘+B)"><svg class="icon"><use href="#i-sidebar"/></svg></button>
       <div class="brand">KanbanMail</div>
       <div id="sync-status" class="muted"></div>
       <div class="spacer"></div>
       <label class="toggle"><input id="only-unread" type="checkbox"> Unread only</label>
-      <button id="compose" class="primary" title="Write a new email">✉ New email</button>
-      <button id="refresh" title="Refresh all columns">↻ Refresh</button>
-      <button id="open-settings" title="Settings">⚙</button>
+      <button id="compose" class="primary" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span>New email</span></button>
+      <button id="refresh" class="icon-btn" title="Refresh all columns"><svg class="icon"><use href="#i-refresh"/></svg></button>
+      <button id="open-settings" class="icon-btn" title="Settings"><svg class="icon"><use href="#i-settings"/></svg></button>
     </header>
     <div class="body-row">
       <aside id="sidebar" class="sidebar">
-        <button id="nav-board" class="nav-item active">▦ Board</button>
+        <button id="nav-board" class="nav-item active"><svg class="icon"><use href="#i-board"/></svg><span class="label">Board</span></button>
         <div class="nav-title muted">Folders</div>
         <nav id="folder-list"></nav>
       </aside>
@@ -56,11 +83,13 @@
 
   <!-- Reading an email -->
   <div id="reader" class="reader-backdrop" hidden>
-    <article class="reader">
+    <article id="reader-article" class="reader">
       <header class="reader-head">
         <h2 id="reader-subject"></h2>
-        <button id="reader-close" title="Close (Esc)">✕</button>
+        <button id="reader-close" class="icon-btn" title="Close (Esc)"><svg class="icon"><use href="#i-close"/></svg></button>
       </header>
+      <!-- Earlier emails of the conversation, one compact row each -->
+      <div id="thread-before" class="thread" hidden></div>
       <dl class="reader-meta">
         <dt>From</dt><dd id="reader-from"></dd>
         <dt>To</dt><dd id="reader-to"></dd>
@@ -68,17 +97,24 @@
         <dt>Date</dt><dd id="reader-date"></dd>
       </dl>
       <div class="reader-actions">
-        <button id="reader-reply">↩ Reply</button>
-        <button id="reader-reply-all">↩ Reply all</button>
+        <button id="reader-reply"><svg class="icon"><use href="#i-reply"/></svg><span>Reply</span></button>
+        <button id="reader-reply-all"><svg class="icon"><use href="#i-reply-all"/></svg><span>Reply all</span></button>
         <button id="reader-seen"></button>
-        <button id="reader-trash" title="Move to trash">🗑 Delete</button>
+        <button id="reader-trash" title="Move to trash"><svg class="icon"><use href="#i-trash"/></svg><span>Delete</span></button>
         <span id="reader-seen-hint" class="muted"></span>
       </div>
+      <div id="reader-attachments" class="attachments" hidden></div>
       <div class="reader-tools">
-        <span class="muted">Images and remote content blocked.</span>
+        <svg class="icon muted"><use href="#i-photo"/></svg>
+        <span class="muted" id="reader-remote-note"></span>
+        <button id="reader-load-images" hidden>Load images</button>
+        <span class="spacer"></span>
+        <button id="reader-quote" hidden></button>
         <button id="reader-toggle" hidden></button>
       </div>
       <div id="reader-body" class="reader-body"></div>
+      <!-- Later emails of the conversation -->
+      <div id="thread-after" class="thread" hidden></div>
     </article>
   </div>
 
@@ -87,7 +123,7 @@
     <form id="compose-form" class="reader composer">
       <header class="reader-head">
         <h2 id="compose-title">New email</h2>
-        <button type="button" id="compose-close" title="Close">✕</button>
+        <button type="button" id="compose-close" class="icon-btn" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
       </header>
       <div class="compose-fields">
         <label>To <input id="compose-to" type="text" placeholder="name@example.com, other@example.com" autocomplete="off" required></label>
@@ -97,8 +133,10 @@
       <textarea id="compose-body" spellcheck="true"></textarea>
       <footer class="compose-foot">
         <span class="muted" id="compose-from"></span>
+        <span class="muted small" id="compose-status"></span>
         <span class="spacer"></span>
-        <button type="button" id="compose-cancel">Cancel</button>
+        <button type="button" id="compose-discard" class="danger" title="Delete this draft"><svg class="icon"><use href="#i-trash"/></svg><span>Discard</span></button>
+        <button type="button" id="compose-cancel" title="Close and keep a draft">Close</button>
         <button type="submit" id="compose-send" class="primary">Send</button>
       </footer>
     </form>
@@ -121,10 +159,29 @@
           <option value="587">587 (STARTTLS)</option>
         </select>
       </label>
-      <label>Signature
-        <textarea id="set-signature" rows="4" placeholder="Jane Doe&#10;Example Inc. · +1 ..."></textarea>
-      </label>
+      <div class="field">
+        <span class="field-label">Signature</span>
+        <div class="sig-toolbar">
+          <button type="button" class="icon-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+          <button type="button" class="icon-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+          <button type="button" class="icon-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+          <button type="button" class="icon-btn" id="sig-link" title="Add a link"><svg class="icon"><use href="#i-link"/></svg></button>
+          <button type="button" class="icon-btn" id="sig-image" title="Insert an image"><svg class="icon"><use href="#i-photo"/></svg></button>
+          <button type="button" class="icon-btn" id="sig-clear" title="Remove formatting"><svg class="icon"><use href="#i-eraser"/></svg></button>
+          <span class="spacer"></span>
+          <button type="button" class="icon-btn" id="sig-html" title="Edit the HTML source"><svg class="icon"><use href="#i-code"/></svg></button>
+        </div>
+        <div id="sig-link-row" class="sig-link-row" hidden>
+          <input id="sig-link-url" type="url" placeholder="https://example.com">
+          <button type="button" id="sig-link-add">Add link</button>
+        </div>
+        <div id="sig-editor" class="sig-editor" contenteditable="true" aria-label="Signature"></div>
+        <textarea id="sig-source" class="sig-source" rows="7" spellcheck="false" hidden></textarea>
+        <input id="sig-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <p class="muted small">Write it here or paste one from another email client. Formatting and images are sent as HTML; plain-text clients get the text version.</p>
+      </div>
       <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
+      <label class="toggle"><input id="set-remote" type="checkbox"> Always load remote images (they can tell the sender you opened the email)</label>
       <label>Mark as read after (seconds)
         <input id="set-seconds" type="number" min="0" max="600" step="1">
       </label>
@@ -137,6 +194,14 @@
         <button type="submit" class="primary">Save</button>
       </div>
     </form>
+  </div>
+
+  <!-- In-app confirmation dialog (window.confirm does not work inside Tauri) -->
+  <div id="dialog" class="reader-backdrop dialog-backdrop" hidden>
+    <div class="login-card dialog-card" role="alertdialog" aria-modal="true" aria-labelledby="dialog-message">
+      <p id="dialog-message"></p>
+      <div id="dialog-buttons" class="settings-buttons"></div>
+    </div>
   </div>
 
   <ul id="suggestions" class="suggestions" hidden></ul>
