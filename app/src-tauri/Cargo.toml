@@ -1,0 +1,22 @@
+[package]
+name = "kanbanmail"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+kanbanmail-core = { version = "0.1.0", path = "../../crates/kanbanmail-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2", features = [] }
+tokio = { version = "1.54.1", features = ["full"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-contacts = { version = "0.3.2", features = ["CNContactStore", "CNContact", "CNContactFetchRequest", "CNLabeledValue", "CNContactFormatter", "block2"] }
+objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray", "NSError"] }
