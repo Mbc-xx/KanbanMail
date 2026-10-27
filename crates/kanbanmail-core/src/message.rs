@@ -19,6 +19,8 @@ pub struct Card {
     pub has_attachments: bool,
     /// Message-ID header, used to group conversations.
     pub message_id: Option<String>,
+    /// Sent by a machine (newsletter, notification, mailing list, auto-reply).
+    pub automated: bool,
 }
 
 /// An attachment that can be downloaded from the reader.
@@ -110,7 +112,43 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
         None => (String::new(), String::new(), fallback_date, String::new()),
     };
     let message_id = parsed.as_ref().and_then(|m| m.message_id()).map(str::to_string);
-    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id }
+    let automated = parsed.as_ref().is_some_and(|m| is_automated(m, &from_address));
+    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated }
+}
+
+/// Local parts used by machines rather than people.
+const MACHINE_SENDERS: &[&str] = &[
+    "noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "do_not_reply", "notification",
+    "notifications", "notify", "mailer-daemon", "postmaster", "bounce", "bounces", "alert", "alerts",
+    "newsletter", "newsletters", "automated", "automailer", "system", "daemon",
+];
+
+/// True for emails written by a machine: mailing lists and newsletters
+/// (List-Id / List-Unsubscribe), bulk or automatic messages (Precedence,
+/// Auto-Submitted) and typical "noreply"-style senders.
+pub fn is_automated(m: &mail_parser::Message<'_>, from_address: &str) -> bool {
+    let headers = m.headers();
+    let value = |name: &str| {
+        headers
+            .get(name)
+            .map(|h| String::from_utf8_lossy(h.raw_value()).trim().to_ascii_lowercase())
+    };
+    if headers.get("List-Unsubscribe").is_some() || headers.get("List-Id").is_some() {
+        return true;
+    }
+    if value("Precedence").is_some_and(|p| ["bulk", "list", "junk", "auto_reply"].contains(&p.as_str())) {
+        return true;
+    }
+    if value("Auto-Submitted").is_some_and(|a| a != "no") {
+        return true;
+    }
+    if headers.get("X-Autoreply").is_some() || headers.get("X-Autorespond").is_some() {
+        return true;
+    }
+    let local = from_address.split('@').next().unwrap_or("").to_ascii_lowercase();
+    MACHINE_SENDERS
+        .iter()
+        .any(|m| local == *m || local.starts_with(&format!("{m}+")) || local.starts_with(&format!("{m}.")) || local.starts_with(&format!("{m}-")) || local.ends_with(&format!("-{m}")) || local.ends_with(&format!(".{m}")))
 }
 
 pub fn parse_view(raw: &[u8]) -> MessageView {
@@ -398,6 +436,18 @@ JVBERi0xLjQ=\r\n\
         assert_eq!(name, "report.pdf");
         assert_eq!(bytes, b"%PDF-1.4");
         assert!(parse_card(1, SAMPLE, false, false, 0).has_attachments);
+    }
+
+    #[test]
+    fn recognises_automated_senders() {
+        let card = |raw: &str| parse_card(1, raw.as_bytes(), false, false, 0);
+        let person = "From: Anna <anna@example.com>\r\nSubject: Hi\r\n\r\nHello";
+        assert!(!card(person).automated);
+        assert!(card("From: GitHub <notifications@github.com>\r\nSubject: PR\r\n\r\nx").automated);
+        assert!(card("From: Shop <info@shop.example>\r\nList-Unsubscribe: <mailto:u@shop.example>\r\n\r\nx").automated);
+        assert!(card("From: Bot <bot@example.com>\r\nAuto-Submitted: auto-generated\r\n\r\nx").automated);
+        assert!(card("From: Bank <no-reply@bank.example>\r\n\r\nx").automated);
+        assert!(!card("From: Bob <bob@example.com>\r\nAuto-Submitted: no\r\n\r\nx").automated);
     }
 
     #[test]

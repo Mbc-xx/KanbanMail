@@ -41,6 +41,15 @@ Written in Rust with [Tauri](https://tauri.app).
 - Unread emails highlighted (blue bar and bold), unread count per column and an
   "Unread only" filter. The number of unread Inbox emails is shown as a badge
   on the app icon in the Dock.
+- "Important only" filter. An email is important when its sender is someone
+  you have written to (read from your Sent folders), is in your contacts, or
+  (optionally) shares your email domain. Automated emails are left out:
+  mailing lists and newsletters (`List-Id`, `List-Unsubscribe`), bulk and
+  automatic messages (`Precedence`, `Auto-Submitted`) and `noreply`-style
+  senders. Your own rules win over everything: from an open email choose
+  "Always important" or "Never important" for the address or the whole
+  domain, or edit the lists in the settings. The reader shows why an email is
+  (not) considered important.
 - An opened email is marked as read after a configurable number of seconds
   (0 = immediately, or never); read/unread can also be toggled by hand.
 - The compose area is always light, like the reader.
@@ -165,6 +174,12 @@ Save a test draft twice, check that only one copy is kept, then delete it:
 
 ```bash
 cargo run -p kanbanmail-cli -- drafts
+```
+
+Count the people you wrote to and classify the newest Inbox emails (read-only):
+
+```bash
+cargo run -p kanbanmail-cli -- known
 ```
 
 Show the conversation of the newest reply in the Inbox (read-only):

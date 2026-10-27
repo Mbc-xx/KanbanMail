@@ -22,6 +22,27 @@ pub struct Settings {
     /// Load remote images in every email without asking.
     #[serde(default)]
     pub load_remote_images: bool,
+    /// "Important only": senders always shown (addresses or `@domain`).
+    #[serde(default)]
+    pub important_allow: Vec<String>,
+    /// "Important only": senders never shown (addresses or `@domain`).
+    #[serde(default)]
+    pub important_block: Vec<String>,
+    /// "Important only": people of your own email domain count as known.
+    #[serde(default = "default_true")]
+    pub important_same_domain: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Lowercased, trimmed, without duplicates or empty entries.
+pub fn normalize_rules(rules: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = rules.iter().map(|r| r.trim().to_lowercase()).filter(|r| !r.is_empty()).collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn default_mark_read() -> i32 {
@@ -30,7 +51,12 @@ fn default_mark_read() -> i32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { mark_read_after_seconds: default_mark_read(), signature: String::new(), use_system_contacts: false, signature_html: String::new(), load_remote_images: false }
+        Settings { mark_read_after_seconds: default_mark_read(), signature: String::new(), use_system_contacts: false, signature_html: String::new(),
+            load_remote_images: false,
+            important_allow: Vec::new(),
+            important_block: Vec::new(),
+            important_same_domain: true,
+        }
     }
 }
 

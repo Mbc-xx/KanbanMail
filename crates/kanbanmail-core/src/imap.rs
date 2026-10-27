@@ -620,3 +620,41 @@ pub async fn load_thread(
     out.sort_by_key(|e| e.card.date);
     Ok(out)
 }
+
+/// Everyone you have written to: the To/Cc/Bcc addresses of the most recent
+/// `limit` emails in every sent-mail folder, lowercased.
+pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::collections::BTreeSet<String>> {
+    let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
+    let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".").to_string();
+    let sent: Vec<String> = names
+        .iter()
+        .filter(|n| folder_kind(n.name(), n.attributes(), &delim) == "sent")
+        .map(|n| n.name().to_string())
+        .collect();
+    let mut out = std::collections::BTreeSet::new();
+    for folder in sent {
+        let Ok(mailbox) = session.examine(&folder).await else { continue };
+        if mailbox.exists == 0 {
+            continue;
+        }
+        let start = mailbox.exists.saturating_sub(limit.max(1) - 1).max(1);
+        let fetched: Vec<_> = session
+            .fetch(format!("{start}:*"), "(BODY.PEEK[HEADER])")
+            .await
+            .with_context(|| format!("reading {folder} failed"))?
+            .try_collect()
+            .await?;
+        for f in fetched {
+            let Some(raw) = f.header() else { continue };
+            let Some(m) = mail_parser::MessageParser::default().parse(raw) else { continue };
+            for list in [m.to(), m.cc(), m.bcc()].into_iter().flatten() {
+                for mb in list.mailboxes() {
+                    if let Some(a) = mb.address() {
+                        out.insert(a.trim().to_lowercase());
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}

@@ -8,6 +8,7 @@
 //!   kanbanmail-cli folders  list all folders with their kind and unread count
 //!   kanbanmail-cli drafts   save a test draft twice, check one copy is kept, then delete it
 //!   kanbanmail-cli thread   show the conversation of the newest Inbox email that is a reply
+//!   kanbanmail-cli known    count the people you wrote to and classify the newest Inbox emails
 
 use anyhow::Result;
 use kanbanmail_core::{account::Account, imap, secret};
@@ -92,6 +93,29 @@ async fn main() -> Result<()> {
             let unseen = f.unseen.filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
             println!("{}{} [{}]{unseen}", "  ".repeat(f.depth + 1), f.label, f.kind);
         }
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("known") {
+        let started = std::time::Instant::now();
+        let known = imap::sent_recipients(&mut session, 2000).await?;
+        println!("\nPeople you wrote to: {} (read in {:?})", known.len(), started.elapsed());
+        let mut cache = imap::FolderCache::default();
+        let cards = imap::load_cards(&mut session, "INBOX", &mut cache, 40).await?;
+        let (mut important, mut automated, mut unknown) = (0, 0, 0);
+        for c in &cards {
+            let label = if c.automated {
+                automated += 1;
+                "automated"
+            } else if known.contains(&c.from_address.to_lowercase()) {
+                important += 1;
+                "KNOWN"
+            } else {
+                unknown += 1;
+                "unknown"
+            };
+            println!("  {label:<9} {}", c.from_address);
+        }
+        println!("Newest {}: {important} from people you wrote to, {automated} automated, {unknown} other", cards.len());
     }
 
     if std::env::args().nth(1).as_deref() == Some("thread") {

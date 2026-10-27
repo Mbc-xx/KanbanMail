@@ -60,6 +60,7 @@
       <div class="brand">KanbanMail</div>
       <div id="sync-status" class="muted"></div>
       <div class="spacer"></div>
+      <label class="toggle" title="Only emails from people you know; notifications and newsletters are hidden"><input id="only-important" type="checkbox"> Important only</label>
       <label class="toggle"><input id="only-unread" type="checkbox"> Unread only</label>
       <button id="compose" class="primary" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span>New email</span></button>
       <button id="refresh" class="icon-btn" title="Refresh all columns"><svg class="icon"><use href="#i-refresh"/></svg></button>
@@ -102,6 +103,16 @@
         <button id="reader-seen"></button>
         <button id="reader-trash" title="Move to trash"><svg class="icon"><use href="#i-trash"/></svg><span>Delete</span></button>
         <span id="reader-seen-hint" class="muted"></span>
+      </div>
+      <div class="reader-sender">
+        <span id="sender-why" class="muted"></span>
+        <span class="spacer"></span>
+        <button id="rule-allow" title="Always show this sender with Important only">Always important</button>
+        <button id="rule-block" title="Never show this sender with Important only">Never important</button>
+        <select id="rule-scope" title="Apply the rule to the address or to the whole domain">
+          <option value="address">this address</option>
+          <option value="domain">whole domain</option>
+        </select>
       </div>
       <div id="reader-attachments" class="attachments" hidden></div>
       <div class="reader-tools">
@@ -182,6 +193,15 @@
       </div>
       <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
       <label class="toggle"><input id="set-remote" type="checkbox"> Always load remote images (they can tell the sender you opened the email)</label>
+      <div class="field">
+        <span class="field-label">Important only</span>
+        <p class="muted small">Shows emails from people you wrote to, your contacts and (optionally) your colleagues. Notifications, newsletters and mailing lists are left out. Your rules below win over everything: one address or <code>@domain</code> per line.</p>
+        <label class="toggle"><input id="set-same-domain" type="checkbox"> People of my own email domain are important</label>
+        <div class="rules">
+          <label>Always important<textarea id="set-allow" rows="3" spellcheck="false" placeholder="boss@example.com&#10;@client.example"></textarea></label>
+          <label>Never important<textarea id="set-block" rows="3" spellcheck="false" placeholder="@github.com&#10;news@shop.example"></textarea></label>
+        </div>
+      </div>
       <label>Mark as read after (seconds)
         <input id="set-seconds" type="number" min="0" max="600" step="1">
       </label>

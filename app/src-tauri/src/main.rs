@@ -288,6 +288,9 @@ struct SettingsView {
     use_system_contacts: bool,
     signature_html: String,
     load_remote_images: bool,
+    important_allow: Vec<String>,
+    important_block: Vec<String>,
+    important_same_domain: bool,
 }
 
 #[tauri::command]
@@ -305,6 +308,9 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         use_system_contacts: settings.use_system_contacts,
         signature_html: settings.signature_html,
         load_remote_images: settings.load_remote_images,
+        important_allow: settings.important_allow,
+        important_block: settings.important_block,
+        important_same_domain: settings.important_same_domain,
     })
 }
 
@@ -324,6 +330,9 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         use_system_contacts: settings.use_system_contacts,
         signature_html: kanbanmail_core::message::sanitize_signature(&settings.signature_html),
         load_remote_images: settings.load_remote_images,
+        important_allow: kanbanmail_core::settings::normalize_rules(&settings.important_allow),
+        important_block: kanbanmail_core::settings::normalize_rules(&settings.important_block),
+        important_same_domain: settings.important_same_domain,
     }
         .save()
         .map_err(err)
@@ -426,6 +435,43 @@ async fn load_thread(
         }
         imap::load_thread(s, message_id.as_deref(), &references, &unique).await
     })
+}
+
+/// Sets the "Important only" rule for a sender (an address or `@domain`):
+/// "allow" = always shown, "block" = never shown, anything else removes it.
+/// Returns the updated (allow, block) lists.
+#[tauri::command]
+fn set_sender_rule(pattern: String, rule: String) -> CmdResult<(Vec<String>, Vec<String>)> {
+    let pattern = pattern.trim().to_lowercase();
+    if pattern.is_empty() {
+        return Err("empty sender".into());
+    }
+    let mut settings = Settings::load().map_err(err)?;
+    settings.important_allow.retain(|p| p.to_lowercase() != pattern);
+    settings.important_block.retain(|p| p.to_lowercase() != pattern);
+    match rule.as_str() {
+        "allow" => settings.important_allow.push(pattern),
+        "block" => settings.important_block.push(pattern),
+        _ => {}
+    }
+    settings.important_allow = kanbanmail_core::settings::normalize_rules(&settings.important_allow);
+    settings.important_block = kanbanmail_core::settings::normalize_rules(&settings.important_block);
+    settings.save().map_err(err)?;
+    Ok((settings.important_allow, settings.important_block))
+}
+
+/// Everyone you have written to (from the sent-mail folders), lowercased.
+/// Uses its own connection so the board stays responsive meanwhile.
+#[tauri::command]
+async fn known_senders(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let (account, password) = {
+        let inner = state.inner.lock().await;
+        (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+    };
+    let mut session = imap::connect(&account, &password).await.map_err(err)?;
+    let known = imap::sent_recipients(&mut session, 3000).await.map_err(err);
+    session.logout().await.ok();
+    Ok(known?.into_iter().collect())
 }
 
 /// Shows the number of unread Inbox emails on the app icon (Dock on macOS,
@@ -553,6 +599,8 @@ fn main() {
             save_attachment,
             load_thread,
             set_unread_badge,
+            set_sender_rule,
+            known_senders,
             system_contacts
         ])
         .run(tauri::generate_context!())

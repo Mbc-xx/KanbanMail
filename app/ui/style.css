@@ -244,6 +244,21 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 }
 .reader-tools button { font-size: 12px; padding: 3px 8px; }
 .reader-tools .spacer { flex: 1; }
+.reader-sender {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.reader-sender .spacer { flex: 1; }
+.reader-sender button, .reader-sender select { font-size: 12px; padding: 3px 8px; }
+.reader-sender select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
+.reader-sender button.active { border-color: var(--accent); background: var(--drop); }
+.rules { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.rules label { font-weight: normal; font-size: 12px; }
+.rules textarea { font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace !important; }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; }
 .attachment { font-size: 12px; padding: 4px 8px; max-width: 280px; }
 .attachment .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

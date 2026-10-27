@@ -16,6 +16,11 @@ const state = {
   signatureHtml: "",
   loadRemoteImages: false, // load remote images in every email without asking
   onlyUnread: false,
+  onlyImportant: false,
+  known: new Set(), // addresses you have written to
+  allow: [], // "Important only" rules: addresses or @domains always shown
+  block: [], // ... never shown
+  sameDomain: true, // colleagues of your own domain count as known
   view: null, // null = board; otherwise { folder, label } of the folder opened from the sidebar
   folders: [], // folders for the sidebar
   contacts: [], // [{ name, email }] from the system address book
@@ -166,14 +171,20 @@ async function openBoard() {
       state.signature = settings.signature;
       state.signatureHtml = settings.signature_html;
       state.loadRemoteImages = settings.load_remote_images;
+      state.allow = settings.important_allow;
+      state.block = settings.important_block;
+      state.sameDomain = settings.important_same_domain;
       if (settings.use_system_contacts) loadContacts();
     } catch (_) {}
     setSyncStatus(info.can_idle ? "Live updates on (IDLE)" : "Refreshing every 60 seconds");
     $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
+    state.onlyImportant = local.get("onlyImportant") === "1";
+    $("only-important").checked = state.onlyImportant;
     state.view = null;
     renderColumns();
     show("board-screen");
     loadFolders();
+    loadKnownSenders();
     await Promise.all(state.columns.map((c) => loadColumn(c.folder)));
   } catch (e) {
     show("login");
@@ -345,11 +356,12 @@ function renderCards(folder) {
   const unread = all.filter((c) => !c.seen).length;
   column.querySelector(".count").textContent = all.length;
   column.querySelector(".unread").textContent = unread ? `${unread} unread` : "";
-  const list = state.onlyUnread ? all.filter((c) => !c.seen) : all;
+  const list = all.filter((c) => (!state.onlyUnread || !c.seen) && (!state.onlyImportant || importance(c).important));
   const container = column.querySelector(".cards");
   container.replaceChildren();
   if (!list.length) {
-    container.append(el("div", "empty muted", state.onlyUnread && all.length ? "No unread emails" : "No emails"));
+    const filtered = all.length && (state.onlyUnread || state.onlyImportant);
+    container.append(el("div", "empty muted", filtered ? "No emails match the filters" : "No emails"));
     return;
   }
   for (const card of list) container.append(renderCard(folder, card));
@@ -464,9 +476,92 @@ async function togglePin(folder, card, cardEl) {
   await loadColumn(folder);
 }
 
+$("only-important").addEventListener("change", (ev) => {
+  state.onlyImportant = ev.target.checked;
+  local.set("onlyImportant", ev.target.checked ? "1" : "");
+  for (const c of visibleColumns()) renderCards(c.folder);
+});
+
+// ---------- important senders ----------
+
+const KNOWN_REFRESH_MS = 30 * 60 * 1000;
+
+async function loadKnownSenders() {
+  try {
+    state.known = new Set(await invoke("known_senders"));
+    for (const c of visibleColumns()) renderCards(c.folder);
+    if (readerCard) updateSenderPanel();
+  } catch (e) {
+    console.error("could not read sent emails", e);
+  }
+}
+setInterval(() => state.columns.length && loadKnownSenders(), KNOWN_REFRESH_MS);
+
+function domainOf(address) {
+  const at = address.lastIndexOf("@");
+  return at >= 0 ? address.slice(at).toLowerCase() : "";
+}
+
+/// The user's own rule for an address: "allow", "block" or null. An address rule wins over a domain rule.
+function senderRule(address) {
+  const a = address.toLowerCase();
+  const d = domainOf(a);
+  if (state.block.includes(a)) return { rule: "block", pattern: a };
+  if (state.allow.includes(a)) return { rule: "allow", pattern: a };
+  if (d && state.block.includes(d)) return { rule: "block", pattern: d };
+  if (d && state.allow.includes(d)) return { rule: "allow", pattern: d };
+  return null;
+}
+
+/// Whether a card passes "Important only", and why (shown in the reader).
+function importance(card) {
+  const a = (card.from_address || "").toLowerCase();
+  const rule = senderRule(a);
+  if (rule) return { important: rule.rule === "allow", why: rule.rule === "allow" ? `Your rule: ${rule.pattern} is always important` : `Your rule: ${rule.pattern} is never important` };
+  if (card.automated) return { important: false, why: "Automated email (notification, newsletter or mailing list)" };
+  if (a && a === state.email.toLowerCase()) return { important: true, why: "Sent by you" };
+  if (state.known.has(a)) return { important: true, why: "You have written to this person" };
+  if (state.contacts.some((c) => c.email.toLowerCase() === a)) return { important: true, why: "In your contacts" };
+  if (state.sameDomain && a && domainOf(a) === domainOf(state.email)) return { important: true, why: "Colleague (same domain as you)" };
+  return { important: false, why: "You have never written to this sender" };
+}
+
+function updateSenderPanel() {
+  const card = readerCard?.card;
+  if (!card) return;
+  const info = importance(card);
+  $("sender-why").textContent = (info.important ? "★ Important — " : "Not important — ") + info.why;
+  const rule = senderRule(card.from_address || "");
+  $("rule-allow").classList.toggle("active", rule?.rule === "allow");
+  $("rule-block").classList.toggle("active", rule?.rule === "block");
+  if (rule) $("rule-scope").value = rule.pattern.startsWith("@") ? "domain" : "address";
+  const disabled = !card.from_address;
+  $("rule-allow").disabled = $("rule-block").disabled = $("rule-scope").disabled = disabled;
+}
+
+async function setSenderRule(kind) {
+  const card = readerCard?.card;
+  if (!card?.from_address) return;
+  const current = senderRule(card.from_address);
+  const pattern = $("rule-scope").value === "domain" ? domainOf(card.from_address) : card.from_address.toLowerCase();
+  // Clicking the active rule again removes it.
+  const rule = current && current.rule === kind && current.pattern === pattern ? "none" : kind;
+  try {
+    [state.allow, state.block] = await invoke("set_sender_rule", { pattern, rule });
+    updateSenderPanel();
+    for (const c of visibleColumns()) renderCards(c.folder);
+    toast(rule === "none" ? `Rule removed for ${pattern}` : `${pattern} is now ${kind === "allow" ? "always" : "never"} important`, "info");
+  } catch (e) {
+    toast("Rule not saved: " + e);
+  }
+}
+
+$("rule-allow").addEventListener("click", () => setSenderRule("allow"));
+$("rule-block").addEventListener("click", () => setSenderRule("block"));
+
 $("only-unread").addEventListener("change", (ev) => {
   state.onlyUnread = ev.target.checked;
-  for (const c of state.columns) renderCards(c.folder);
+  for (const c of visibleColumns()) renderCards(c.folder);
 });
 
 $("refresh").addEventListener("click", () => {
@@ -751,6 +846,8 @@ async function openReader(folder, card, opts = {}) {
   updateSeenButton();
   $("reader-reply").disabled = $("reader-reply-all").disabled = true;
   $("reader-trash").hidden = folderKind(folder) === "trash";
+  $("rule-scope").value = "address";
+  updateSenderPanel();
   $("reader-subject").textContent = card.subject || "(no subject)";
   $("reader-from").textContent = card.from;
   $("reader-to").textContent = "";
@@ -1169,6 +1266,11 @@ $("compose-form").addEventListener("submit", async (ev) => {
   try {
     const result = await invoke("send_mail", { draft: composeDraft(), reply: compose.reply });
     hideComposer();
+    // People you just wrote to become known senders right away.
+    for (const part of (composeDraft().to + "," + composeDraft().cc).split(/[,;]/)) {
+      const m = part.match(/<([^>]+)>/) || part.match(/(\S+@\S+)/);
+      if (m) state.known.add(m[1].trim().toLowerCase());
+    }
     if (result.warning) toast(result.warning);
     else toast(`Email sent (copy saved to ${result.saved_to})`, "info");
     const drafts = state.folders.find((f) => f.kind === "drafts")?.name;
@@ -1194,6 +1296,9 @@ $("open-settings").addEventListener("click", async () => {
     loadSignatureEditor(s.signature, s.signature_html);
     $("set-contacts").checked = s.use_system_contacts;
     $("set-remote").checked = s.load_remote_images;
+    $("set-same-domain").checked = s.important_same_domain;
+    $("set-allow").value = s.important_allow.join("\n");
+    $("set-block").value = s.important_block.join("\n");
     $("set-never").checked = s.mark_read_after_seconds < 0;
     $("set-seconds").value = Math.max(0, s.mark_read_after_seconds < 0 ? 3 : s.mark_read_after_seconds);
     $("set-seconds").disabled = s.mark_read_after_seconds < 0;
@@ -1222,8 +1327,16 @@ $("settings-form").addEventListener("submit", async (ev) => {
         signature_html: sig.html,
         use_system_contacts: $("set-contacts").checked,
         load_remote_images: $("set-remote").checked,
+        important_allow: $("set-allow").value.split(/[\n,;]+/),
+        important_block: $("set-block").value.split(/[\n,;]+/),
+        important_same_domain: $("set-same-domain").checked,
       },
     });
+    const saved = await invoke("get_settings");
+    state.allow = saved.important_allow;
+    state.block = saved.important_block;
+    state.sameDomain = saved.important_same_domain;
+    for (const c of visibleColumns()) renderCards(c.folder);
     if ($("set-contacts").checked) loadContacts();
     else state.contacts = [];
     state.markReadAfter = seconds;
