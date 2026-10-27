@@ -21,6 +21,9 @@ pub struct Card {
     pub message_id: Option<String>,
     /// Sent by a machine (newsletter, notification, mailing list, auto-reply).
     pub automated: bool,
+    /// Message-IDs this email refers to (In-Reply-To and References: the thread
+    /// root and the most recent ones), used to group conversations in lists.
+    pub thread_refs: Vec<String>,
 }
 
 /// An attachment that can be downloaded from the reader.
@@ -115,7 +118,28 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
     };
     let message_id = parsed.as_ref().and_then(|m| m.message_id()).map(str::to_string);
     let automated = parsed.as_ref().is_some_and(|m| is_automated(m, &from_address));
-    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated }
+    let thread_refs = parsed.as_ref().map(thread_refs).unwrap_or_default();
+    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated, thread_refs }
+}
+
+/// In-Reply-To plus the first and the last few References (enough to link a
+/// message to its thread without carrying very long reference chains).
+fn thread_refs(m: &mail_parser::Message<'_>) -> Vec<String> {
+    let mut refs: Vec<String> = m
+        .references()
+        .map(|r| (0..r.len()).filter_map(|i| r.get(i)).map(str::to_string).collect())
+        .unwrap_or_default();
+    if refs.len() > 6 {
+        let tail = refs.split_off(refs.len() - 5);
+        refs.truncate(1);
+        refs.extend(tail);
+    }
+    if let Some(r) = m.in_reply_to().and_then(|r| r.get(0)) {
+        if !refs.iter().any(|x| x == r) {
+            refs.push(r.to_string());
+        }
+    }
+    refs
 }
 
 /// Local parts used by machines rather than people.
@@ -276,6 +300,17 @@ fn list_attachments(m: &mail_parser::Message<'_>, raw_html: Option<&str>) -> Vec
             size: p.decoded_len(),
         })
         .collect()
+}
+
+/// Name, MIME type and content of the `index`-th attachment.
+pub fn attachment_with_mime(raw: &[u8], index: usize) -> Option<(String, String, Vec<u8>)> {
+    let m = MessageParser::default().parse(raw)?;
+    let part = m.attachments().nth(index)?;
+    let name = part
+        .attachment_name()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("attachment-{}", index + 1));
+    Some((name, mime_of(&part), part.decoded().into_owned()))
 }
 
 /// Name and content of the `index`-th attachment.

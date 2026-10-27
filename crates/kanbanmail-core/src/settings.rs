@@ -34,6 +34,24 @@ pub struct Settings {
     /// "Important only": people of your own email domain count as known.
     #[serde(default = "default_true")]
     pub important_same_domain: bool,
+    /// Show one card per conversation in the board and folder lists.
+    #[serde(default)]
+    pub group_threads: bool,
+    /// Sidebar folders: order (as listed), visibility and color. Folders not
+    /// listed keep their default place after these.
+    #[serde(default)]
+    pub folders: Vec<FolderPref>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderPref {
+    /// Full folder name on the server, e.g. "INBOX.Clients".
+    pub name: String,
+    #[serde(default)]
+    pub hidden: bool,
+    /// CSS color like "#4f8fd6", empty for none.
+    #[serde(default)]
+    pub color: String,
 }
 
 fn default_true() -> bool {
@@ -64,6 +82,8 @@ impl Default for Settings {
             important_allow: Vec::new(),
             important_block: Vec::new(),
             important_same_domain: true,
+            group_threads: false,
+            folders: Vec::new(),
         }
     }
 }

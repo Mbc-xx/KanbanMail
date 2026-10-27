@@ -23,10 +23,26 @@ pub struct Draft {
     pub in_reply_to: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
+    /// Write the body in Markdown (inline HTML allowed): the email gets an HTML version.
+    #[serde(default)]
+    pub markdown: bool,
+    /// Files attached to the email.
+    #[serde(default)]
+    pub attachments: Vec<OutgoingAttachment>,
     /// Message-ID of this email. The composer keeps the same one across draft
     /// saves and the final send, so older draft versions can be found and removed.
     #[serde(default)]
     pub message_id: Option<String>,
+}
+
+/// A file attached to an outgoing email, as sent by the UI.
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+pub struct OutgoingAttachment {
+    pub name: String,
+    #[serde(default)]
+    pub mime: String,
+    /// File content, base64.
+    pub data: String,
 }
 
 fn parse_list(list: &str) -> Result<Vec<Mailbox>> {
@@ -123,19 +139,40 @@ fn extract_inline_images(html: &str) -> (String, Vec<SinglePart>) {
     (out, parts)
 }
 
-/// The HTML version of the body, if it should have one (rich signature present).
-fn html_body(body: &str, signature: Option<&HtmlSignature>) -> Option<MultiPart> {
-    let sig = signature.filter(|s| !s.html.trim().is_empty() && !s.text.trim().is_empty())?;
+/// Markdown (with inline HTML) to sanitized HTML.
+pub fn markdown_to_html(text: &str) -> String {
+    use pulldown_cmark::{html, Options, Parser};
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TASKLISTS);
+    let mut out = String::new();
+    // Single line breaks are kept as line breaks, as people expect in emails.
+    html::push_html(&mut out, Parser::new_ext(&text.replace('\n', "  \n"), opts));
+    crate::message::sanitize_signature(&out)
+}
+
+/// The HTML version of the body, if it should have one: when the body is
+/// Markdown, or when a rich signature is present (and its text left unchanged).
+fn html_body(body: &str, markdown: bool, signature: Option<&HtmlSignature>) -> Option<MultiPart> {
     let body = body.replace("\r\n", "\n");
-    let marker = format!("-- \n{}", sig.text.trim_end().replace("\r\n", "\n"));
-    let pos = body.find(&marker)?;
-    let (before, after) = (&body[..pos], &body[pos + marker.len()..]);
-    let (sig_html, images) = extract_inline_images(&sig.html);
+    let sig = signature.filter(|s| !s.html.trim().is_empty() && !s.text.trim().is_empty());
+    let marker = sig.map(|s| format!("-- \n{}", s.text.trim_end().replace("\r\n", "\n")));
+    let split = marker.as_ref().and_then(|m| body.find(m.as_str()).map(|pos| (pos, m.len())));
+    if !markdown && split.is_none() {
+        return None;
+    }
+    let render = |text: &str| if markdown { markdown_to_html(text) } else { text_block(text) };
+    let (inner, images) = match (split, sig) {
+        (Some((pos, len)), Some(sig)) => {
+            let (sig_html, images) = extract_inline_images(&sig.html);
+            let after = body[pos + len..].trim_start_matches('\n');
+            (format!("{}<div>-- <br>{}</div>{}", render(&body[..pos]), sig_html, render(after)), images)
+        }
+        _ => (render(&body), Vec::new()),
+    };
     let html = format!(
-        "<!doctype html><html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:14px\">{}<div>-- <br>{}</div>{}</body></html>",
-        text_block(before),
-        sig_html,
-        text_block(after.trim_start_matches('\n')),
+        "<!doctype html><html><body style=\"font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:14px\">{inner}</body></html>"
     );
     let html_part = SinglePart::html(html);
     let alternative = MultiPart::alternative().singlepart(SinglePart::plain(body.clone()));
@@ -145,6 +182,21 @@ fn html_body(body: &str, signature: Option<&HtmlSignature>) -> Option<MultiPart>
         let related = images.into_iter().fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p));
         alternative.multipart(related)
     })
+}
+
+/// The attachments as MIME parts.
+fn attachment_parts(list: &[OutgoingAttachment]) -> Result<Vec<SinglePart>> {
+    use base64::Engine;
+    list.iter()
+        .map(|a| {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(a.data.trim())
+                .map_err(|_| anyhow!("attachment {} is not valid", a.name))?;
+            let ctype = ContentType::parse(if a.mime.is_empty() { "application/octet-stream" } else { &a.mime })
+                .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
+            Ok(Attachment::new(a.name.clone()).body(bytes, ctype))
+        })
+        .collect()
 }
 
 fn build_message(
@@ -195,11 +247,23 @@ fn build_message(
         None => new_message_id(&account.email),
     };
     builder = builder.message_id(Some(message_id));
-    match html_body(&draft.body, signature) {
-        Some(multipart) => builder.multipart(multipart),
-        None => builder.header(ContentType::TEXT_PLAIN).body(draft.body.clone()),
+    let content = html_body(&draft.body, draft.markdown, signature);
+    let files = attachment_parts(&draft.attachments)?;
+    if files.is_empty() {
+        return match content {
+            Some(multipart) => builder.multipart(multipart),
+            None => builder.header(ContentType::TEXT_PLAIN).body(draft.body.clone()),
+        }
+        .context("building the message failed");
     }
-    .context("building the message failed")
+    // Text (and HTML) first, then the files.
+    let mixed = match content {
+        Some(multipart) => MultiPart::mixed().multipart(multipart),
+        None => MultiPart::mixed().singlepart(SinglePart::plain(draft.body.clone())),
+    };
+    builder
+        .multipart(files.into_iter().fold(mixed, |mp, part| mp.singlepart(part)))
+        .context("building the message failed")
 }
 
 fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
@@ -254,6 +318,8 @@ mod tests {
             references: vec!["first@example.com".into()],
             message_id: Some("fixed@example.com".into()),
             bcc: "boss@example.com".into(),
+            markdown: false,
+            attachments: vec![],
         };
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("From: \"Mario Rossi\" <me@example.com>"), "{raw}");
@@ -273,7 +339,7 @@ mod tests {
     #[test]
     fn draft_allows_missing_and_unfinished_recipients() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new() };
+        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![] };
         let raw = String::from_utf8(build_draft(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("To: a@example.com"), "{raw}");
         let empty = Draft { to: String::new(), ..draft };
@@ -284,7 +350,7 @@ mod tests {
     #[test]
     fn rejects_bad_address() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new() };
+        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![] };
         assert!(build(&acc, &draft, None).is_err());
     }
 
@@ -304,6 +370,8 @@ mod tests {
             references: vec![],
             message_id: None,
             bcc: String::new(),
+            markdown: false,
+            attachments: vec![],
         };
         let raw = String::from_utf8(build(&acc, &draft, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/alternative"), "{raw}");
@@ -316,5 +384,32 @@ mod tests {
         let edited = Draft { body: "Hello\n\n-- \nJane".into(), ..draft };
         let raw = String::from_utf8(build(&acc, &edited, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(!raw.contains("multipart"), "{raw}");
+    }
+
+    #[test]
+    fn markdown_body_and_attachments() {
+        let acc = Account::new("mail.example.com".into(), "me@example.com".into());
+        let draft = Draft {
+            to: "a@example.com".into(),
+            cc: String::new(),
+            bcc: String::new(),
+            subject: "Report".into(),
+            body: "Hello **team**\nsecond line\n\n- one\n- two\n\n<script>x</script>".into(),
+            in_reply_to: None,
+            references: vec![],
+            message_id: None,
+            markdown: true,
+            attachments: vec![OutgoingAttachment { name: "notes.txt".into(), mime: "text/plain".into(), data: "aGVsbG8=".into() }],
+        };
+        let html = markdown_to_html(&draft.body);
+        assert!(html.contains("<strong>team</strong>") && html.contains("<br") && html.contains("<li>one</li>"), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+        let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
+        assert!(raw.contains("multipart/mixed") && raw.contains("multipart/alternative"), "{raw}");
+        assert!(raw.contains("filename=\"notes.txt\"") && raw.contains("hello"), "{raw}");
+        // Plain text with an attachment: mixed, no HTML.
+        let plain = Draft { markdown: false, ..draft };
+        let raw = String::from_utf8(build(&acc, &plain, None).unwrap().formatted()).unwrap();
+        assert!(raw.contains("multipart/mixed") && !raw.contains("text/html"), "{raw}");
     }
 }

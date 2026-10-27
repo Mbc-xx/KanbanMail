@@ -46,6 +46,15 @@ Written in Rust with [Tauri](https://tauri.app).
   compact list with a reading pane on the right (drag the divider to resize);
   drop a card on a sidebar folder to move it there. On the board, emails open
   in a popup.
+- Optional grouping by conversation (Settings → Reading): the board and the
+  folder lists show one card per conversation, with its latest email, the
+  people involved and how many emails it has. Archive, delete, pin and drag act
+  on the whole conversation.
+- "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,
+  Junk and Drafts excluded) in one list, each tagged with its folder.
+- Sidebar folders: choose which ones to show, drag them into your order and pick a color
+  (Settings → Folders). The color also marks the board column and the folder
+  tags in search results and All Mail.
 - Conversations: when you open an email, the other emails of the same thread
   (found through Message-ID / References in the folder, Inbox, Sent, Archive
   and the board columns, among the most recent 2000 emails of each) appear as
@@ -73,8 +82,13 @@ Written in Rust with [Tauri](https://tauri.app).
 - An opened email is marked as read after a configurable number of seconds
   (0 = immediately, or never); read/unread can also be toggled by hand.
 - The compose area is always light, like the reader.
-- Write new emails and reply ("Reply" / "Reply all") in plain text, quoting the
-  original message. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
+- Write new emails, reply ("Reply" / "Reply all") quoting the original message,
+  and forward ("Forward": the original text below a header, with its
+  attachments).
+- Attach files with the paperclip button or by dropping them on the composer
+  (up to about 25 MB in total); attachments are kept in drafts too.
+- Plain text or Markdown body (bold, italic, lists, links, headings, tables and
+  inline HTML), with a preview; Markdown emails are sent as text + HTML. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
   credentials as IMAP) and a copy is saved to the Sent folder.
 - Cc and Bcc fields; an optional "Always Bcc" address list is added to every
   new email and reply. Bcc recipients receive the email without being visible
@@ -127,13 +141,21 @@ npx tauri build
 
 From the settings button on the board, grouped in tabs:
 
-- **Account**: sender name, SMTP server and port, board columns file,
-  disconnecting the account.
+- **Account**: sender name, SMTP server and port, export and import of the
+  settings, board columns file, disconnecting the account.
 - **Writing**: signature editor, "Always Bcc", address book suggestions.
-- **Reading**: seconds before an opened email is marked as read, remote images.
+- **Reading**: seconds before an opened email is marked as read, grouping by
+  conversation, remote images.
 - **Important**: colleagues of your domain, "always" and "never important" lists.
+- **Folders**: which folders the sidebar shows, their order and colors.
 
-They are stored in `account.toml` and `settings.toml` in the configuration folder.
+They are stored in `account.toml` and `settings.toml` in the configuration folder
+(`~/Library/Application Support/KanbanMail` on macOS), next to `board.toml`. The
+password is in the system keychain. Nothing is synced to iCloud; removing the app
+leaves these files in place. "Export settings…" saves columns, signature, rules,
+folders and settings (never the password) to a JSON file in Downloads;
+"Import settings…" applies such a file on another computer (sender name and
+SMTP details only if it is for the same email address).
 
 ## Configuring columns
 
@@ -231,8 +253,7 @@ cargo run -p kanbanmail-cli -- reset
 
 ## Not supported yet
 
-Sending attachments, HTML formatting in the email body, forwarding, multiple
-accounts.
+Multiple accounts, a rich-text (WYSIWYG) editor for the email body.
 
 ## Icons
 

@@ -176,6 +176,8 @@ async function openBoard() {
       state.allow = settings.important_allow;
       state.block = settings.important_block;
       state.sameDomain = settings.important_same_domain;
+      state.groupThreads = settings.group_threads;
+      state.folderPrefs = settings.folders || [];
       if (settings.use_system_contacts) loadContacts();
     } catch (_) {}
     setSyncStatus(info.can_idle ? "Live updates on (IDLE)" : "Refreshing every 60 seconds");
@@ -214,7 +216,9 @@ function renderColumns() {
     column.dataset.folder = col.folder;
 
     const head = el("header", "column-head");
-    head.append(el("h2", "", col.name), el("span", "count muted", ""), el("span", "unread", ""), el("span", "folder muted", state.view?.search ? "" : col.folder));
+    head.append(el("h2", "", col.name), el("span", "count muted", ""), el("span", "unread", ""), el("span", "folder muted", state.view?.multi ? "" : col.folder));
+    const color = folderColor(col.folder);
+    if (color) column.style.setProperty("--folder-color", color);
     const cards = el("div", state.view ? "cards rows" : "cards");
     cards.append(el("div", "empty muted", "Loading…"));
     column.append(head);
@@ -334,6 +338,7 @@ function columnEl(folder) {
 
 async function loadColumn(folder) {
   if (folder === SEARCH_KEY) return runSearch();
+  if (folder === ALL_KEY) return loadAllMail();
   try {
     state.cards[folder] = await invoke("load_column", { folder });
     renderCards(folder);
@@ -345,6 +350,7 @@ async function loadColumn(folder) {
 /// Reloads a folder after a server notification, batching notifications close together.
 function scheduleReload(folder) {
   scheduleFolderCounts();
+  if (state.view?.folder === ALL_KEY) folder = ALL_KEY;
   if (!columnEl(folder)) return; // not visible right now
   if (state.dragging) {
     state.pendingReload.add(folder);
@@ -383,8 +389,47 @@ function renderCards(folder) {
     }
     return;
   }
-  // Search results come from several folders: each card carries its own.
-  for (const card of list) container.append(renderCard(card.__folder || folder, card));
+  // Search results and All Mail come from several folders: each card carries its own.
+  if (state.groupThreads) {
+    for (const g of groupByThread(list, folder)) {
+      container.append(renderCard(g.rep.folder, g.rep.card, g.members.length > 1 ? g : null));
+    }
+  } else {
+    for (const card of list) container.append(renderCard(card.__folder || folder, card));
+  }
+}
+
+/// Groups cards of a list into conversations (Message-ID, In-Reply-To and
+/// References links). Each group: { rep: newest {folder, card}, members: [...] }.
+function groupByThread(list, folder) {
+  const parent = list.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const owner = new Map(); // message id -> index of the first card that mentions it
+  const bare = (id) => (id || "").replace(/^<|>$/g, "").trim().toLowerCase();
+  list.forEach((card, i) => {
+    for (const id of [card.message_id, ...(card.thread_refs || [])].map(bare).filter(Boolean)) {
+      if (owner.has(id)) parent[find(i)] = find(owner.get(id));
+      else owner.set(id, i);
+    }
+  });
+  const groups = new Map();
+  list.forEach((card, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push({ folder: card.__folder || folder, card });
+  });
+  const out = [...groups.values()].map((members) => {
+    members.sort((a, b) => b.card.date - a.card.date);
+    return { rep: members[0], members };
+  });
+  // Pinned conversations first, then the most recent activity.
+  out.sort((a, b) => b.members.some((m) => m.card.flagged) - a.members.some((m) => m.card.flagged) || b.rep.card.date - a.rep.card.date);
+  return out;
+}
+
+function shortName(name) {
+  const n = (name || "").trim();
+  return n.includes("@") ? n.split("@")[0] : n.split(/\s+/)[0] || n;
 }
 
 /// Accent- and case-insensitive text for matching.
@@ -400,17 +445,29 @@ function matchesFilter(card) {
   return state.filterWords.every((w) => hay.includes(w));
 }
 
-function renderCard(folder, card) {
+/// One email, or a whole conversation when `group` is given (shown through its newest email).
+function renderCard(folder, card, group = null) {
+  const members = group ? group.members : [{ folder, card }];
   const c = el("div", "card");
-  if (card.flagged) c.classList.add("pinned");
-  if (!card.seen) c.classList.add("unseen");
+  if (members.some((m) => m.card.flagged)) c.classList.add("pinned");
+  if (members.some((m) => !m.card.seen)) c.classList.add("unseen");
   c.draggable = true;
   c.dataset.uid = card.uid;
   c.dataset.folder = folder;
 
+  // A conversation shows its participants and how many emails it has.
+  const people = [...new Set(members.slice().reverse().map((m) => shortName(m.card.from)))];
+  const fromText = group ? people.slice(-3).join(", ") + (people.length > 3 ? "…" : "") : card.from || "(unknown sender)";
+  const countBadge = () => {
+    const b = el("span", "thread-count", String(members.length));
+    b.title = `${members.length} emails in this conversation`;
+    return b;
+  };
+  const anyAttachment = members.some((m) => m.card.has_attachments);
   const fromLine = el("div", "from-line");
-  fromLine.append(el("span", "from", card.from || "(unknown sender)"));
-  if (card.has_attachments) fromLine.append(icon("paperclip", "clip"));
+  fromLine.append(el("span", "from", fromText));
+  if (group) fromLine.append(countBadge());
+  if (anyAttachment) fromLine.append(icon("paperclip", "clip"));
   fromLine.append(el("span", "date", formatDate(card.date)));
   const actions = el("div", "card-actions");
   const action = (cls, iconName, title, run) => {
@@ -425,18 +482,24 @@ function renderCard(folder, card) {
     actions.append(b);
   };
   const kind = folderKind(folder);
-  if (kind !== "archive") action("archive-btn", "archive", "Archive", () => fileCard(folder, card, "archive"));
-  if (kind !== "trash") action("trash-btn", "trash", "Delete (move to trash)", () => fileCard(folder, card, "trash"));
-  action("pin-btn", "pin", card.flagged ? "Unpin" : "Pin (keep at the top of the column)", () => togglePin(folder, card, c));
+  const what = group ? "conversation" : "email";
+  if (kind !== "archive") action("archive-btn", "archive", `Archive ${what}`, () => (group ? fileMany(members, "archive") : fileCard(folder, card, "archive")));
+  if (kind !== "trash") action("trash-btn", "trash", `Delete ${what} (move to trash)`, () => (group ? fileMany(members, "trash") : fileCard(folder, card, "trash")));
+  const pinned = members.some((m) => m.card.flagged);
+  action("pin-btn", "pin", pinned ? "Unpin" : "Pin (keep at the top of the column)", () =>
+    group ? pinMany(members, !pinned, c) : togglePin(folder, card, c),
+  );
   if (state.view) {
     // Compact row for the folder view.
     const main = el("div", "row-main");
     main.append(el("span", "row-subject", card.subject || "(no subject)"), el("span", "row-preview", card.preview ? "  —  " + card.preview : ""));
     const date = el("span", "row-date");
-    if (card.has_attachments) date.append(icon("paperclip", "clip"));
+    if (anyAttachment) date.append(icon("paperclip", "clip"));
     date.append(document.createTextNode(formatDate(card.date)));
-    if (state.view?.search) date.prepend(el("span", "row-folder", folderLabel(folder)));
-    c.append(el("span", "row-from", card.from || "(unknown sender)"), main, date, actions);
+    if (state.view?.multi) date.prepend(folderTag(folder));
+    const from = el("span", "row-from", fromText);
+    if (group) from.append(countBadge());
+    c.append(from, main, date, actions);
     if (readerCard && readerCard.folder === folder && readerCard.card.uid === card.uid) c.classList.add("selected");
   } else {
     c.append(actions, fromLine, el("div", "subject", card.subject || "(no subject)"), el("div", "preview", card.preview));
@@ -444,7 +507,7 @@ function renderCard(folder, card) {
 
   c.addEventListener("click", () => (kind === "drafts" ? openDraft(folder, card) : openReader(folder, card)));
   c.addEventListener("dragstart", (ev) => {
-    state.dragging = { folder, uid: card.uid };
+    state.dragging = { folder, uid: card.uid, members };
     ev.dataTransfer.effectAllowed = "move";
     ev.dataTransfer.setData("text/plain", String(card.uid));
     requestAnimationFrame(() => c.classList.add("dragging"));
@@ -474,8 +537,75 @@ function setupDropTarget(column) {
     column.classList.remove("drop-target");
     const drag = state.dragging;
     if (!drag || drag.folder === folder) return;
-    moveCard(drag.folder, drag.uid, folder);
+    dropDragged(drag, folder);
   });
+}
+
+function dropDragged(drag, to) {
+  const members = (drag.members || []).filter((m) => m.folder !== to);
+  if (members.length > 1) moveMany(members, to);
+  else moveCard(drag.folder, drag.uid, to);
+}
+
+/// Removes emails from every loaded list right away (optimistic update).
+function dropFromLists(members) {
+  const gone = new Set(members.map((m) => m.folder + "/" + m.card.uid));
+  for (const key of Object.keys(state.cards)) {
+    state.cards[key] = state.cards[key].filter((c) => !gone.has((c.__folder || key) + "/" + c.uid));
+  }
+  for (const c of visibleColumns()) renderCards(c.folder);
+}
+
+async function afterBulkChange() {
+  await Promise.all(visibleColumns().map((c) => loadColumn(c.folder)));
+  scheduleFolderCounts();
+}
+
+/// Moves a whole conversation to another folder.
+async function moveMany(members, to) {
+  dropFromLists(members);
+  let failed = 0;
+  for (const m of members) {
+    try {
+      await invoke("move_card", { from: m.folder, uid: m.card.uid, to });
+    } catch (e) {
+      failed++;
+      console.error(e);
+    }
+  }
+  if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
+  await afterBulkChange();
+}
+
+/// Archives or deletes a whole conversation.
+async function fileMany(members, kind) {
+  dropFromLists(members);
+  let target = "";
+  let failed = 0;
+  for (const m of members) {
+    if (folderKind(m.folder) === kind) continue; // already there
+    try {
+      target = await invoke("file_card", { folder: m.folder, uid: m.card.uid, kind });
+    } catch (e) {
+      failed++;
+      console.error(e);
+    }
+  }
+  if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
+  else toast(`Conversation moved to ${target || folderLabel(kind)}`, "info");
+  await afterBulkChange();
+}
+
+async function pinMany(members, pinned, cardEl) {
+  cardEl.classList.add("busy");
+  for (const m of members) {
+    try {
+      await invoke("set_pin", { folder: m.folder, uid: m.card.uid, pinned });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  await afterBulkChange();
 }
 
 async function moveCard(from, uid, to) {
@@ -483,16 +613,19 @@ async function moveCard(from, uid, to) {
   let list = state.cards[from] || [];
   let idx = list.findIndex((c) => c.uid === uid);
   if (idx < 0) {
-    // Dragged from the search results.
-    list = state.cards[SEARCH_KEY] || [];
-    idx = list.findIndex((c) => c.uid === uid && c.__folder === from);
+    // Dragged from the search results or All Mail.
+    for (const key of MULTI_KEYS) {
+      list = state.cards[key] || [];
+      idx = list.findIndex((c) => c.uid === uid && c.__folder === from);
+      if (idx >= 0) break;
+    }
   }
   if (idx < 0) return;
   const [card] = list.splice(idx, 1);
   const { __folder, ...moved } = card;
   state.cards[to] = [moved, ...(state.cards[to] || [])];
   renderCards(from);
-  renderCards(SEARCH_KEY);
+  for (const key of MULTI_KEYS) renderCards(key);
   renderCards(to);
   const movedEl = columnEl(to)?.querySelector(`.card[data-uid="${uid}"]`);
   movedEl?.classList.add("busy");
@@ -633,15 +766,71 @@ function scheduleFolderCounts() {
   countsTimer = setTimeout(loadFolders, 3000);
 }
 
+// ---------- All Mail ----------
+
+async function loadAllMail() {
+  try {
+    const entries = await invoke("load_all_mail");
+    state.cards[ALL_KEY] = entries.map((e) => ({ ...e.card, __folder: e.folder }));
+    renderCards(ALL_KEY);
+  } catch (e) {
+    toast("Could not load All Mail: " + e);
+  }
+}
+
+function openAllMail() {
+  state.view = { folder: ALL_KEY, label: "All Mail", multi: true };
+  renderColumns();
+  renderFolders();
+  loadAllMail();
+}
+
+// ---------- folder order, visibility and colors ----------
+
+state.folderPrefs = []; // [{ name, hidden, color }] in the chosen order
+const FOLDER_COLORS = ["", "#4f8fd6", "#43a07a", "#d08a2c", "#d0574f", "#8a6fd1", "#3e9bb0", "#c45f9b", "#8a8f98"];
+
+function folderPref(name) {
+  return state.folderPrefs.find((p) => p.name === name);
+}
+
+function folderColor(name) {
+  return folderPref(name)?.color || "";
+}
+
+/// Folders in the user's order: the ones in the settings first, then the others.
+function orderedFolders(includeHidden = false) {
+  const rank = new Map(state.folderPrefs.map((p, i) => [p.name, i]));
+  const list = state.folders
+    .map((f, i) => ({ f, key: rank.has(f.name) ? rank.get(f.name) : state.folderPrefs.length + i }))
+    .sort((a, b) => a.key - b.key)
+    .map((x) => x.f);
+  return includeHidden ? list : list.filter((f) => !folderPref(f.name)?.hidden);
+}
+
+function folderTag(folder) {
+  const tag = el("span", "row-folder", folderLabel(folder));
+  const color = folderColor(folder);
+  if (color) {
+    tag.style.borderColor = color;
+    tag.style.color = color;
+  }
+  return tag;
+}
+
 function renderFolders() {
   const nav = $("folder-list");
   nav.replaceChildren();
-  for (const f of state.folders) {
+  $("nav-all").classList.toggle("active", state.view?.folder === ALL_KEY);
+  for (const f of orderedFolders()) {
     const item = el("button", "nav-item");
     item.style.paddingLeft = 8 + f.depth * 14 + "px";
     item.title = f.name;
     if (state.view?.folder === f.name) item.classList.add("active");
-    item.append(icon(FOLDER_ICONS[f.kind] || "folder"), el("span", "label", f.label));
+    const ic = icon(FOLDER_ICONS[f.kind] || "folder");
+    const color = folderColor(f.name);
+    if (color) ic.style.color = color;
+    item.append(ic, el("span", "label", f.label));
     if (f.unseen) item.append(el("span", "badge", String(f.unseen)));
     if (!f.selectable) {
       item.classList.add("disabled");
@@ -666,13 +855,15 @@ function setupFolderDrop(item, folder) {
     ev.preventDefault();
     item.classList.remove("drop-target");
     const drag = state.dragging;
-    if (drag && drag.folder !== folder) moveCard(drag.folder, drag.uid, folder);
+    if (drag && drag.folder !== folder) dropDragged(drag, folder);
   });
 }
 
 // ---------- search ----------
 
 const SEARCH_KEY = "__search__";
+const ALL_KEY = "__all__";
+const MULTI_KEYS = [SEARCH_KEY, ALL_KEY]; // lists with emails from several folders
 state.filterWords = [];
 let searchSeq = 0; // ignores results of searches that were replaced by a newer one
 
@@ -746,7 +937,7 @@ async function runSearch() {
 
 function startSearch(text) {
   const from = state.view && !state.view.search ? state.view.folder : state.view?.from;
-  state.view = { folder: SEARCH_KEY, label: `Search: ${text}`, search: text, inBody: state.view?.inBody || false, from };
+  state.view = { folder: SEARCH_KEY, label: `Search: ${text}`, search: text, inBody: state.view?.inBody || false, from, multi: true };
   state.cards[SEARCH_KEY] = [];
   renderColumns();
   renderFolders();
@@ -801,6 +992,7 @@ function toggleSidebar() {
 }
 
 $("nav-board").addEventListener("click", showBoard);
+$("nav-all").addEventListener("click", openAllMail);
 $("toggle-sidebar").addEventListener("click", toggleSidebar);
 document.addEventListener("keydown", (ev) => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "b" && !$("board-screen").hidden) {
@@ -901,10 +1093,12 @@ async function setSeen(folder, card, seen) {
   // The column may have been reloaded meanwhile: update the current copy too.
   const live = (state.cards[folder] || []).find((c) => c.uid === card.uid);
   if (live) live.seen = seen;
-  const inResults = (state.cards[SEARCH_KEY] || []).find((c) => c.uid === card.uid && c.__folder === folder);
-  if (inResults) {
-    inResults.seen = seen;
-    renderCards(SEARCH_KEY);
+  for (const key of MULTI_KEYS) {
+    const copy = (state.cards[key] || []).find((c) => c.uid === card.uid && c.__folder === folder);
+    if (copy) {
+      copy.seen = seen;
+      renderCards(key);
+    }
   }
   scheduleFolderCounts();
   if (readerCard?.card === card) updateSeenButton();
@@ -939,9 +1133,11 @@ function folderKind(folder) {
 /// Moves the email to the trash (kind "trash") or the archive ("archive").
 async function fileCard(folder, card, kind) {
   state.cards[folder] = (state.cards[folder] || []).filter((c) => c.uid !== card.uid);
-  state.cards[SEARCH_KEY] = (state.cards[SEARCH_KEY] || []).filter((c) => !(c.uid === card.uid && c.__folder === folder));
+  for (const key of MULTI_KEYS) {
+    state.cards[key] = (state.cards[key] || []).filter((c) => !(c.uid === card.uid && c.__folder === folder));
+    renderCards(key);
+  }
   renderCards(folder);
-  renderCards(SEARCH_KEY);
   try {
     const target = await invoke("file_card", { folder, uid: card.uid, kind });
     toast(`Moved to ${target}`, "info");
@@ -1291,10 +1487,18 @@ const compose = {
   hasDraft: false, // a version of this email exists in Drafts
   timer: null,
   saving: null, // promise of the save in progress
+  attachments: [], // [{ name, mime, size, data (base64) }]
+  markdown: false,
+  previewing: false,
 };
 
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024; // most mail servers refuse larger emails
+
 function composeSnapshot() {
-  return ["compose-to", "compose-cc", "compose-bcc", "compose-subject", "compose-body"].map((id) => $(id).value).join("\u0000");
+  return ["compose-to", "compose-cc", "compose-bcc", "compose-subject", "compose-body"]
+    .map((id) => $(id).value)
+    .concat(compose.markdown ? "md" : "plain", compose.attachments.map((a) => a.name + ":" + a.size).join("|"))
+    .join("\u0000");
 }
 
 function composeDraft() {
@@ -1307,6 +1511,8 @@ function composeDraft() {
     in_reply_to: compose.context?.in_reply_to ?? null,
     references: compose.context?.references ?? [],
     message_id: compose.messageId,
+    markdown: compose.markdown,
+    attachments: compose.attachments.map(({ name, mime, data }) => ({ name, mime, data })),
   };
 }
 
@@ -1337,7 +1543,12 @@ async function saveDraft() {
   return compose.saving;
 }
 
-async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false } = {}) {
+async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [] } = {}) {
+  compose.attachments = attachments;
+  compose.markdown = local.get("composeFormat") === "markdown";
+  setPreview(false);
+  renderComposeAttachments();
+  renderFormat();
   $("compose-title").textContent = title;
   $("compose-to").value = to;
   $("compose-cc").value = cc;
@@ -1350,6 +1561,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   compose.context = context;
   compose.initial = compose.saved = composeSnapshot();
   compose.hasDraft = fromDraft;
+  $("compose-drop").hidden = true;
   compose.messageId = messageId;
   $("composer").hidden = false;
   const bodyEl = $("compose-body");
@@ -1420,7 +1632,9 @@ async function discardComposer() {
 async function openDraft(folder, card) {
   try {
     const msg = await invoke("read_message", { folder, uid: card.uid });
+    const attachments = await loadAttachments(folder, card.uid, msg.attachments || []);
     openComposer({
+      attachments,
       to: msg.to,
       cc: msg.cc,
       bcc: msg.bcc,
@@ -1435,6 +1649,182 @@ async function openDraft(folder, card) {
     toast("Could not open the draft: " + e);
   }
 }
+
+// ---------- attachments, format and forward ----------
+
+function formatSizeTotal() {
+  const total = compose.attachments.reduce((n, a) => n + a.size, 0);
+  $("compose-size").textContent = total ? `${compose.attachments.length} file${compose.attachments.length === 1 ? "" : "s"} · ${formatSize(total)}` : "";
+  $("compose-size").classList.toggle("error", total > MAX_ATTACH_BYTES);
+  return total;
+}
+
+function renderComposeAttachments() {
+  const box = $("compose-attachments");
+  box.hidden = !compose.attachments.length;
+  box.replaceChildren(
+    ...compose.attachments.map((a, i) => {
+      const chip = el("span", "attachment compose-file");
+      const remove = el("button", "att-remove icon-btn");
+      remove.type = "button";
+      remove.title = "Remove";
+      remove.append(icon("close"));
+      remove.addEventListener("click", () => {
+        compose.attachments.splice(i, 1);
+        renderComposeAttachments();
+      });
+      chip.append(icon("paperclip"), el("span", "att-name", a.name), el("span", "att-size muted", formatSize(a.size)), remove);
+      return chip;
+    }),
+  );
+  formatSizeTotal();
+}
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addFiles(files) {
+  for (const file of files) {
+    if (!file.size && !file.type) continue; // a folder
+    const total = formatSizeTotal();
+    if (total + file.size > MAX_ATTACH_BYTES) {
+      toast(`${file.name} is too big: emails can carry about ${formatSize(MAX_ATTACH_BYTES)} in total.`);
+      continue;
+    }
+    try {
+      compose.attachments.push({ name: file.name, mime: file.type || "application/octet-stream", size: file.size, data: await readFile(file) });
+    } catch (e) {
+      toast(`Could not read ${file.name}: ${e}`);
+    }
+  }
+  renderComposeAttachments();
+}
+
+/// Downloads attachments of an existing email so they can be sent again.
+async function loadAttachments(folder, uid, list) {
+  const out = [];
+  for (const a of list) {
+    try {
+      const d = await invoke("attachment_data", { folder, uid, index: a.index });
+      out.push({ name: d.name, mime: d.mime, size: a.size, data: d.data });
+    } catch (e) {
+      toast(`Could not add ${a.name}: ${e}`);
+    }
+  }
+  return out;
+}
+
+$("compose-attach").addEventListener("click", () => {
+  $("compose-file").value = "";
+  $("compose-file").click();
+});
+$("compose-file").addEventListener("change", () => addFiles([...$("compose-file").files]));
+
+// Drop files anywhere on the composer.
+let dragDepth = 0;
+const hasFiles = (ev) => [...(ev.dataTransfer?.types || [])].includes("Files");
+$("compose-form").addEventListener("dragenter", (ev) => {
+  if (!hasFiles(ev)) return;
+  dragDepth++;
+  $("compose-drop").hidden = false;
+});
+$("compose-form").addEventListener("dragover", (ev) => {
+  if (!hasFiles(ev)) return;
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect = "copy";
+});
+$("compose-form").addEventListener("dragleave", (ev) => {
+  if (!hasFiles(ev)) return;
+  if (--dragDepth <= 0) {
+    dragDepth = 0;
+    $("compose-drop").hidden = true;
+  }
+});
+$("compose-form").addEventListener("drop", (ev) => {
+  if (!hasFiles(ev)) return;
+  ev.preventDefault();
+  dragDepth = 0;
+  $("compose-drop").hidden = true;
+  addFiles([...ev.dataTransfer.files]);
+});
+
+// Files dropped outside the composer must not make the window open them.
+for (const type of ["dragover", "drop"]) {
+  window.addEventListener(type, (ev) => {
+    if (hasFiles(ev) && !$("compose-form").contains(ev.target)) ev.preventDefault();
+  });
+}
+
+function renderFormat() {
+  $("fmt-plain").classList.toggle("active", !compose.markdown);
+  $("fmt-md").classList.toggle("active", compose.markdown);
+  $("fmt-plain").setAttribute("aria-checked", String(!compose.markdown));
+  $("fmt-md").setAttribute("aria-checked", String(compose.markdown));
+  $("compose-preview").hidden = !compose.markdown;
+  $("compose-body").placeholder = compose.markdown ? "**bold**, *italic*, - lists, [link](https://example.com), # headings, tables or inline HTML" : "";
+}
+
+function setFormat(markdown) {
+  compose.markdown = markdown;
+  local.set("composeFormat", markdown ? "markdown" : "plain");
+  if (!markdown) setPreview(false);
+  renderFormat();
+}
+
+async function setPreview(on) {
+  compose.previewing = on;
+  $("compose-preview").classList.toggle("active", on);
+  $("compose-body").hidden = on;
+  $("compose-preview-pane").hidden = !on;
+  if (!on) return $("compose-preview-pane").replaceChildren();
+  const html = await invoke("render_markdown", { text: $("compose-body").value }).catch((e) => `<p>${escapeHtml(String(e))}</p>`);
+  const frame = document.createElement("iframe");
+  frame.setAttribute("sandbox", "");
+  frame.srcdoc =
+    `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}">` +
+    `<style>body{font:14px/1.5 -apple-system,Segoe UI,sans-serif;margin:12px 14px;color:#1c1f24}img{max-width:100%}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}blockquote{border-left:3px solid #ccc;margin-left:0;padding-left:10px;color:#555}</style>` +
+    `</head><body>${html}</body></html>`;
+  $("compose-preview-pane").replaceChildren(frame);
+}
+
+$("fmt-plain").addEventListener("click", () => setFormat(false));
+$("fmt-md").addEventListener("click", () => setFormat(true));
+$("compose-preview").addEventListener("click", () => setPreview(!compose.previewing));
+
+/// "Forward": the original text below a header, with its attachments.
+async function forward() {
+  const msg = readerMessage;
+  if (!msg || !readerCard) return;
+  const { folder, card } = readerCard;
+  const header = [
+    "---------- Forwarded message ----------",
+    `From: ${msg.from}${msg.reply_address && msg.reply_address !== msg.from ? ` <${msg.reply_address}>` : ""}`,
+    `Date: ${formatDate(msg.date, true)}`,
+    `Subject: ${msg.subject}`,
+    `To: ${msg.to}`,
+    msg.cc ? `Cc: ${msg.cc}` : null,
+  ].filter(Boolean);
+  const subject = /^(fwd?|i|inoltra):/i.test(msg.subject.trim()) ? msg.subject : "Fwd: " + msg.subject;
+  await openComposer({
+    subject,
+    body: signatureBlock() + "\n\n" + header.join("\n") + "\n\n" + (msg.text || ""),
+    title: "Forward",
+  });
+  $("compose-to").focus();
+  if (msg.attachments?.length) {
+    setComposeStatus("Adding the attachments…");
+    compose.attachments = await loadAttachments(folder, card.uid, msg.attachments);
+    renderComposeAttachments();
+    setComposeStatus("");
+  }
+}
+$("reader-forward").addEventListener("click", forward);
 
 /// Signature in the standard format: "-- " on a line of its own, then the text.
 function signatureBlock() {
@@ -1493,6 +1883,7 @@ $("compose-form").addEventListener("submit", async (ev) => {
     ]);
     if (choice !== "send") return;
   }
+  if (formatSizeTotal() > MAX_ATTACH_BYTES) return toast("The attachments are too big to send: remove some of them.");
   const btn = $("compose-send");
   btn.disabled = true;
   btn.textContent = "Sending…";
@@ -1546,6 +1937,9 @@ $("open-settings").addEventListener("click", async () => {
     showContactsStatus();
     $("set-remote").checked = s.load_remote_images;
     $("set-same-domain").checked = s.important_same_domain;
+    $("set-group").checked = s.group_threads;
+    prefsDraft = mergeFolderPrefs(s.folders || []);
+    renderFolderPrefs();
     $("set-allow").value = s.important_allow.join("\n");
     $("set-block").value = s.important_block.join("\n");
     $("set-never").checked = s.mark_read_after_seconds < 0;
@@ -1580,12 +1974,19 @@ $("settings-form").addEventListener("submit", async (ev) => {
         important_allow: $("set-allow").value.split(/[\n,;]+/),
         important_block: $("set-block").value.split(/[\n,;]+/),
         important_same_domain: $("set-same-domain").checked,
+        group_threads: $("set-group").checked,
+        folders: prefsDraft,
       },
     });
     const saved = await invoke("get_settings");
     state.allow = saved.important_allow;
     state.block = saved.important_block;
     state.sameDomain = saved.important_same_domain;
+    state.groupThreads = saved.group_threads;
+    state.folderPrefs = saved.folders || [];
+    renderFolders();
+    renderColumns();
+    for (const c of visibleColumns()) loadColumn(c.folder);
     for (const c of visibleColumns()) renderCards(c.folder);
     if ($("set-contacts").checked) loadContacts(!wasUsingContacts);
     else state.contacts = [];
@@ -1600,6 +2001,116 @@ $("settings-form").addEventListener("submit", async (ev) => {
     toast("Settings not saved: " + e);
   }
 });
+
+// ---------- export / import ----------
+
+$("export-settings").addEventListener("click", async () => {
+  try {
+    const path = await invoke("export_settings");
+    toast("Settings saved to " + path, "info");
+  } catch (e) {
+    toast("Export failed: " + e);
+  }
+});
+
+$("import-settings").addEventListener("click", () => {
+  $("import-file").value = "";
+  $("import-file").click();
+});
+
+$("import-file").addEventListener("change", async () => {
+  const file = $("import-file").files[0];
+  if (!file) return;
+  const choice = await ask(`Import the settings from “${file.name}”? Your current columns, signature, rules and folder settings will be replaced.`, [
+    { label: "Cancel", value: null },
+    { label: "Import", value: "import", kind: "primary" },
+  ]);
+  if (choice !== "import") return;
+  try {
+    const summary = await invoke("import_settings", { json: await file.text() });
+    toast(summary + " Reloading…", "info");
+    setTimeout(() => location.reload(), 1800);
+  } catch (e) {
+    toast("Import failed: " + e);
+  }
+});
+
+// ---------- folders tab ----------
+
+let prefsDraft = []; // folder preferences being edited in the settings
+let prefsDragFrom = null; // index of the folder being dragged in the settings
+
+/// Every server folder in the current order, with its preferences.
+function mergeFolderPrefs(prefs) {
+  state.folderPrefs = prefs;
+  return orderedFolders(true).map((f) => ({ name: f.name, hidden: !!folderPref(f.name)?.hidden, color: folderPref(f.name)?.color || "" }));
+}
+
+function renderFolderPrefs() {
+  const box = $("folder-prefs");
+  box.replaceChildren();
+  prefsDraft.forEach((p, i) => {
+    const f = state.folders.find((x) => x.name === p.name);
+    const row = el("div", "folder-pref" + (p.hidden ? " hidden-folder" : ""));
+    // Drag the row to reorder; a line shows where it will land.
+    const grip = el("span", "fp-grip");
+    grip.title = "Drag to reorder";
+    grip.append(icon("grip"));
+    row.draggable = true;
+    row.dataset.index = i;
+    row.addEventListener("dragstart", (ev) => {
+      prefsDragFrom = i;
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", p.name);
+      requestAnimationFrame(() => row.classList.add("dragging"));
+    });
+    row.addEventListener("dragend", () => {
+      prefsDragFrom = null;
+      for (const r of box.children) r.classList.remove("dragging", "drop-before", "drop-after");
+    });
+    row.addEventListener("dragover", (ev) => {
+      if (prefsDragFrom === null) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = "move";
+      const r = row.getBoundingClientRect();
+      const after = ev.clientY > r.top + r.height / 2;
+      for (const x of box.children) x.classList.remove("drop-before", "drop-after");
+      row.classList.add(after ? "drop-after" : "drop-before");
+    });
+    row.addEventListener("drop", (ev) => {
+      if (prefsDragFrom === null) return;
+      ev.preventDefault();
+      const r = row.getBoundingClientRect();
+      let to = ev.clientY > r.top + r.height / 2 ? i + 1 : i;
+      const [moved] = prefsDraft.splice(prefsDragFrom, 1);
+      if (prefsDragFrom < to) to--;
+      prefsDraft.splice(to, 0, moved);
+      prefsDragFrom = null;
+      renderFolderPrefs();
+    });
+    const show = el("input");
+    show.type = "checkbox";
+    show.checked = !p.hidden;
+    show.title = "Show in the sidebar";
+    show.addEventListener("change", () => {
+      p.hidden = !show.checked;
+      row.classList.toggle("hidden-folder", p.hidden);
+    });
+    const color = el("button", "fp-color" + (p.color ? "" : " none"));
+    color.type = "button";
+    color.title = "Click to change the color";
+    if (p.color) color.style.background = color.style.borderColor = p.color;
+    color.addEventListener("click", () => {
+      p.color = FOLDER_COLORS[(FOLDER_COLORS.indexOf(p.color) + 1) % FOLDER_COLORS.length];
+      renderFolderPrefs();
+    });
+    const label = el("div", "fp-label");
+    label.append(el("span", "", (f?.depth ? "↳ " : "") + (f?.label || p.name)));
+    const path = el("span", "fp-path muted", f && f.label !== p.name ? p.name : "");
+    row.append(grip, show, color, label, path);
+    box.append(row);
+  });
+}
 
 // ---------- signature editor ----------
 

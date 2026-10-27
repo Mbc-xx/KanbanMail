@@ -742,6 +742,93 @@ pub async fn folder_fingerprint(session: &mut Session, folder: &str, caps: Serve
     Ok((mb.exists, mb.uid_next.unwrap_or(0), mb.unseen.unwrap_or(0), mb.highest_modseq.unwrap_or(0)))
 }
 
+/// "All Mail": the `total` most recent emails across `folders`, newest first.
+/// First reads only dates and flags of the newest emails of each folder (cheap),
+/// then downloads the previews of the overall newest ones not cached yet.
+pub async fn load_all_mail(
+    session: &mut Session,
+    folders: &[String],
+    caches: &mut std::collections::HashMap<String, FolderCache>,
+    total: u32,
+) -> Result<Vec<ThreadEntry>> {
+    use async_imap::types::Flag;
+    struct Row {
+        folder: String,
+        uid: u32,
+        date: i64,
+        flagged: bool,
+        seen: bool,
+    }
+    let mut rows = Vec::new();
+    for folder in folders {
+        let Ok(mailbox) = session.examine(folder).await else { continue };
+        if mailbox.exists == 0 {
+            continue;
+        }
+        let cache = caches.entry(folder.clone()).or_default();
+        if mailbox.uid_validity != cache.uid_validity {
+            cache.cards.clear();
+            cache.uid_validity = mailbox.uid_validity;
+        }
+        let start = mailbox.exists.saturating_sub(total.max(1) - 1).max(1);
+        let fetched: Vec<_> = session
+            .fetch(format!("{start}:*"), "(UID FLAGS INTERNALDATE)")
+            .await
+            .with_context(|| format!("reading {folder} failed"))?
+            .try_collect()
+            .await?;
+        for f in fetched {
+            let Some(uid) = f.uid else { continue };
+            rows.push(Row {
+                folder: folder.clone(),
+                uid,
+                date: f.internal_date().map(|d| d.timestamp()).unwrap_or(0),
+                flagged: f.flags().any(|x| matches!(x, Flag::Flagged)),
+                seen: f.flags().any(|x| matches!(x, Flag::Seen)),
+            });
+        }
+    }
+    rows.sort_by(|a, b| b.date.cmp(&a.date));
+    rows.truncate(total as usize);
+
+    // Download what is missing, folder by folder.
+    let mut by_folder: std::collections::BTreeMap<&str, Vec<u32>> = std::collections::BTreeMap::new();
+    for r in &rows {
+        let cached = caches.get(&r.folder).is_some_and(|c| c.cards.contains_key(&r.uid));
+        if !cached {
+            by_folder.entry(r.folder.as_str()).or_default().push(r.uid);
+        }
+    }
+    for (folder, uids) in by_folder {
+        session.examine(folder).await.with_context(|| format!("cannot open {folder}"))?;
+        let cache = caches.entry(folder.to_string()).or_default();
+        for chunk in uids.chunks(50) {
+            let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+            let fetched: Vec<_> = session
+                .uid_fetch(&set, "(UID INTERNALDATE BODY.PEEK[]<0.32768>)")
+                .await
+                .with_context(|| format!("reading emails in {folder} failed"))?
+                .try_collect()
+                .await?;
+            for f in fetched {
+                let Some(uid) = f.uid else { continue };
+                let date = f.internal_date().map(|d| d.timestamp()).unwrap_or(0);
+                cache.cards.insert(uid, crate::message::parse_card(uid, f.body().unwrap_or_default(), false, false, date));
+            }
+        }
+    }
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            let mut card = caches.get(&r.folder)?.cards.get(&r.uid)?.clone();
+            card.flagged = r.flagged;
+            card.seen = r.seen;
+            Some(ThreadEntry { folder: r.folder, card })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

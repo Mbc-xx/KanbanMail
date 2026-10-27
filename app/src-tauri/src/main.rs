@@ -317,6 +317,8 @@ struct SettingsView {
     important_allow: Vec<String>,
     important_block: Vec<String>,
     important_same_domain: bool,
+    group_threads: bool,
+    folders: Vec<kanbanmail_core::settings::FolderPref>,
 }
 
 #[tauri::command]
@@ -338,6 +340,8 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         important_allow: settings.important_allow,
         important_block: settings.important_block,
         important_same_domain: settings.important_same_domain,
+        group_threads: settings.group_threads,
+        folders: settings.folders,
     })
 }
 
@@ -361,6 +365,8 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         important_allow: kanbanmail_core::settings::normalize_rules(&settings.important_allow),
         important_block: kanbanmail_core::settings::normalize_rules(&settings.important_block),
         important_same_domain: settings.important_same_domain,
+        group_threads: settings.group_threads,
+        folders: settings.folders,
     }
         .save()
         .map_err(err)
@@ -661,6 +667,118 @@ async fn system_contacts() -> CmdResult<Vec<contacts::Contact>> {
         .map_err(|e| e.to_string())?
 }
 
+/// "All Mail": the most recent emails of every folder except Trash, Junk and
+/// Drafts, newest first.
+#[tauri::command]
+async fn load_all_mail(state: State<'_, AppState>) -> CmdResult<Vec<imap::ThreadEntry>> {
+    let mut guard = state.inner.lock().await;
+    let inner = &mut *guard;
+    let mut caches = std::mem::take(&mut inner.caches);
+    let res = with_retry!(inner, |s, _caps| async {
+        let folders = imap::searchable_folders(s).await?;
+        imap::load_all_mail(s, &folders, &mut caches, 200).await
+    });
+    inner.caches = caches;
+    res
+}
+
+/// Markdown (with inline HTML) to the HTML that will be sent, for the preview.
+#[tauri::command]
+fn render_markdown(text: String) -> String {
+    smtp::markdown_to_html(&text)
+}
+
+/// An attachment of an existing email, ready to be attached again (forward,
+/// reopened draft).
+#[tauri::command]
+async fn attachment_data(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<smtp::OutgoingAttachment> {
+    use base64::Engine;
+    let raw = {
+        let mut inner = state.inner.lock().await;
+        with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?
+    };
+    let (name, mime, bytes) = kanbanmail_core::message::attachment_with_mime(&raw, index).ok_or("attachment not found")?;
+    Ok(smtp::OutgoingAttachment { name, mime, data: base64::engine::general_purpose::STANDARD.encode(bytes) })
+}
+
+/// What an exported settings file contains (never the password).
+#[derive(Serialize, Deserialize)]
+struct ExportFile {
+    app: String,
+    version: u32,
+    account: ExportAccount,
+    board_toml: String,
+    settings: Settings,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ExportAccount {
+    server: String,
+    email: String,
+    display_name: Option<String>,
+    smtp_server: Option<String>,
+    smtp_port: u16,
+}
+
+/// Saves account details (no password), board columns and settings to a JSON
+/// file in Downloads and shows it in the file manager. Returns its path.
+#[tauri::command]
+async fn export_settings(state: State<'_, AppState>) -> CmdResult<String> {
+    let acc = state.inner.lock().await.account.clone().ok_or("no account configured")?;
+    let file = ExportFile {
+        app: "KanbanMail".into(),
+        version: 1,
+        account: ExportAccount {
+            server: acc.server.clone(),
+            email: acc.email.clone(),
+            display_name: acc.display_name.clone(),
+            smtp_server: acc.smtp_server.clone(),
+            smtp_port: acc.smtp_port,
+        },
+        board_toml: std::fs::read_to_string(board_path().map_err(err)?).unwrap_or_default(),
+        settings: Settings::load().map_err(err)?,
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    let dir = directories::UserDirs::new()
+        .and_then(|d| d.download_dir().map(|p| p.to_path_buf()))
+        .ok_or("cannot find the Downloads folder")?;
+    let path = unique_path(&dir, "KanbanMail-settings.json");
+    std::fs::write(&path, json).map_err(|e| format!("cannot save {}: {e}", path.display()))?;
+    reveal_in_file_manager(&path);
+    Ok(path.display().to_string())
+}
+
+/// Applies an exported settings file: board columns and settings always; the
+/// sender name and SMTP details only if the file is for the same email address.
+/// Returns a short summary.
+#[tauri::command]
+async fn import_settings(json: String, state: State<'_, AppState>) -> CmdResult<String> {
+    let file: ExportFile = serde_json::from_str(&json).map_err(|_| "this is not a KanbanMail settings file")?;
+    if file.app != "KanbanMail" {
+        return Err("this is not a KanbanMail settings file".into());
+    }
+    if !file.board_toml.trim().is_empty() {
+        toml::from_str::<Board>(&file.board_toml).map_err(|e| format!("the board columns in the file are not valid: {e}"))?;
+        std::fs::write(board_path().map_err(err)?, &file.board_toml).map_err(|e| e.to_string())?;
+    }
+    file.settings.save().map_err(err)?;
+    let mut inner = state.inner.lock().await;
+    let same = inner.account.as_ref().is_some_and(|a| a.email.eq_ignore_ascii_case(&file.account.email));
+    if same {
+        let acc = inner.account.as_mut().unwrap();
+        acc.display_name = file.account.display_name;
+        acc.smtp_server = file.account.smtp_server;
+        acc.smtp_port = file.account.smtp_port;
+        acc.save().map_err(err)?;
+        Ok("Settings, columns and account details imported.".into())
+    } else {
+        Ok(format!(
+            "Settings and columns imported. Account details were kept: the file is for {}.",
+            file.account.email
+        ))
+    }
+}
+
 #[tauri::command]
 fn open_contacts_privacy() {
     contacts::open_privacy_settings();
@@ -694,6 +812,11 @@ fn main() {
             known_senders,
             search_emails,
             open_contacts_privacy,
+            load_all_mail,
+            render_markdown,
+            attachment_data,
+            export_settings,
+            import_settings,
             system_contacts
         ])
         .run(tauri::generate_context!())

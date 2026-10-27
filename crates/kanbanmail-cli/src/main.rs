@@ -9,6 +9,7 @@
 //!   kanbanmail-cli drafts   save a test draft twice, check one copy is kept, then delete it
 //!   kanbanmail-cli thread   show the conversation of the newest Inbox email that is a reply
 //!   kanbanmail-cli known    count the people you wrote to and classify the newest Inbox emails
+//!   kanbanmail-cli allmail  time loading the 200 newest emails of all folders
 //!   kanbanmail-cli search WORDS  search sender, recipients and subject in Inbox, Sent and Archive
 
 use anyhow::Result;
@@ -93,6 +94,20 @@ async fn main() -> Result<()> {
         for f in imap::folder_tree(&mut session).await? {
             let unseen = f.unseen.filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
             println!("{}{} [{}]{unseen}", "  ".repeat(f.depth + 1), f.label, f.kind);
+        }
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("allmail") {
+        let folders = imap::searchable_folders(&mut session).await?;
+        let mut caches = std::collections::HashMap::new();
+        for round in ["first load", "second load (cached)"] {
+            let started = std::time::Instant::now();
+            let all = imap::load_all_mail(&mut session, &folders, &mut caches, 200).await?;
+            let mut per_folder: std::collections::BTreeMap<&str, usize> = Default::default();
+            for e in &all {
+                *per_folder.entry(e.folder.as_str()).or_default() += 1;
+            }
+            println!("\n{round}: {} emails from {} folders in {:?} -> {per_folder:?}", all.len(), folders.len(), started.elapsed());
         }
     }
 
@@ -194,6 +209,8 @@ async fn test_drafts(session: &mut imap::Session, account: &Account) -> Result<(
         references: vec![],
         message_id: Some(id.clone()),
         bcc: String::new(),
+        markdown: false,
+        attachments: vec![],
     };
     let folder = imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
     draft.body = "second version".into();
