@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 /// Shared app state. One IMAP connection for commands, plus one
@@ -176,17 +176,26 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
 
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     let (account, password, caps) = (inner.account.clone().unwrap(), inner.password.clone().unwrap(), inner.caps);
-    for col in &columns {
+    // Few connections: mail servers limit them per user (SiteGround: 30, shared
+    // with every other client and device). The Inbox is watched live with IDLE on
+    // one extra connection; the other columns are checked every 60 seconds on
+    // the main connection with a cheap STATUS.
+    if caps.idle {
         tauri::async_runtime::spawn(watch_folder(
             app.clone(),
             state.generation.clone(),
             generation,
             account.clone(),
             password.clone(),
-            caps,
-            col.folder.clone(),
+            "INBOX".to_string(),
         ));
     }
+    let polled: Vec<String> = columns
+        .iter()
+        .map(|c| c.folder.clone())
+        .filter(|f| !(caps.idle && f.eq_ignore_ascii_case("INBOX")))
+        .collect();
+    tauri::async_runtime::spawn(poll_folders(app.clone(), state.generation.clone(), generation, polled));
 
     Ok(BoardInfo {
         columns,
@@ -195,43 +204,38 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
     })
 }
 
-/// Watches a folder: with IDLE the server tells us as soon as something changes,
-/// otherwise we check every 60 seconds. Every change is reported to the UI.
+/// Watches a folder with IDLE: the server tells us as soon as something changes.
+/// Every change is reported to the UI.
 async fn watch_folder(
     app: AppHandle,
     current: Arc<AtomicU64>,
     generation: u64,
     account: Account,
     password: String,
-    caps: ServerCaps,
     folder: String,
 ) {
     let alive = || current.load(Ordering::SeqCst) == generation;
     let mut session: Option<Session> = None;
     while alive() {
-        if !caps.idle {
-            tokio::time::sleep(Duration::from_secs(60)).await;
-        } else {
-            let s = match session.take() {
-                Some(s) => s,
-                None => match imap::connect(&account, &password).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("[{folder}] IDLE connection failed: {e:#}");
-                        tokio::time::sleep(Duration::from_secs(60)).await;
-                        continue;
-                    }
-                },
-            };
-            let wait = imap::wait_for_change(s, &folder, Duration::from_secs(9 * 60));
-            match tokio::time::timeout(Duration::from_secs(10 * 60), wait).await {
-                Ok(Ok(s)) => session = Some(s),
-                Ok(Err(e)) => {
-                    eprintln!("[{folder}] IDLE interrupted: {e:#}");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+        let s = match session.take() {
+            Some(s) => s,
+            None => match imap::connect(&account, &password).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[{folder}] IDLE connection failed: {e:#}");
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    continue;
                 }
-                Err(_) => {} // no answer: reopen the connection on the next round
+            },
+        };
+        let wait = imap::wait_for_change(s, &folder, Duration::from_secs(9 * 60));
+        match tokio::time::timeout(Duration::from_secs(10 * 60), wait).await {
+            Ok(Ok(s)) => session = Some(s),
+            Ok(Err(e)) => {
+                eprintln!("[{folder}] IDLE interrupted: {e:#}");
+                tokio::time::sleep(Duration::from_secs(10)).await;
             }
+            Err(_) => {} // no answer: reopen the connection on the next round
         }
         if alive() {
             app.emit("folder-changed", &folder).ok();
@@ -239,6 +243,27 @@ async fn watch_folder(
     }
     if let Some(mut s) = session {
         s.logout().await.ok();
+    }
+}
+
+/// Checks the given folders every 60 seconds on the main connection and reports
+/// the ones that changed (new, removed, read or flagged emails) to the UI.
+async fn poll_folders(app: AppHandle, current: Arc<AtomicU64>, generation: u64, folders: Vec<String>) {
+    let mut last: HashMap<String, (u32, u32, u32, u64)> = HashMap::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        if current.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let state = app.state::<AppState>();
+        let mut inner = state.inner.lock().await;
+        for folder in &folders {
+            let fp: Result<_, String> = with_retry!(inner, |s, caps| imap::folder_fingerprint(s, folder, caps));
+            let Ok(fp) = fp else { continue };
+            if last.insert(folder.clone(), fp).is_some_and(|old| old != fp) {
+                app.emit("folder-changed", folder).ok();
+            }
+        }
     }
 }
 
@@ -474,6 +499,35 @@ async fn known_senders(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     Ok(known?.into_iter().collect())
 }
 
+/// Searches sender, recipients and subject (and with `in_body` the text too) in
+/// the given folders plus Inbox, Sent and Archive. Newest first. Uses its own
+/// connection, so a slow text search does not block the board.
+#[tauri::command]
+async fn search_emails(text: String, in_body: bool, folders: Vec<String>, state: State<'_, AppState>) -> CmdResult<Vec<imap::ThreadEntry>> {
+    let (account, password) = {
+        let inner = state.inner.lock().await;
+        (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+    };
+    let mut session = imap::connect(&account, &password).await.map_err(err)?;
+    let result: anyhow::Result<_> = async {
+        let mut all = vec!["INBOX".to_string()];
+        for kind in ["sent", "archive"] {
+            if let Some(f) = imap::find_special_folder(&mut session, kind).await? {
+                all.push(f);
+            }
+        }
+        for f in folders {
+            if !all.contains(&f) {
+                all.push(f);
+            }
+        }
+        imap::search(&mut session, &text, in_body, &all, 100).await
+    }
+    .await;
+    session.logout().await.ok();
+    result.map_err(err)
+}
+
 /// Shows the number of unread Inbox emails on the app icon (Dock on macOS,
 /// taskbar on Windows/Linux where supported). 0 removes the badge.
 #[tauri::command]
@@ -601,6 +655,7 @@ fn main() {
             set_unread_badge,
             set_sender_rule,
             known_senders,
+            search_emails,
             system_contacts
         ])
         .run(tauri::generate_context!())

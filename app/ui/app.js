@@ -212,10 +212,12 @@ function renderColumns() {
     column.dataset.folder = col.folder;
 
     const head = el("header", "column-head");
-    head.append(el("h2", "", col.name), el("span", "count muted", ""), el("span", "unread", ""), el("span", "folder muted", col.folder));
+    head.append(el("h2", "", col.name), el("span", "count muted", ""), el("span", "unread", ""), el("span", "folder muted", state.view?.search ? "" : col.folder));
     const cards = el("div", state.view ? "cards rows" : "cards");
     cards.append(el("div", "empty muted", "Loading…"));
-    column.append(head, cards);
+    column.append(head);
+    if (state.view?.search) column.append(searchOptions());
+    column.append(cards);
     if (!state.view) setupResizer(column);
     setupDropTarget(column);
     (split || board).append(column);
@@ -329,6 +331,7 @@ function columnEl(folder) {
 }
 
 async function loadColumn(folder) {
+  if (folder === SEARCH_KEY) return runSearch();
   try {
     state.cards[folder] = await invoke("load_column", { folder });
     renderCards(folder);
@@ -356,15 +359,31 @@ function renderCards(folder) {
   const unread = all.filter((c) => !c.seen).length;
   column.querySelector(".count").textContent = all.length;
   column.querySelector(".unread").textContent = unread ? `${unread} unread` : "";
-  const list = all.filter((c) => (!state.onlyUnread || !c.seen) && (!state.onlyImportant || importance(c).important));
+  const list = all.filter(
+    (c) => (!state.onlyUnread || !c.seen) && (!state.onlyImportant || importance(c).important) && matchesFilter(c),
+  );
   const container = column.querySelector(".cards");
   container.replaceChildren();
   if (!list.length) {
-    const filtered = all.length && (state.onlyUnread || state.onlyImportant);
+    const filtered = all.length && (state.onlyUnread || state.onlyImportant || state.filterWords.length);
     container.append(el("div", "empty muted", filtered ? "No emails match the filters" : "No emails"));
     return;
   }
-  for (const card of list) container.append(renderCard(folder, card));
+  // Search results come from several folders: each card carries its own.
+  for (const card of list) container.append(renderCard(card.__folder || folder, card));
+}
+
+/// Accent- and case-insensitive text for matching.
+function fold(text) {
+  return (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/// The search box filters the loaded cards as you type: every word must appear
+/// in the sender, address, subject or preview.
+function matchesFilter(card) {
+  if (!state.filterWords.length || state.view?.search) return true;
+  const hay = fold([card.from, card.from_address, card.subject, card.preview].join(" "));
+  return state.filterWords.every((w) => hay.includes(w));
 }
 
 function renderCard(folder, card) {
@@ -373,6 +392,7 @@ function renderCard(folder, card) {
   if (!card.seen) c.classList.add("unseen");
   c.draggable = true;
   c.dataset.uid = card.uid;
+  c.dataset.folder = folder;
 
   const fromLine = el("div", "from-line");
   fromLine.append(el("span", "from", card.from || "(unknown sender)"));
@@ -401,6 +421,7 @@ function renderCard(folder, card) {
     const date = el("span", "row-date");
     if (card.has_attachments) date.append(icon("paperclip", "clip"));
     date.append(document.createTextNode(formatDate(card.date)));
+    if (state.view?.search) date.prepend(el("span", "row-folder", folderLabel(folder)));
     c.append(el("span", "row-from", card.from || "(unknown sender)"), main, date, actions);
     if (readerCard && readerCard.folder === folder && readerCard.card.uid === card.uid) c.classList.add("selected");
   } else {
@@ -445,13 +466,19 @@ function setupDropTarget(column) {
 
 async function moveCard(from, uid, to) {
   // Optimistic move: the card changes column immediately, then the server confirms.
-  const list = state.cards[from] || [];
-  const idx = list.findIndex((c) => c.uid === uid);
+  let list = state.cards[from] || [];
+  let idx = list.findIndex((c) => c.uid === uid);
+  if (idx < 0) {
+    // Dragged from the search results.
+    list = state.cards[SEARCH_KEY] || [];
+    idx = list.findIndex((c) => c.uid === uid && c.__folder === from);
+  }
   if (idx < 0) return;
   const [card] = list.splice(idx, 1);
-  const moved = { ...card };
+  const { __folder, ...moved } = card;
   state.cards[to] = [moved, ...(state.cards[to] || [])];
   renderCards(from);
+  renderCards(SEARCH_KEY);
   renderCards(to);
   const movedEl = columnEl(to)?.querySelector(`.card[data-uid="${uid}"]`);
   movedEl?.classList.add("busy");
@@ -462,6 +489,7 @@ async function moveCard(from, uid, to) {
     toast("Move failed: " + e);
   }
   await Promise.all([from, to].filter((f) => columnEl(f)).map(loadColumn));
+  if (state.view?.search) runSearch();
   scheduleFolderCounts();
 }
 
@@ -474,6 +502,7 @@ async function togglePin(folder, card, cardEl) {
     toast("Pin not changed: " + e);
   }
   await loadColumn(folder);
+  if (state.view?.search) runSearch();
 }
 
 $("only-important").addEventListener("change", (ev) => {
@@ -627,6 +656,91 @@ function setupFolderDrop(item, folder) {
   });
 }
 
+// ---------- search ----------
+
+const SEARCH_KEY = "__search__";
+state.filterWords = [];
+let searchSeq = 0; // ignores results of searches that were replaced by a newer one
+
+function folderLabel(folder) {
+  return state.folders.find((f) => f.name === folder)?.label || folder.replace(/^INBOX[./]/, "");
+}
+
+function searchOptions() {
+  const box = el("div", "search-opts");
+  const label = el("label", "toggle");
+  const cb = el("input");
+  cb.type = "checkbox";
+  cb.checked = !!state.view.inBody;
+  cb.addEventListener("change", () => {
+    state.view.inBody = cb.checked;
+    runSearch();
+  });
+  label.append(cb, document.createTextNode(" Also search in the text (slower)"));
+  const status = el("span", "muted");
+  status.id = "search-status";
+  box.append(label, status);
+  return box;
+}
+
+/// Server search in Inbox, Sent, Archive, the board columns and the open folder.
+async function runSearch() {
+  const view = state.view;
+  if (!view?.search) return;
+  const seq = ++searchSeq;
+  const status = $("search-status");
+  if (status) status.textContent = view.inBody ? "Searching in the text, this can take a while…" : "Searching…";
+  try {
+    const folders = state.columns.map((c) => c.folder);
+    if (view.from && !folders.includes(view.from)) folders.push(view.from);
+    const entries = await invoke("search_emails", { text: view.search, inBody: !!view.inBody, folders });
+    if (seq !== searchSeq || state.view !== view) return;
+    state.cards[SEARCH_KEY] = entries.map((e) => ({ ...e.card, __folder: e.folder }));
+    renderCards(SEARCH_KEY);
+    const s = $("search-status");
+    if (s) s.textContent = `${entries.length} found in ${[...new Set(entries.map((e) => folderLabel(e.folder)))].join(", ") || "no folder"}`;
+  } catch (e) {
+    if (seq === searchSeq) toast("Search failed: " + e);
+  }
+}
+
+function startSearch(text) {
+  const from = state.view && !state.view.search ? state.view.folder : state.view?.from;
+  state.view = { folder: SEARCH_KEY, label: `Search: ${text}`, search: text, inBody: state.view?.inBody || false, from };
+  state.cards[SEARCH_KEY] = [];
+  renderColumns();
+  renderFolders();
+  runSearch();
+}
+
+$("search").addEventListener("input", () => {
+  state.filterWords = fold($("search").value).split(/\s+/).filter(Boolean);
+  if (!state.view?.search) for (const c of visibleColumns()) renderCards(c.folder);
+});
+
+$("search").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    const text = $("search").value.trim();
+    if (text) startSearch(text);
+  } else if (ev.key === "Escape") {
+    ev.stopPropagation();
+    $("search").value = "";
+    state.filterWords = [];
+    if (state.view?.search) showBoard();
+    else for (const c of visibleColumns()) renderCards(c.folder);
+    $("search").blur();
+  }
+});
+
+// The usual shortcut to jump to the search box.
+document.addEventListener("keydown", (ev) => {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "f" && !$("board-screen").hidden) {
+    ev.preventDefault();
+    $("search").focus();
+    $("search").select();
+  }
+});
+
 function openFolder(f) {
   state.view = { folder: f.name, label: f.label, kind: f.kind };
   renderColumns();
@@ -667,6 +781,11 @@ const FRAME_CSP_REMOTE_IMAGES = "default-src 'none'; img-src data: https: http:;
 let readerRemoteAllowed = false;
 let readerQuoteShown = false; // show the quoted earlier messages
 let readerThread = null; // entries of the current conversation, oldest first
+let readerPinTop = false; // keep the open email at the top while it loads
+
+for (const ev of ["wheel", "touchmove", "keydown", "mousedown"]) {
+  $("reader-scroll").addEventListener(ev, () => (readerPinTop = false), { passive: true });
+}
 
 let readerMode = "html";
 let readerMessage = null;
@@ -742,6 +861,11 @@ async function setSeen(folder, card, seen) {
   // The column may have been reloaded meanwhile: update the current copy too.
   const live = (state.cards[folder] || []).find((c) => c.uid === card.uid);
   if (live) live.seen = seen;
+  const inResults = (state.cards[SEARCH_KEY] || []).find((c) => c.uid === card.uid && c.__folder === folder);
+  if (inResults) {
+    inResults.seen = seen;
+    renderCards(SEARCH_KEY);
+  }
   scheduleFolderCounts();
   if (readerCard?.card === card) updateSeenButton();
   renderCards(folder);
@@ -775,7 +899,9 @@ function folderKind(folder) {
 /// Moves the email to the trash (kind "trash") or the archive ("archive").
 async function fileCard(folder, card, kind) {
   state.cards[folder] = (state.cards[folder] || []).filter((c) => c.uid !== card.uid);
+  state.cards[SEARCH_KEY] = (state.cards[SEARCH_KEY] || []).filter((c) => !(c.uid === card.uid && c.__folder === folder));
   renderCards(folder);
+  renderCards(SEARCH_KEY);
   try {
     const target = await invoke("file_card", { folder, uid: card.uid, kind });
     toast(`Moved to ${target}`, "info");
@@ -831,17 +957,24 @@ function detachReader() {
 function markSelectedRow() {
   for (const row of document.querySelectorAll(".cards.rows .card.selected")) row.classList.remove("selected");
   if (!readerCard) return;
-  const col = columnEl(readerCard.folder);
-  col?.querySelector(`.card[data-uid="${readerCard.card.uid}"]`)?.classList.add("selected");
+  for (const row of document.querySelectorAll(`.cards.rows .card[data-uid="${readerCard.card.uid}"]`)) {
+    if (row.dataset.folder === readerCard.folder) row.classList.add("selected");
+  }
 }
 
 async function openReader(folder, card, opts = {}) {
   readerCard = { folder, card };
   readerMessage = null;
   readerQuoteShown = false;
-  if (!opts.thread) readerThread = null;
-  renderThread();
+  if (!opts.thread) readerThread = opts.cachedThread || null;
+  else readerThread = opts.thread;
+  $("reader-spacer").style.height = "0px";
+  renderThread({ anchor: false });
   placeReader();
+  // Start with the open email at the top: earlier emails are reachable by scrolling up.
+  // Keep it there while its content loads, until the user scrolls.
+  readerPinTop = true;
+  scrollToMessage();
   markSelectedRow();
   updateSeenButton();
   $("reader-reply").disabled = $("reader-reply-all").disabled = true;
@@ -849,7 +982,9 @@ async function openReader(folder, card, opts = {}) {
   $("rule-scope").value = "address";
   updateSenderPanel();
   $("reader-subject").textContent = card.subject || "(no subject)";
-  $("reader-from").textContent = card.from;
+  $("reader-from").textContent = card.from || "(unknown sender)";
+  $("reader-from-address").textContent = card.from_address && card.from_address !== card.from ? card.from_address : "";
+  setAvatar($("reader-avatar"), card.from || card.from_address || "?");
   $("reader-to").textContent = "";
   $("reader-cc").textContent = "";
   $("reader-cc").hidden = $("reader-cc-label").hidden = true;
@@ -877,12 +1012,7 @@ async function openReader(folder, card, opts = {}) {
     renderAttachments(folder, card.uid, msg.attachments || []);
     renderReaderBody();
     if (opts.then === "reply") replyTo(false);
-    if (opts.thread) {
-      readerThread = opts.thread;
-      renderThread();
-    } else {
-      loadThread(folder, card, msg);
-    }
+    if (!opts.thread) loadThread(folder, card, msg);
   } catch (e) {
     $("reader-body").replaceChildren(el("pre", "error", String(e)));
   }
@@ -899,7 +1029,7 @@ async function loadThread(folder, card, msg) {
     });
     if (readerCard?.card !== card) return; // another email was opened meanwhile
     readerThread = entries;
-    renderThread();
+    renderThread({ anchor: true });
   } catch (e) {
     console.error("conversation lookup failed", e);
   }
@@ -907,16 +1037,60 @@ async function loadThread(folder, card, msg) {
 
 const AVATAR_COLORS = ["#4f8fd6", "#43a07a", "#c4684f", "#8a6fd1", "#c98a2e", "#3e9bb0", "#b85c8f"];
 
-function avatar(name) {
-  const a = el("span", "avatar", (name.trim()[0] || "?").toUpperCase());
+function setAvatar(a, name) {
+  a.textContent = (name.trim()[0] || "?").toUpperCase();
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   a.style.background = AVATAR_COLORS[h % AVATAR_COLORS.length];
   return a;
 }
 
+function avatar(name) {
+  return setAvatar(el("span", "avatar"), name);
+}
+
+/// When there are earlier emails above, keeps at least one screen of content
+/// from the open email down, so it can sit at the top without the view jumping
+/// (a short email gets some empty space below it).
+function ensureRoomBelow() {
+  const scroller = $("reader-scroll");
+  const spacer = $("reader-spacer");
+  const card = $("message-card");
+  if ($("thread-before").hidden) {
+    spacer.style.height = "0px";
+    return;
+  }
+  const below = scroller.scrollHeight - spacer.offsetHeight - (card.offsetTop - scroller.firstElementChild.offsetTop);
+  spacer.style.height = Math.max(0, scroller.clientHeight - below) + "px";
+}
+
+/// Scrolls the conversation so the open email starts at the top.
+function scrollToMessage(smooth = false) {
+  const scroller = $("reader-scroll");
+  const card = $("message-card");
+  scroller.scrollTo({ top: Math.max(0, card.offsetTop - scroller.offsetTop - 4), behavior: smooth ? "smooth" : "auto" });
+}
+
+$("reader-earlier").addEventListener("click", () => $("reader-scroll").scrollTo({ top: 0, behavior: "smooth" }));
+
 /// Earlier and later emails of the conversation as compact rows around the open one.
-function renderThread() {
+/// With `anchor`, the open email keeps its place on screen while rows are added above it.
+function renderThread({ anchor = false } = {}) {
+  const scroller = $("reader-scroll");
+  const card = $("message-card");
+  const offsetBefore = card.offsetTop;
+  const scrollBefore = scroller.scrollTop;
+  fillThread();
+  ensureRoomBelow();
+  if (readerPinTop) scrollToMessage();
+  else if (anchor) scroller.scrollTop = scrollBefore + (card.offsetTop - offsetBefore);
+  const older = $("thread-before").querySelectorAll(".thread-row").length;
+  $("reader-earlier").hidden = !older;
+  $("reader-earlier").textContent = `↑ ${older} earlier`;
+  $("reader-earlier").title = `Show the ${older} earlier email${older === 1 ? "" : "s"} of this conversation`;
+}
+
+function fillThread() {
   const before = $("thread-before");
   const after = $("thread-after");
   before.replaceChildren();
@@ -959,6 +1133,21 @@ $("reader-quote").addEventListener("click", () => {
   renderReaderBody();
 });
 
+/// Makes the email frame as tall as its content (and keeps it so while images load).
+function fitFrame(frame) {
+  const doc = frame.contentDocument;
+  if (!doc) return;
+  const fit = () => {
+    // The <html> box is as tall as the content (scrollHeight would never shrink below the frame).
+    frame.style.height = Math.max(80, Math.ceil(doc.documentElement.getBoundingClientRect().height)) + "px";
+    ensureRoomBelow();
+    if (readerPinTop) scrollToMessage();
+  };
+  fit();
+  new ResizeObserver(fit).observe(doc.body);
+  for (const img of doc.images) img.addEventListener("load", fit);
+}
+
 function renderReaderBody() {
   const msg = readerMessage;
   const body = $("reader-body");
@@ -969,7 +1158,10 @@ function renderReaderBody() {
   const text = hasQuote && !readerQuoteShown && msg.text_main ? msg.text_main : msg.text;
   if (readerMode === "html" && msg.html) {
     const frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", ""); // no scripts, no navigation
+    // No scripts and no navigation. Same origin (without scripts) only lets the
+    // app measure the content, so the frame grows to the full email height.
+    frame.setAttribute("sandbox", "allow-same-origin");
+    frame.addEventListener("load", () => fitFrame(frame));
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.srcdoc =
       `<!doctype html><html><head><meta charset="utf-8">` +

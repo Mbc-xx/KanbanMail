@@ -16,7 +16,17 @@ Written in Rust with [Tauri](https://tauri.app).
 - Drag & drop between columns moves the email on the server (MOVE, or
   COPY + `\Deleted` + EXPUNGE).
 - Pin via the IMAP `\Flagged` flag: 📌 icon on the card; pinned emails stay on top.
-- Live updates (IDLE, or polling every 60 s).
+- Live updates with few connections (mail servers limit them per user, shared
+  with every other client and device): the Inbox is watched live with IDLE on
+  one extra connection, the other columns are checked every 60 s with a cheap
+  STATUS on the main connection.
+- Search: typing in the search box (Ctrl/⌘+F) filters the loaded cards at once
+  (case- and accent-insensitive). Enter searches the server in sender,
+  recipients and subject across Inbox, Sent, Archive, the board columns and the
+  open folder; every word must match. Results open in a list with a reading
+  pane, showing the folder of each email. "Also search in the text" adds the
+  email body, which is much slower on servers without a full-text index.
+  Esc goes back to the board.
 - Email reader. Remote images are blocked by default (they can reveal that you
   opened the email): load them per email with "Load images", or always from
   the settings. Inline images embedded in the email are always shown.
@@ -31,8 +41,10 @@ Written in Rust with [Tauri](https://tauri.app).
 - Conversations: when you open an email, the other emails of the same thread
   (found through Message-ID / References in the folder, Inbox, Sent, Archive
   and the board columns, among the most recent 2000 emails of each) appear as
-  compact rows above and below it. Click a row to open that email, or its
-  reply button to answer it directly. Quoted earlier messages inside an email
+  compact rows above and below it, in one scrolling column with the open
+  email shown in full inside its own box. The open email stays in place when
+  the earlier rows arrive; scroll up (or click "↑ N earlier") to see them.
+  Click a row to open that email, or its reply button to answer it directly. Quoted earlier messages inside an email
   are hidden behind "Show quoted text".
 - Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
   In narrow columns, archive/delete appear on hover.
@@ -131,10 +143,11 @@ editing.
 
 ## Live updates
 
-If the server supports IDLE, the app keeps one connection open per column and
-is notified of changes right away (including those made by other clients).
-Otherwise it checks every 60 seconds. Some servers limit simultaneous
-connections: with many columns and other clients open you may hit that limit.
+If the server supports IDLE, the app keeps one extra connection on the Inbox
+and is notified of changes right away (including those made by other clients).
+The other columns are checked every 60 seconds on the main connection. In
+total KanbanMail uses two connections, plus a short-lived one while searching
+or reading your sent emails.
 
 ## Reading safely
 
@@ -174,6 +187,12 @@ Save a test draft twice, check that only one copy is kept, then delete it:
 
 ```bash
 cargo run -p kanbanmail-cli -- drafts
+```
+
+Search sender, recipients and subject in Inbox, Sent and Archive:
+
+```bash
+cargo run -p kanbanmail-cli -- search some words
 ```
 
 Count the people you wrote to and classify the newest Inbox emails (read-only):

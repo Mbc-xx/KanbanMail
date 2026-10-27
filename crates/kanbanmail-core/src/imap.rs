@@ -40,7 +40,7 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session> {
     client
         .login(&account.email, password)
         .await
-        .map_err(|(e, _)| anyhow!("login rifiutato: {e}"))
+        .map_err(|(e, _)| anyhow!("login rejected: {e}"))
 }
 
 /// Lists the names of all IMAP folders.
@@ -70,6 +70,7 @@ pub struct ServerCaps {
     pub r#move: bool,
     pub idle: bool,
     pub uidplus: bool,
+    pub condstore: bool,
 }
 
 pub async fn server_caps(session: &mut Session) -> Result<ServerCaps> {
@@ -78,6 +79,7 @@ pub async fn server_caps(session: &mut Session) -> Result<ServerCaps> {
         r#move: caps.has_str("MOVE"),
         idle: caps.has_str("IDLE"),
         uidplus: caps.has_str("UIDPLUS"),
+        condstore: caps.has_str("CONDSTORE"),
     })
 }
 
@@ -578,6 +580,22 @@ pub async fn load_thread(
     keys.push(format!("HEADER In-Reply-To \"{root}\""));
     let query = or_chain(&keys);
 
+    let mut out = search_folders(session, folders, &query, Some(THREAD_SEARCH_DEPTH), 50).await?;
+    out.sort_by_key(|e| e.card.date);
+    Ok(out)
+}
+
+/// Runs an IMAP search in each folder and returns the matching emails as cards,
+/// at most `per_folder` (the newest) per folder, without duplicates across folders.
+/// `depth` limits the search to the most recent emails of each folder.
+async fn search_folders(
+    session: &mut Session,
+    folders: &[String],
+    criteria: &str,
+    depth: Option<u32>,
+    per_folder: usize,
+) -> Result<Vec<ThreadEntry>> {
+    use async_imap::types::Flag;
     let mut seen_ids = std::collections::HashSet::new();
     let mut out = Vec::new();
     for folder in folders {
@@ -587,24 +605,30 @@ pub async fn load_thread(
         if mailbox.exists == 0 {
             continue;
         }
-        // Header searches scan every message: only look at the most recent ones,
-        // where ongoing conversations almost always are.
-        let start = mailbox.exists.saturating_sub(THREAD_SEARCH_DEPTH - 1).max(1);
-        let Ok(found) = session.uid_search(format!("{start}:* ({query})")).await else { continue };
+        let query = match depth {
+            Some(d) => format!("{}:* ({criteria})", mailbox.exists.saturating_sub(d - 1).max(1)),
+            None => criteria.to_string(),
+        };
+        let found = match session.uid_search(&query).await {
+            Ok(found) => found,
+            Err(e) => {
+                eprintln!("[{folder}] search failed: {e}");
+                continue;
+            }
+        };
         let mut uids: Vec<u32> = found.into_iter().collect();
         if uids.is_empty() {
             continue;
         }
         uids.sort_unstable();
-        let set = uids.iter().rev().take(50).map(u32::to_string).collect::<Vec<_>>().join(",");
+        let set = uids.iter().rev().take(per_folder).map(u32::to_string).collect::<Vec<_>>().join(",");
         let fetched: Vec<_> = session
             .uid_fetch(&set, "(UID FLAGS INTERNALDATE BODY.PEEK[]<0.32768>)")
             .await
-            .context("reading the conversation failed")?
+            .with_context(|| format!("reading results in {folder} failed"))?
             .try_collect()
             .await?;
         for f in fetched {
-            use async_imap::types::Flag;
             let Some(uid) = f.uid else { continue };
             let date = f.internal_date().map(|d| d.timestamp()).unwrap_or(0);
             let flagged = f.flags().any(|x| matches!(x, Flag::Flagged));
@@ -617,7 +641,41 @@ pub async fn load_thread(
             }
         }
     }
-    out.sort_by_key(|e| e.card.date);
+    Ok(out)
+}
+
+/// An IMAP quoted string (backslashes and quotes escaped).
+fn imap_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Searches emails whose sender, recipients or subject contain `text` (and, with
+/// `in_body`, the text of the email too, which is much slower without a server
+/// index). Newest first, at most `limit` per folder.
+pub async fn search(
+    session: &mut Session,
+    text: &str,
+    in_body: bool,
+    folders: &[String],
+    limit: usize,
+) -> Result<Vec<ThreadEntry>> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    anyhow::ensure!(!words.is_empty(), "empty search");
+    // Every word must match somewhere (AND of ORs).
+    let per_word: Vec<String> = words
+        .iter()
+        .map(|w| {
+            let q = imap_quote(w);
+            let mut keys = vec![format!("FROM {q}"), format!("TO {q}"), format!("CC {q}"), format!("SUBJECT {q}")];
+            if in_body {
+                keys.push(format!("BODY {q}"));
+            }
+            format!("({})", or_chain(&keys))
+        })
+        .collect();
+    let criteria = format!("CHARSET UTF-8 {}", per_word.join(" "));
+    let mut out = search_folders(session, folders, &criteria, None, limit).await?;
+    out.sort_by(|a, b| b.card.date.cmp(&a.card.date));
     Ok(out)
 }
 
@@ -657,4 +715,25 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
         }
     }
     Ok(out)
+}
+
+/// A cheap fingerprint of a folder (count, next UID, unread count and, with
+/// CONDSTORE, the modification sequence that also changes on flag updates).
+/// When it changes, something happened in the folder.
+pub async fn folder_fingerprint(session: &mut Session, folder: &str, caps: ServerCaps) -> Result<(u32, u32, u32, u64)> {
+    let items = if caps.condstore { "(MESSAGES UIDNEXT UNSEEN HIGHESTMODSEQ)" } else { "(MESSAGES UIDNEXT UNSEEN)" };
+    let mb = session.status(folder, items).await.with_context(|| format!("STATUS {folder} failed"))?;
+    Ok((mb.exists, mb.uid_next.unwrap_or(0), mb.unseen.unwrap_or(0), mb.highest_modseq.unwrap_or(0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quoting_and_or_chains() {
+        assert_eq!(imap_quote(r#"say "hi" \ bye"#), r#""say \"hi\" \\ bye""#);
+        assert_eq!(or_chain(&["A".into(), "B".into(), "C".into()]), "OR A OR B C");
+        assert_eq!(or_chain(&["A".into()]), "A");
+    }
 }

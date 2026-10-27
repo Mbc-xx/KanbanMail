@@ -9,6 +9,7 @@
 //!   kanbanmail-cli drafts   save a test draft twice, check one copy is kept, then delete it
 //!   kanbanmail-cli thread   show the conversation of the newest Inbox email that is a reply
 //!   kanbanmail-cli known    count the people you wrote to and classify the newest Inbox emails
+//!   kanbanmail-cli search WORDS  search sender, recipients and subject in Inbox, Sent and Archive
 
 use anyhow::Result;
 use kanbanmail_core::{account::Account, imap, secret};
@@ -92,6 +93,22 @@ async fn main() -> Result<()> {
         for f in imap::folder_tree(&mut session).await? {
             let unseen = f.unseen.filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
             println!("{}{} [{}]{unseen}", "  ".repeat(f.depth + 1), f.label, f.kind);
+        }
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("search") {
+        let text = std::env::args().skip(2).collect::<Vec<_>>().join(" ");
+        let mut folders = vec!["INBOX".to_string()];
+        for kind in ["sent", "archive"] {
+            if let Some(f) = imap::find_special_folder(&mut session, kind).await? {
+                folders.push(f);
+            }
+        }
+        let started = std::time::Instant::now();
+        let found = imap::search(&mut session, &text, false, &folders, 100).await?;
+        println!("\n\"{text}\" in {folders:?}: {} results in {:?}", found.len(), started.elapsed());
+        for e in found.iter().take(5) {
+            println!("  [{}] {} | {}", e.folder, e.card.from, e.card.subject);
         }
     }
 
