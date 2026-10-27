@@ -22,9 +22,11 @@ Written in Rust with [Tauri](https://tauri.app).
   STATUS on the main connection.
 - Search: typing in the search box (Ctrl/⌘+F) filters the loaded cards at once
   (case- and accent-insensitive). Enter searches the server in sender,
-  recipients and subject across Inbox, Sent, Archive, the board columns and the
-  open folder; every word must match. Results open in a list with a reading
-  pane, showing the folder of each email. "Also search in the text" adds the
+  recipients and subject, in two steps: first Inbox, Sent, Archive, the board
+  columns and the open folder, then every other folder (Trash, Junk and Drafts
+  excluded); every word must match. Results open in a list with a reading
+  pane, showing the folder of each email; "Unread only" and "Important only"
+  do not hide search results. "Also search in the text" adds the
   email body, which is much slower on servers without a full-text index.
   Esc goes back to the board.
 - Email reader. Remote images are blocked by default (they can reveal that you

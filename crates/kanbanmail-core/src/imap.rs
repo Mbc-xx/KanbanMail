@@ -649,6 +649,22 @@ fn imap_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Every folder worth searching: all selectable folders except Trash, Junk and Drafts.
+pub async fn searchable_folders(session: &mut Session) -> Result<Vec<String>> {
+    use async_imap::types::NameAttribute;
+    let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
+    let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".").to_string();
+    let mut out: Vec<String> = names
+        .iter()
+        .filter(|n| !n.attributes().iter().any(|a| matches!(a, NameAttribute::NoSelect)))
+        .filter(|n| !matches!(folder_kind(n.name(), n.attributes(), &delim), "trash" | "junk" | "drafts"))
+        .map(|n| n.name().to_string())
+        .collect();
+    // INBOX first: it is where most results are.
+    out.sort_by_key(|n| (!n.eq_ignore_ascii_case("INBOX"), n.to_lowercase()));
+    Ok(out)
+}
+
 /// Searches emails whose sender, recipients or subject contain `text` (and, with
 /// `in_body`, the text of the email too, which is much slower without a server
 /// index). Newest first, at most `limit` per folder.

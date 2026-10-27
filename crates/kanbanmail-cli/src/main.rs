@@ -98,15 +98,20 @@ async fn main() -> Result<()> {
 
     if std::env::args().nth(1).as_deref() == Some("search") {
         let text = std::env::args().skip(2).collect::<Vec<_>>().join(" ");
+        let all = std::env::var("ALL_FOLDERS").is_ok();
         let mut folders = vec!["INBOX".to_string()];
-        for kind in ["sent", "archive"] {
-            if let Some(f) = imap::find_special_folder(&mut session, kind).await? {
-                folders.push(f);
+        if all {
+            folders = imap::searchable_folders(&mut session).await?;
+        } else {
+            for kind in ["sent", "archive"] {
+                if let Some(f) = imap::find_special_folder(&mut session, kind).await? {
+                    folders.push(f);
+                }
             }
         }
         let started = std::time::Instant::now();
         let found = imap::search(&mut session, &text, false, &folders, 100).await?;
-        println!("\n\"{text}\" in {folders:?}: {} results in {:?}", found.len(), started.elapsed());
+        println!("\n\"{text}\" in {} folders: {} results in {:?}", folders.len(), found.len(), started.elapsed());
         for e in found.iter().take(5) {
             println!("  [{}] {} | {}", e.folder, e.card.from, e.card.subject);
         }

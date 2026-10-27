@@ -359,14 +359,26 @@ function renderCards(folder) {
   const unread = all.filter((c) => !c.seen).length;
   column.querySelector(".count").textContent = all.length;
   column.querySelector(".unread").textContent = unread ? `${unread} unread` : "";
+  // Unread only / Important only are board filters: search results show everything found.
+  const searching = !!state.view?.search;
   const list = all.filter(
-    (c) => (!state.onlyUnread || !c.seen) && (!state.onlyImportant || importance(c).important) && matchesFilter(c),
+    (c) => searching || ((!state.onlyUnread || !c.seen) && (!state.onlyImportant || importance(c).important) && matchesFilter(c)),
   );
   const container = column.querySelector(".cards");
   container.replaceChildren();
   if (!list.length) {
+    if (searching) {
+      container.append(el("div", "empty muted", state.view.searchDone ? "No emails found" : "Searching…"));
+      return;
+    }
     const filtered = all.length && (state.onlyUnread || state.onlyImportant || state.filterWords.length);
-    container.append(el("div", "empty muted", filtered ? "No emails match the filters" : "No emails"));
+    container.append(el("div", "empty muted", filtered ? "No loaded email matches" : "No emails"));
+    const text = $("search").value.trim();
+    if (text) {
+      const go = el("button", "search-all", `Search all folders for “${text}”`);
+      go.addEventListener("click", () => startSearch(text));
+      container.append(go);
+    }
     return;
   }
   // Search results come from several folders: each card carries its own.
@@ -683,24 +695,50 @@ function searchOptions() {
   return box;
 }
 
-/// Server search in Inbox, Sent, Archive, the board columns and the open folder.
+/// Server search in two steps: first Inbox, Sent, Archive, the board columns and
+/// the open folder (fast), then every other folder; results are merged as they come.
 async function runSearch() {
   const view = state.view;
   if (!view?.search) return;
   const seq = ++searchSeq;
-  const status = $("search-status");
-  if (status) status.textContent = view.inBody ? "Searching in the text, this can take a while…" : "Searching…";
-  try {
-    const folders = state.columns.map((c) => c.folder);
-    if (view.from && !folders.includes(view.from)) folders.push(view.from);
-    const entries = await invoke("search_emails", { text: view.search, inBody: !!view.inBody, folders });
-    if (seq !== searchSeq || state.view !== view) return;
+  const alive = () => seq === searchSeq && state.view === view;
+  const setStatus = (text) => {
+    const s = $("search-status");
+    if (s) s.textContent = text;
+  };
+  const summary = (entries) => {
+    const where = [...new Set(entries.map((e) => folderLabel(e.folder)))];
+    return entries.length ? `${entries.length} found in ${where.slice(0, 6).join(", ")}${where.length > 6 ? "…" : ""}` : "Nothing found yet";
+  };
+  view.searchDone = false;
+  const folders = state.columns.map((c) => c.folder);
+  if (view.from && !folders.includes(view.from)) folders.push(view.from);
+  const args = { text: view.search, inBody: !!view.inBody, folders };
+  let entries = [];
+  const show = () => {
+    entries.sort((a, b) => b.card.date - a.card.date);
     state.cards[SEARCH_KEY] = entries.map((e) => ({ ...e.card, __folder: e.folder }));
     renderCards(SEARCH_KEY);
-    const s = $("search-status");
-    if (s) s.textContent = `${entries.length} found in ${[...new Set(entries.map((e) => folderLabel(e.folder)))].join(", ") || "no folder"}`;
+  };
+  try {
+    setStatus(view.inBody ? "Searching the main folders, in the text too (slow)…" : "Searching the main folders…");
+    entries = await invoke("search_emails", { ...args, scope: "main" });
+    if (!alive()) return;
+    show();
+    setStatus(summary(entries) + " · searching the other folders…");
+    const rest = await invoke("search_emails", { ...args, scope: "rest" });
+    if (!alive()) return;
+    const seen = new Set(entries.map((e) => e.card.message_id || e.folder + "/" + e.card.uid));
+    entries = entries.concat(rest.filter((e) => !seen.has(e.card.message_id || e.folder + "/" + e.card.uid)));
+    view.searchDone = true;
+    show();
+    setStatus(summary(entries) + " · all folders searched");
   } catch (e) {
-    if (seq === searchSeq) toast("Search failed: " + e);
+    if (!alive()) return;
+    view.searchDone = true;
+    show();
+    setStatus("Search failed");
+    toast("Search failed: " + e);
   }
 }
 

@@ -499,33 +499,55 @@ async fn known_senders(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     Ok(known?.into_iter().collect())
 }
 
-/// Searches sender, recipients and subject (and with `in_body` the text too) in
-/// the given folders plus Inbox, Sent and Archive. Newest first. Uses its own
-/// connection, so a slow text search does not block the board.
+/// Searches sender, recipients and subject (and with `in_body` the text too).
+/// `scope` "main" = Inbox, Sent, Archive and the given folders (fast);
+/// "rest" = every other folder except Trash, Junk and Drafts. Newest first.
+/// Uses its own connection so a slow text search does not block the board; if
+/// the server refuses one more connection, falls back to the main one.
 #[tauri::command]
-async fn search_emails(text: String, in_body: bool, folders: Vec<String>, state: State<'_, AppState>) -> CmdResult<Vec<imap::ThreadEntry>> {
+async fn search_emails(
+    text: String,
+    in_body: bool,
+    folders: Vec<String>,
+    scope: String,
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<imap::ThreadEntry>> {
+    async fn run(s: &mut Session, text: &str, in_body: bool, extra: &[String], scope: &str) -> anyhow::Result<Vec<imap::ThreadEntry>> {
+        let mut main = vec!["INBOX".to_string()];
+        for kind in ["sent", "archive"] {
+            if let Some(f) = imap::find_special_folder(s, kind).await? {
+                main.push(f);
+            }
+        }
+        for f in extra {
+            if !main.contains(f) {
+                main.push(f.clone());
+            }
+        }
+        let folders: Vec<String> = if scope == "rest" {
+            imap::searchable_folders(s).await?.into_iter().filter(|f| !main.contains(f)).collect()
+        } else {
+            main
+        };
+        imap::search(s, text, in_body, &folders, 100).await
+    }
+
     let (account, password) = {
         let inner = state.inner.lock().await;
         (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
     };
-    let mut session = imap::connect(&account, &password).await.map_err(err)?;
-    let result: anyhow::Result<_> = async {
-        let mut all = vec!["INBOX".to_string()];
-        for kind in ["sent", "archive"] {
-            if let Some(f) = imap::find_special_folder(&mut session, kind).await? {
-                all.push(f);
-            }
+    match imap::connect(&account, &password).await {
+        Ok(mut session) => {
+            let result = run(&mut session, &text, in_body, &folders, &scope).await;
+            session.logout().await.ok();
+            result.map_err(err)
         }
-        for f in folders {
-            if !all.contains(&f) {
-                all.push(f);
-            }
+        Err(e) => {
+            eprintln!("search connection refused, using the main one: {e:#}");
+            let mut inner = state.inner.lock().await;
+            with_retry!(inner, |s, _caps| run(s, &text, in_body, &folders, &scope))
         }
-        imap::search(&mut session, &text, in_body, &all, 100).await
     }
-    .await;
-    session.logout().await.ok();
-    result.map_err(err)
 }
 
 /// Shows the number of unread Inbox emails on the app icon (Dock on macOS,
