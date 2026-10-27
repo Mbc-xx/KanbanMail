@@ -310,6 +310,7 @@ struct SettingsView {
     smtp_port: u16,
     mark_read_after_seconds: i32,
     signature: String,
+    default_bcc: String,
     use_system_contacts: bool,
     signature_html: String,
     load_remote_images: bool,
@@ -330,6 +331,7 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         smtp_port: acc.smtp_port,
         mark_read_after_seconds: settings.mark_read_after_seconds,
         signature: settings.signature,
+        default_bcc: settings.default_bcc,
         use_system_contacts: settings.use_system_contacts,
         signature_html: settings.signature_html,
         load_remote_images: settings.load_remote_images,
@@ -352,6 +354,7 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
     Settings {
         mark_read_after_seconds: settings.mark_read_after_seconds.max(-1),
         signature: settings.signature.trim_end().to_string(),
+        default_bcc: settings.default_bcc.trim().to_string(),
         use_system_contacts: settings.use_system_contacts,
         signature_html: kanbanmail_core::message::sanitize_signature(&settings.signature_html),
         load_remote_images: settings.load_remote_images,
@@ -387,12 +390,19 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, Ap
             inner.password.clone().unwrap_or_default(),
         )
     };
+    // A fixed Message-ID, so the sent email and its copy in Sent are the same email.
+    let mut draft = draft;
+    if draft.message_id.as_deref().is_none_or(str::is_empty) {
+        draft.message_id = Some(smtp::new_message_id(&account.email));
+    }
     let signature = Settings::load().map_err(err)?.html_signature();
     let message = smtp::build(&account, &draft, signature.as_ref()).map_err(err)?;
     smtp::send(&account, &password, &message).await.map_err(err)?;
 
     // The email has been sent: from here on errors are only warnings.
-    let raw = message.formatted();
+    let raw = smtp::build_sent_copy(&account, &draft, signature.as_ref())
+        .map(|m| m.formatted())
+        .unwrap_or_else(|_| message.formatted());
     let mut inner = state.inner.lock().await;
     let saved: Result<String, String> = with_retry!(inner, |s, _caps| async {
         let folder = imap::sent_folder(s).await?;
@@ -651,6 +661,11 @@ async fn system_contacts() -> CmdResult<Vec<contacts::Contact>> {
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+fn open_contacts_privacy() {
+    contacts::open_privacy_settings();
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -678,6 +693,7 @@ fn main() {
             set_sender_rule,
             known_senders,
             search_emails,
+            open_contacts_privacy,
             system_contacts
         ])
         .run(tauri::generate_context!())

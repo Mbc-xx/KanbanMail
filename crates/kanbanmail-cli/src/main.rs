@@ -193,6 +193,7 @@ async fn test_drafts(session: &mut imap::Session, account: &Account) -> Result<(
         in_reply_to: None,
         references: vec![],
         message_id: Some(id.clone()),
+        bcc: String::new(),
     };
     let folder = imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
     draft.body = "second version".into();

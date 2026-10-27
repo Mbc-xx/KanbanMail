@@ -6,6 +6,12 @@ Written in Rust with [Tauri](https://tauri.app).
 
 > Status: **in development**.
 
+![The board: every column is an IMAP folder](docs/screenshot-board.png)
+
+![Reading an email with its conversation](docs/screenshot-reader.png)
+
+<sub>Screenshots taken with fictional demo data.</sub>
+
 ## Features
 
 - First-run setup (server, email, password).
@@ -70,6 +76,9 @@ Written in Rust with [Tauri](https://tauri.app).
 - Write new emails and reply ("Reply" / "Reply all") in plain text, quoting the
   original message. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
   credentials as IMAP) and a copy is saved to the Sent folder.
+- Cc and Bcc fields; an optional "Always Bcc" address list is added to every
+  new email and reply. Bcc recipients receive the email without being visible
+  to the others, and stay recorded in your copy in the Sent folder.
 - Signature added to new emails and replies, with a rich editor in the
   settings (bold, italic, underline, links, images, or paste one from another
   email client; the HTML source can be edited too). When the signature has
@@ -116,10 +125,15 @@ npx tauri build
 
 ## Settings
 
-From the ⚙ button on the board: sender name, SMTP server and port, signature,
-system address book, seconds before an opened email is marked as read, and
-disconnecting the account. They are stored in `account.toml` and
-`settings.toml` in the configuration folder.
+From the settings button on the board, grouped in tabs:
+
+- **Account**: sender name, SMTP server and port, board columns file,
+  disconnecting the account.
+- **Writing**: signature editor, "Always Bcc", address book suggestions.
+- **Reading**: seconds before an opened email is marked as read, remote images.
+- **Important**: colleagues of your domain, "always" and "never important" lists.
+
+They are stored in `account.toml` and `settings.toml` in the configuration folder.
 
 ## Configuring columns
 

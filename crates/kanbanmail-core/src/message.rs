@@ -43,6 +43,8 @@ pub struct MessageView {
     /// Addresses in To and Cc, for "Reply all".
     pub all_recipients: Vec<String>,
     pub cc: String,
+    /// Only present in your own copies (Sent folder, drafts).
+    pub bcc: String,
     pub message_id: Option<String>,
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
@@ -159,6 +161,7 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             to: String::new(),
             all_recipients: Vec::new(),
             cc: String::new(),
+            bcc: String::new(),
             message_id: None,
             in_reply_to: None,
             references: Vec::new(),
@@ -213,6 +216,7 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
         to: recipients(m.to()),
         all_recipients,
         cc: recipients(m.cc()),
+        bcc: recipients(m.bcc()),
         message_id,
         in_reply_to: m.in_reply_to().and_then(|r| r.get(0)).map(str::to_string),
         references,

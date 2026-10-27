@@ -155,6 +155,7 @@
       <div class="compose-fields">
         <label>To <input id="compose-to" type="text" placeholder="name@example.com, other@example.com" autocomplete="off" required></label>
         <label>Cc <input id="compose-cc" type="text" autocomplete="off"></label>
+        <label>Bcc <input id="compose-bcc" type="text" autocomplete="off" placeholder="Blind copy: nobody sees these addresses"></label>
         <label>Subject <input id="compose-subject" type="text"></label>
       </div>
       <textarea id="compose-body" spellcheck="true"></textarea>
@@ -169,66 +170,104 @@
     </form>
   </div>
 
-  <!-- Settings -->
+  <!-- Settings, grouped in tabs -->
   <div id="settings" class="reader-backdrop" hidden>
-    <form id="settings-form" class="login-card settings-card">
-      <h2>Settings</h2>
-      <p class="muted" id="settings-email"></p>
-      <label>Sender name (optional)
-        <input id="set-name" type="text" placeholder="Jane Doe">
-      </label>
-      <label>SMTP server for sending
-        <input id="set-smtp" type="text" required>
-      </label>
-      <label>SMTP port
-        <select id="set-port">
-          <option value="465">465 (SSL/TLS)</option>
-          <option value="587">587 (STARTTLS)</option>
-        </select>
-      </label>
-      <div class="field">
-        <span class="field-label">Signature</span>
-        <div class="sig-toolbar">
-          <button type="button" class="icon-btn" data-cmd="bold" title="Bold"><b>B</b></button>
-          <button type="button" class="icon-btn" data-cmd="italic" title="Italic"><i>I</i></button>
-          <button type="button" class="icon-btn" data-cmd="underline" title="Underline"><u>U</u></button>
-          <button type="button" class="icon-btn" id="sig-link" title="Add a link"><svg class="icon"><use href="#i-link"/></svg></button>
-          <button type="button" class="icon-btn" id="sig-image" title="Insert an image"><svg class="icon"><use href="#i-photo"/></svg></button>
-          <button type="button" class="icon-btn" id="sig-clear" title="Remove formatting"><svg class="icon"><use href="#i-eraser"/></svg></button>
-          <span class="spacer"></span>
-          <button type="button" class="icon-btn" id="sig-html" title="Edit the HTML source"><svg class="icon"><use href="#i-code"/></svg></button>
-        </div>
-        <div id="sig-link-row" class="sig-link-row" hidden>
-          <input id="sig-link-url" type="url" placeholder="https://example.com">
-          <button type="button" id="sig-link-add">Add link</button>
-        </div>
-        <div id="sig-editor" class="sig-editor" contenteditable="true" aria-label="Signature"></div>
-        <textarea id="sig-source" class="sig-source" rows="7" spellcheck="false" hidden></textarea>
-        <input id="sig-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-        <p class="muted small">Write it here or paste one from another email client. Formatting and images are sent as HTML; plain-text clients get the text version.</p>
+    <form id="settings-form" class="settings-card">
+      <header class="settings-head">
+        <h2>Settings</h2>
+        <nav class="tabs" role="tablist">
+          <button type="button" role="tab" data-tab="account" class="tab active">Account</button>
+          <button type="button" role="tab" data-tab="writing" class="tab">Writing</button>
+          <button type="button" role="tab" data-tab="reading" class="tab">Reading</button>
+          <button type="button" role="tab" data-tab="important" class="tab">Important</button>
+        </nav>
+      </header>
+
+      <div class="tab-panels">
+        <section class="tab-panel" data-panel="account" role="tabpanel">
+          <p class="muted" id="settings-email"></p>
+          <label>Sender name (optional)
+            <input id="set-name" type="text" placeholder="Jane Doe">
+          </label>
+          <div class="row-2">
+            <label>SMTP server for sending
+              <input id="set-smtp" type="text" required>
+            </label>
+            <label>SMTP port
+              <select id="set-port">
+                <option value="465">465 (SSL/TLS)</option>
+                <option value="587">587 (STARTTLS)</option>
+              </select>
+            </label>
+          </div>
+          <div class="field">
+            <span class="field-label">Board columns</span>
+            <p class="muted small">Edit <code id="settings-config-path"></code> and restart the app.</p>
+          </div>
+          <div class="field danger-zone">
+            <span class="field-label">Disconnect</span>
+            <p class="muted small">Forget this account on this computer and remove the password from the keychain. Your emails stay on the server.</p>
+            <div><button type="button" id="logout" class="danger">Disconnect account</button></div>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="writing" role="tabpanel" hidden>
+          <div class="field">
+            <span class="field-label">Signature</span>
+            <div class="sig-toolbar">
+              <button type="button" class="icon-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+              <button type="button" class="icon-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+              <button type="button" class="icon-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+              <button type="button" class="icon-btn" id="sig-link" title="Add a link"><svg class="icon"><use href="#i-link"/></svg></button>
+              <button type="button" class="icon-btn" id="sig-image" title="Insert an image"><svg class="icon"><use href="#i-photo"/></svg></button>
+              <button type="button" class="icon-btn" id="sig-clear" title="Remove formatting"><svg class="icon"><use href="#i-eraser"/></svg></button>
+              <span class="spacer"></span>
+              <button type="button" class="icon-btn" id="sig-html" title="Edit the HTML source"><svg class="icon"><use href="#i-code"/></svg></button>
+            </div>
+            <div id="sig-link-row" class="sig-link-row" hidden>
+              <input id="sig-link-url" type="url" placeholder="https://example.com">
+              <button type="button" id="sig-link-add">Add link</button>
+            </div>
+            <div id="sig-editor" class="sig-editor" contenteditable="true" aria-label="Signature"></div>
+            <textarea id="sig-source" class="sig-source" rows="7" spellcheck="false" hidden></textarea>
+            <input id="sig-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+            <p class="muted small">Write it here or paste one from another email client. Formatting and images are sent as HTML; plain-text clients get the text version.</p>
+          </div>
+          <label>Always Bcc (optional)
+            <input id="set-bcc" type="text" placeholder="archive@example.com, me@example.com" autocomplete="off">
+          </label>
+          <p class="muted small">Added in blind copy to every new email and reply. You can still change it in each email.</p>
+          <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
+          <div class="contacts-status">
+            <span id="contacts-status" class="muted small"></span>
+            <button type="button" id="contacts-privacy" hidden>Open Privacy &amp; Security</button>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="reading" role="tabpanel" hidden>
+          <label>Mark as read after (seconds)
+            <input id="set-seconds" type="number" min="0" max="600" step="1">
+          </label>
+          <label class="toggle"><input id="set-never" type="checkbox"> Never automatically (manual only)</label>
+          <label class="toggle"><input id="set-remote" type="checkbox"> Always load remote images</label>
+          <p class="muted small">Remote images can tell the sender when and where you opened the email. When off, you can load them for a single email with "Load images".</p>
+        </section>
+
+        <section class="tab-panel" data-panel="important" role="tabpanel" hidden>
+          <p class="muted small">"Important only" shows emails from people you wrote to, your contacts and (optionally) your colleagues. Notifications, newsletters and mailing lists are left out. Your rules below win over everything: one address or <code>@domain</code> per line.</p>
+          <label class="toggle"><input id="set-same-domain" type="checkbox"> People of my own email domain are important</label>
+          <div class="rules">
+            <label>Always important<textarea id="set-allow" rows="6" spellcheck="false" placeholder="boss@example.com&#10;@client.example"></textarea></label>
+            <label>Never important<textarea id="set-block" rows="6" spellcheck="false" placeholder="@github.com&#10;news@shop.example"></textarea></label>
+          </div>
+        </section>
       </div>
-      <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
-      <label class="toggle"><input id="set-remote" type="checkbox"> Always load remote images (they can tell the sender you opened the email)</label>
-      <div class="field">
-        <span class="field-label">Important only</span>
-        <p class="muted small">Shows emails from people you wrote to, your contacts and (optionally) your colleagues. Notifications, newsletters and mailing lists are left out. Your rules below win over everything: one address or <code>@domain</code> per line.</p>
-        <label class="toggle"><input id="set-same-domain" type="checkbox"> People of my own email domain are important</label>
-        <div class="rules">
-          <label>Always important<textarea id="set-allow" rows="3" spellcheck="false" placeholder="boss@example.com&#10;@client.example"></textarea></label>
-          <label>Never important<textarea id="set-block" rows="3" spellcheck="false" placeholder="@github.com&#10;news@shop.example"></textarea></label>
-        </div>
-      </div>
-      <label>Mark as read after (seconds)
-        <input id="set-seconds" type="number" min="0" max="600" step="1">
-      </label>
-      <label class="toggle"><input id="set-never" type="checkbox"> Never automatically (manual only)</label>
-      <p class="muted small">Columns: edit <code id="settings-config-path"></code> and restart the app.</p>
-      <div class="settings-buttons">
-        <button type="button" id="logout" class="danger">Disconnect account</button>
+
+      <footer class="settings-buttons">
         <span class="spacer"></span>
         <button type="button" id="settings-cancel">Cancel</button>
         <button type="submit" class="primary">Save</button>
-      </div>
+      </footer>
     </form>
   </div>
 

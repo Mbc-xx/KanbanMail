@@ -13,6 +13,9 @@ pub struct Draft {
     pub to: String,
     #[serde(default)]
     pub cc: String,
+    /// Blind copies: they receive the email but nobody sees them.
+    #[serde(default)]
+    pub bcc: String,
     pub subject: String,
     pub body: String,
     /// Message-ID of the email being replied to (keeps the conversation threaded).
@@ -62,13 +65,20 @@ pub struct HtmlSignature {
 }
 
 /// Builds the message to send (UTF-8 plain text, plus HTML with a rich signature).
+/// The Bcc header is removed: Bcc recipients only appear in the SMTP envelope.
 pub fn build(account: &Account, draft: &Draft, signature: Option<&HtmlSignature>) -> Result<Message> {
-    build_message(account, draft, false, signature)
+    build_message(account, draft, false, signature, false)
+}
+
+/// The copy of a sent email kept in the Sent folder: same as [`build`], but it
+/// keeps the Bcc header so you can see who was in blind copy.
+pub fn build_sent_copy(account: &Account, draft: &Draft, signature: Option<&HtmlSignature>) -> Result<Message> {
+    build_message(account, draft, false, signature, true)
 }
 
 /// Builds a draft: recipients may be missing and unfinished addresses are skipped.
 pub fn build_draft(account: &Account, draft: &Draft, signature: Option<&HtmlSignature>) -> Result<Message> {
-    build_message(account, draft, true, signature)
+    build_message(account, draft, true, signature, true)
 }
 
 fn escape_html(text: &str) -> String {
@@ -137,19 +147,25 @@ fn html_body(body: &str, signature: Option<&HtmlSignature>) -> Option<MultiPart>
     })
 }
 
-fn build_message(account: &Account, draft: &Draft, is_draft: bool, signature: Option<&HtmlSignature>) -> Result<Message> {
+fn build_message(
+    account: &Account,
+    draft: &Draft,
+    is_draft: bool,
+    signature: Option<&HtmlSignature>,
+    keep_bcc: bool,
+) -> Result<Message> {
     let from: Mailbox = match account.display_name.as_deref().filter(|n| !n.trim().is_empty()) {
         Some(name) => format!("{} <{}>", name.trim(), account.email).parse(),
         None => account.email.parse(),
     }
     .map_err(|_| anyhow!("invalid sender address: {}", account.email))?;
 
-    let (to, cc) = if is_draft {
-        (parse_list_lenient(&draft.to), parse_list_lenient(&draft.cc))
+    let (to, cc, bcc) = if is_draft {
+        (parse_list_lenient(&draft.to), parse_list_lenient(&draft.cc), parse_list_lenient(&draft.bcc))
     } else {
-        (parse_list(&draft.to)?, parse_list(&draft.cc)?)
+        (parse_list(&draft.to)?, parse_list(&draft.cc)?, parse_list(&draft.bcc)?)
     };
-    anyhow::ensure!(is_draft || !to.is_empty(), "missing recipient");
+    anyhow::ensure!(is_draft || !to.is_empty() || !cc.is_empty() || !bcc.is_empty(), "missing recipient");
 
     let mut builder = Message::builder().from(from.clone()).subject(draft.subject.trim()).date_now();
     if is_draft {
@@ -161,6 +177,12 @@ fn build_message(account: &Account, draft: &Draft, is_draft: bool, signature: Op
     }
     for m in cc {
         builder = builder.cc(m);
+    }
+    for m in bcc {
+        builder = builder.bcc(m);
+    }
+    if keep_bcc {
+        builder = builder.keep_bcc();
     }
     if let Some(id) = draft.in_reply_to.as_deref().filter(|s| !s.is_empty()) {
         builder = builder.in_reply_to(angle(id));
@@ -231,6 +253,7 @@ mod tests {
             in_reply_to: Some("orig@example.com".into()),
             references: vec!["first@example.com".into()],
             message_id: Some("fixed@example.com".into()),
+            bcc: "boss@example.com".into(),
         };
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("From: \"Mario Rossi\" <me@example.com>"), "{raw}");
@@ -238,12 +261,19 @@ mod tests {
         assert!(raw.contains("References: <first@example.com> <orig@example.com>"), "{raw}");
         assert!(raw.contains("Cc: b@example.com, c@example.com"), "{raw}");
         assert!(raw.contains("Message-ID: <fixed@example.com>"), "{raw}");
+        // Sent on the wire without Bcc header, but delivered to the Bcc recipient.
+        let sent = build(&acc, &draft, None).unwrap();
+        assert!(!String::from_utf8(sent.formatted()).unwrap().contains("Bcc:"));
+        assert!(sent.envelope().to().iter().any(|a| a.to_string() == "boss@example.com"));
+        // The Sent copy keeps it.
+        let copy = String::from_utf8(build_sent_copy(&acc, &draft, None).unwrap().formatted()).unwrap();
+        assert!(copy.contains("Bcc: boss@example.com"), "{copy}");
     }
 
     #[test]
     fn draft_allows_missing_and_unfinished_recipients() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None };
+        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new() };
         let raw = String::from_utf8(build_draft(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("To: a@example.com"), "{raw}");
         let empty = Draft { to: String::new(), ..draft };
@@ -254,7 +284,7 @@ mod tests {
     #[test]
     fn rejects_bad_address() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None };
+        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new() };
         assert!(build(&acc, &draft, None).is_err());
     }
 
@@ -273,6 +303,7 @@ mod tests {
             in_reply_to: None,
             references: vec![],
             message_id: None,
+            bcc: String::new(),
         };
         let raw = String::from_utf8(build(&acc, &draft, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/alternative"), "{raw}");

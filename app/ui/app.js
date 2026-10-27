@@ -14,6 +14,7 @@ const state = {
   markReadAfter: 3, // seconds; -1 = never
   signature: "",
   signatureHtml: "",
+  defaultBcc: "", // addresses added in Bcc of every new email and reply
   loadRemoteImages: false, // load remote images in every email without asking
   onlyUnread: false,
   onlyImportant: false,
@@ -170,6 +171,7 @@ async function openBoard() {
       state.markReadAfter = settings.mark_read_after_seconds;
       state.signature = settings.signature;
       state.signatureHtml = settings.signature_html;
+      state.defaultBcc = settings.default_bcc;
       state.loadRemoteImages = settings.load_remote_images;
       state.allow = settings.important_allow;
       state.block = settings.important_block;
@@ -1292,13 +1294,14 @@ const compose = {
 };
 
 function composeSnapshot() {
-  return ["compose-to", "compose-cc", "compose-subject", "compose-body"].map((id) => $(id).value).join("\u0000");
+  return ["compose-to", "compose-cc", "compose-bcc", "compose-subject", "compose-body"].map((id) => $(id).value).join("\u0000");
 }
 
 function composeDraft() {
   return {
     to: $("compose-to").value,
     cc: $("compose-cc").value,
+    bcc: $("compose-bcc").value,
     subject: $("compose-subject").value,
     body: $("compose-body").value,
     in_reply_to: compose.context?.in_reply_to ?? null,
@@ -1334,10 +1337,11 @@ async function saveDraft() {
   return compose.saving;
 }
 
-async function openComposer({ to = "", cc = "", subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false } = {}) {
+async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false } = {}) {
   $("compose-title").textContent = title;
   $("compose-to").value = to;
   $("compose-cc").value = cc;
+  $("compose-bcc").value = bcc;
   $("compose-subject").value = subject;
   $("compose-body").value = body;
   $("compose-from").textContent = "From: " + state.email;
@@ -1419,6 +1423,7 @@ async function openDraft(folder, card) {
     openComposer({
       to: msg.to,
       cc: msg.cc,
+      bcc: msg.bcc,
       subject: msg.subject,
       body: msg.text || "",
       context: msg.in_reply_to ? { in_reply_to: msg.in_reply_to, references: msg.references.filter((r) => r !== msg.in_reply_to) } : null,
@@ -1497,7 +1502,8 @@ $("compose-form").addEventListener("submit", async (ev) => {
     const result = await invoke("send_mail", { draft: composeDraft(), reply: compose.reply });
     hideComposer();
     // People you just wrote to become known senders right away.
-    for (const part of (composeDraft().to + "," + composeDraft().cc).split(/[,;]/)) {
+    const sent = composeDraft();
+    for (const part of [sent.to, sent.cc, sent.bcc].join(",").split(/[,;]/)) {
       const m = part.match(/<([^>]+)>/) || part.match(/(\S+@\S+)/);
       if (m) state.known.add(m[1].trim().toLowerCase());
     }
@@ -1516,15 +1522,28 @@ $("compose-form").addEventListener("submit", async (ev) => {
 
 // ---------- settings ----------
 
+function showSettingsTab(name) {
+  for (const t of document.querySelectorAll(".tabs .tab")) {
+    t.classList.toggle("active", t.dataset.tab === name);
+    t.setAttribute("aria-selected", t.dataset.tab === name ? "true" : "false");
+  }
+  for (const p of document.querySelectorAll(".tab-panel")) p.hidden = p.dataset.panel !== name;
+}
+for (const t of document.querySelectorAll(".tabs .tab")) t.addEventListener("click", () => showSettingsTab(t.dataset.tab));
+
 $("open-settings").addEventListener("click", async () => {
   try {
     const s = await invoke("get_settings");
+    showSettingsTab("account");
+    $("set-bcc").value = s.default_bcc;
     $("settings-email").textContent = "Account: " + s.email;
     $("set-name").value = s.display_name;
     $("set-smtp").value = s.smtp_server;
     $("set-port").value = String(s.smtp_port);
     loadSignatureEditor(s.signature, s.signature_html);
     $("set-contacts").checked = s.use_system_contacts;
+    wasUsingContacts = s.use_system_contacts;
+    showContactsStatus();
     $("set-remote").checked = s.load_remote_images;
     $("set-same-domain").checked = s.important_same_domain;
     $("set-allow").value = s.important_allow.join("\n");
@@ -1555,6 +1574,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
         mark_read_after_seconds: seconds,
         signature: sig.text,
         signature_html: sig.html,
+        default_bcc: $("set-bcc").value,
         use_system_contacts: $("set-contacts").checked,
         load_remote_images: $("set-remote").checked,
         important_allow: $("set-allow").value.split(/[\n,;]+/),
@@ -1567,11 +1587,12 @@ $("settings-form").addEventListener("submit", async (ev) => {
     state.block = saved.important_block;
     state.sameDomain = saved.important_same_domain;
     for (const c of visibleColumns()) renderCards(c.folder);
-    if ($("set-contacts").checked) loadContacts();
+    if ($("set-contacts").checked) loadContacts(!wasUsingContacts);
     else state.contacts = [];
     state.markReadAfter = seconds;
     state.signature = sig.text;
     state.signatureHtml = sig.html;
+    state.defaultBcc = $("set-bcc").value.trim();
     state.loadRemoteImages = $("set-remote").checked;
     $("settings").hidden = true;
     toast("Settings saved", "info");
@@ -1598,9 +1619,13 @@ function loadSignatureEditor(text, html) {
 /// Plain-text and HTML versions of the signature. The HTML version is kept
 /// only when there is real formatting (bold, links, images...).
 function readSignatureEditor() {
-  showSignatureSource(false); // innerText needs the editor visible
+  showSignatureSource(false); // innerText needs the editor visible...
+  const panel = sigEditor.closest(".tab-panel");
+  const wasHidden = panel.hidden;
+  panel.hidden = false; // ...including its settings tab
   const text = sigEditor.innerText.replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   const rich = sigEditor.querySelector("img, a, b, strong, i, em, u, font, table, [style], h1, h2, h3, ul, ol");
+  panel.hidden = wasHidden;
   return { text, html: rich ? sigEditor.innerHTML.trim() : "" };
 }
 
@@ -1697,14 +1722,35 @@ $("sig-html").addEventListener("click", () => showSignatureSource($("sig-source"
 
 // ---------- address suggestions ----------
 
-async function loadContacts() {
+let wasUsingContacts = false; // the option was already on when the settings opened
+// Last result of reading the address book, shown in the settings.
+state.contactsStatus = { text: "", denied: false };
+
+/// Reads the system address book. Problems are shown in the settings, and as a
+/// message only when `announce` is set (the user has just turned the option on).
+async function loadContacts(announce = false) {
   try {
     state.contacts = await invoke("system_contacts");
+    const n = new Set(state.contacts.map((c) => c.email.toLowerCase())).size;
+    state.contactsStatus = { text: `${n} address${n === 1 ? "" : "es"} from Contacts`, denied: false };
+    if (announce) toast(state.contactsStatus.text, "info");
   } catch (e) {
     state.contacts = [];
-    toast(String(e));
+    const text = String(e);
+    state.contactsStatus = { text, denied: text.startsWith("macOS has not allowed") };
+    if (announce) toast(text + (state.contactsStatus.denied ? " You can allow it from the settings." : ""));
   }
+  showContactsStatus();
 }
+
+function showContactsStatus() {
+  const on = $("set-contacts").checked;
+  $("contacts-status").textContent = on ? state.contactsStatus.text : "";
+  $("contacts-privacy").hidden = !(on && state.contactsStatus.denied);
+}
+
+$("set-contacts").addEventListener("change", showContactsStatus);
+$("contacts-privacy").addEventListener("click", () => invoke("open_contacts_privacy").catch(() => {}));
 
 /// All known addresses: address book + senders of the loaded emails.
 function addressPool() {
@@ -1786,7 +1832,7 @@ function pickSuggestion(i) {
   hideSuggestions();
 }
 
-for (const id of ["compose-to", "compose-cc"]) {
+for (const id of ["compose-to", "compose-cc", "compose-bcc", "set-bcc"]) {
   const input = $(id);
   input.addEventListener("input", () => showSuggestions(input));
   input.addEventListener("blur", hideSuggestions);

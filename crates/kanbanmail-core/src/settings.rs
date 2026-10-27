@@ -13,6 +13,9 @@ pub struct Settings {
     /// Signature appended to new emails and replies.
     #[serde(default)]
     pub signature: String,
+    /// Addresses put in Bcc of every new email and reply (comma-separated).
+    #[serde(default)]
+    pub default_bcc: String,
     /// Suggest addresses from the operating system address book.
     #[serde(default)]
     pub use_system_contacts: bool,
@@ -51,7 +54,12 @@ fn default_mark_read() -> i32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { mark_read_after_seconds: default_mark_read(), signature: String::new(), use_system_contacts: false, signature_html: String::new(),
+        Settings {
+            mark_read_after_seconds: default_mark_read(),
+            signature: String::new(),
+            default_bcc: String::new(),
+            use_system_contacts: false,
+            signature_html: String::new(),
             load_remote_images: false,
             important_allow: Vec::new(),
             important_block: Vec::new(),

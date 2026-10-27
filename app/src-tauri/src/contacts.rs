@@ -3,6 +3,9 @@
 
 use serde::Serialize;
 
+/// Error text when macOS refuses access; the UI recognises it to offer a shortcut.
+pub const DENIED: &str = "macOS has not allowed KanbanMail to read your Contacts.";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Contact {
     pub name: String,
@@ -27,16 +30,8 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
     use std::ptr::NonNull;
 
     unsafe {
-        let status = CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts);
-        if status == CNAuthorizationStatus::Denied || status == CNAuthorizationStatus::Restricted {
-            return Err(concat!(
-                "macOS denied access to Contacts. If you are running the development build (started from Terminal), ",
-                "the permission is requested for Terminal rather than KanbanMail: it will work in the installed app. ",
-                "Otherwise enable it in System Settings → Privacy & Security → Contacts. ",
-                "Suggestions from email senders still work."
-            )
-            .into());
-        }
+        // No status check up front: on ad-hoc signed builds macOS can report "denied"
+        // while reading works. Try to read, and look at the status only if it fails.
         let store = CNContactStore::new();
         let keys: [&ProtocolObject<dyn CNKeyDescriptor>; 4] = [
             ProtocolObject::from_ref(CNContactGivenNameKey),
@@ -63,8 +58,12 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
         let ok = store.enumerateContactsWithFetchRequest_error_usingBlock(&request, Some(&mut error), &block);
         drop(block);
         if !ok {
+            let status = CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts);
+            if status == CNAuthorizationStatus::Denied || status == CNAuthorizationStatus::Restricted {
+                return Err(DENIED.into());
+            }
             let msg = error.map(|e| e.localizedDescription().to_string()).unwrap_or_default();
-            return Err(format!("reading Contacts failed: {msg}"));
+            return Err(format!("Reading Contacts failed: {msg}"));
         }
         Ok(out.into_inner())
     }
@@ -73,4 +72,12 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
 #[cfg(not(target_os = "macos"))]
 pub fn system_contacts() -> Result<Vec<Contact>, String> {
     Ok(Vec::new())
+}
+
+/// Opens System Settings on Privacy & Security → Contacts.
+pub fn open_privacy_settings() {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")
+        .spawn();
 }
