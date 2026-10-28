@@ -56,7 +56,8 @@ Written in Rust with [Tauri](https://tauri.app).
 - Calendar invitations (.ics) are shown with date, time, place and organizer;
   answer Accept / Maybe / Decline (sent to the organizer) or add the event to
   your calendar app.
-- Light, dark or system theme, and four interface sizes.
+- Light, dark or system theme, six colored themes (Sand, Rose, Mint, Ocean,
+  Forest, Midnight) and four interface sizes.
 - Email reader. Remote images are blocked by default (they can reveal that you
   opened the email): load them per email with "Load images", or always from
   the settings. Inline images embedded in the email are always shown.
@@ -91,7 +92,8 @@ Written in Rust with [Tauri](https://tauri.app).
   to return to automatic width.
 - Unread emails highlighted (blue bar and bold), unread count per column and an
   "Unread only" filter. The number of unread Inbox emails is shown as a badge
-  on the app icon in the Dock.
+  on the app icon in the Dock (only the important ones while "Important only"
+  is on).
 - "Important only" filter. An email is important when its sender is someone
   you have written to (read from your Sent folders), is in your contacts, or
   (optionally) shares your email domain. Automated emails are left out:
@@ -104,6 +106,7 @@ Written in Rust with [Tauri](https://tauri.app).
 - An opened email is marked as read after a configurable number of seconds
   (0 = immediately, or never); read/unread can also be toggled by hand.
 - The compose area is always light, like the reader.
+- ⌘↩ (Ctrl+Enter) sends the email from any field of the composer.
 - Write new emails, reply ("Reply" / "Reply all") quoting the original message,
   and forward ("Forward": the original text below a header, with its
   attachments).
@@ -169,11 +172,12 @@ From the settings button on the board, grouped in tabs:
   settings, board columns file, disconnecting the account.
 - **Writing**: signature editor, "Always Bcc", address book suggestions.
 - **Columns**: the board columns.
-- **Reading**: theme, size, undo time, notifications, seconds before an opened email is
+- **Reading**: undo time, notifications, seconds before an opened email is
   marked as read, grouping by conversation, remote images.
 - **Important**: colleagues of your domain, "always" and "never important" lists.
 - **Folders**: which folders the sidebar shows, their order and colors.
 - **Rules**: automatic rules for new Inbox emails.
+- **Appearance**: theme and interface size, previewed while you choose.
 
 They are stored in `account.toml` and `settings.toml` in the configuration folder
 (`~/Library/Application Support/KanbanMail` on macOS), next to `board.toml`. The

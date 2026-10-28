@@ -266,7 +266,7 @@ function offerUndo(message, moves) {
 /// Theme ("system", "light", "dark") and interface size (percent).
 function applyAppearance(theme, zoom) {
   const root = document.documentElement;
-  if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+  if (theme && theme !== "system") root.dataset.theme = theme;
   else delete root.dataset.theme;
   root.style.zoom = String((zoom || 100) / 100);
   local.set("appearance", JSON.stringify({ theme, zoom }));
@@ -445,7 +445,10 @@ function applySettingsState(settings) {
   state.rules = settings.rules || [];
   state.notify = settings.notify || "important";
   state.undoSeconds = settings.undo_seconds ?? 8;
+  state.theme = settings.theme;
+  state.zoom = settings.zoom;
   applyAppearance(settings.theme, settings.zoom);
+  updateBadge();
 }
 
 async function openBoard({ fromCache = false } = {}) {
@@ -651,7 +654,10 @@ async function loadColumn(folder) {
     state.cards[folder] = await invoke("load_column", { folder, limit: state.limits[folder] || null });
     renderCards(folder);
     if (state.columns.some((c) => c.folder === folder)) cacheSet("cards:" + folder, state.cards[folder].slice(0, 200));
-    if (folder.toUpperCase() === "INBOX") afterInboxLoaded(state.cards[folder]);
+    if (folder.toUpperCase() === "INBOX") {
+      afterInboxLoaded(state.cards[folder]);
+      updateBadge();
+    }
   } catch (e) {
     toast(`Could not load ${folder}: ${e}`);
   }
@@ -726,6 +732,7 @@ async function checkInbox() {
     const cards = await invoke("load_column", { folder: "INBOX", limit: null });
     state.cards.INBOX = cards;
     afterInboxLoaded(cards);
+    updateBadge();
   } catch (e) {
     console.error(e);
   }
@@ -1072,6 +1079,7 @@ async function togglePin(folder, card, cardEl) {
 $("only-important").addEventListener("change", (ev) => {
   state.onlyImportant = ev.target.checked;
   local.set("onlyImportant", ev.target.checked ? "1" : "");
+  updateBadge();
   for (const c of visibleColumns()) renderCards(c.folder);
 });
 
@@ -1082,6 +1090,7 @@ const KNOWN_REFRESH_MS = 30 * 60 * 1000;
 async function loadKnownSenders() {
   try {
     state.known = new Set(await invoke("known_senders"));
+    updateBadge();
     for (const c of visibleColumns()) renderCards(c.folder);
     if (readerCard) updateSenderPanel();
   } catch (e) {
@@ -1142,6 +1151,7 @@ async function setSenderRule(kind) {
   try {
     [state.allow, state.block] = await invoke("set_sender_rule", { pattern, rule });
     updateSenderPanel();
+    updateBadge();
     for (const c of visibleColumns()) renderCards(c.folder);
     toast(rule === "none" ? `Rule removed for ${pattern}` : `${pattern} is now ${kind === "allow" ? "always" : "never"} important`, "info");
   } catch (e) {
@@ -1171,11 +1181,21 @@ async function loadFolders() {
     state.folders = await invoke("list_folders");
     cacheSet("folders", state.folders);
     renderFolders();
-    const inboxUnread = state.folders.find((f) => f.kind === "inbox")?.unseen || 0;
-    invoke("set_unread_badge", { count: inboxUnread }).catch(() => {});
+    updateBadge();
   } catch (e) {
     toast("Could not read folders: " + e);
   }
+}
+
+/// The Dock badge: unread Inbox emails, or only the important ones when
+/// "Important only" is on (counted among the loaded Inbox emails).
+function updateBadge() {
+  const inbox = state.cards.INBOX;
+  const count =
+    state.onlyImportant && inbox
+      ? inbox.filter((c) => !c.seen && importance(c).important).length
+      : state.folders.find((f) => f.kind === "inbox")?.unseen || 0;
+  invoke("set_unread_badge", { count }).catch(() => {});
 }
 
 let countsTimer;
@@ -1919,7 +1939,7 @@ document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!$("dialog").hidden) closeDialog(null);
   else if (!$("composer").hidden) closeComposer();
-  else if (!$("settings").hidden) $("settings").hidden = true;
+  else if (!$("settings").hidden) closeSettingsWithoutSaving();
   else if (!$("reader").hidden) closeReader();
 });
 
@@ -2453,6 +2473,14 @@ $("compose-close").addEventListener("click", () => closeComposer());
 $("compose-cancel").addEventListener("click", () => closeComposer());
 $("compose-discard").addEventListener("click", () => discardComposer());
 
+// ⌘↩ (Ctrl+Enter on Windows/Linux) sends from any field of the composer.
+$("compose-form").addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" || !(ev.metaKey || ev.ctrlKey) || $("compose-send").disabled) return;
+  ev.preventDefault();
+  hideSuggestions();
+  $("compose-form").requestSubmit();
+});
+
 $("compose-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (!$("compose-subject").value.trim()) {
@@ -2541,7 +2569,15 @@ $("open-settings").addEventListener("click", async () => {
 });
 
 $("set-never").addEventListener("change", (ev) => ($("set-seconds").disabled = ev.target.checked));
-$("settings-cancel").addEventListener("click", () => ($("settings").hidden = true));
+// Theme and size preview while choosing; Cancel restores the saved ones.
+for (const id of ["set-theme", "set-zoom"]) {
+  $(id).addEventListener("change", () => applyAppearance($("set-theme").value, parseInt($("set-zoom").value, 10)));
+}
+function closeSettingsWithoutSaving() {
+  applyAppearance(state.theme, state.zoom);
+  $("settings").hidden = true;
+}
+$("settings-cancel").addEventListener("click", closeSettingsWithoutSaving);
 
 $("settings-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -3113,7 +3149,7 @@ for (const id of ["compose-to", "compose-cc", "compose-bcc", "set-bcc"]) {
       suggest.active = (suggest.active + (ev.key === "ArrowDown" ? 1 : n - 1)) % n;
       lis[suggest.active]?.classList.add("active");
       lis[suggest.active]?.scrollIntoView({ block: "nearest" });
-    } else if (ev.key === "Enter" || ev.key === "Tab") {
+    } else if ((ev.key === "Enter" && !ev.metaKey && !ev.ctrlKey) || ev.key === "Tab") {
       ev.preventDefault();
       pickSuggestion(suggest.active);
     } else if (ev.key === "Escape") {

@@ -221,7 +221,7 @@
         <span class="spacer"></span>
         <button type="button" id="compose-discard" class="danger" title="Delete this draft"><svg class="icon"><use href="#i-trash"/></svg><span>Discard</span></button>
         <button type="button" id="compose-cancel" title="Close and keep a draft">Close</button>
-        <button type="submit" id="compose-send" class="primary">Send</button>
+        <button type="submit" id="compose-send" class="primary" title="Send (⌘↩)">Send</button>
       </footer>
     </form>
   </div>
@@ -239,6 +239,7 @@
           <button type="button" role="tab" data-tab="important" class="tab">Important</button>
           <button type="button" role="tab" data-tab="folders" class="tab">Folders</button>
           <button type="button" role="tab" data-tab="rules" class="tab">Rules</button>
+          <button type="button" role="tab" data-tab="appearance" class="tab">Appearance</button>
         </nav>
       </header>
 
@@ -281,6 +282,37 @@
           <div id="column-prefs" class="folder-prefs"></div>
           <div><button type="button" id="add-column">+ Add column</button></div>
           <datalist id="folder-names"></datalist>
+        </section>
+
+        <section class="tab-panel" data-panel="appearance" role="tabpanel" hidden>
+          <p class="muted small">Changes apply right away so you can see them; Save keeps them, Cancel goes back. Emails are always shown on a white background.</p>
+          <div class="row-2">
+            <label>Theme
+              <select id="set-theme">
+                <option value="system">Same as the system</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <optgroup label="Colored, light">
+                  <option value="sand">Sand</option>
+                  <option value="rose">Rose</option>
+                  <option value="mint">Mint</option>
+                </optgroup>
+                <optgroup label="Colored, dark">
+                  <option value="ocean">Ocean</option>
+                  <option value="forest">Forest</option>
+                  <option value="midnight">Midnight</option>
+                </optgroup>
+              </select>
+            </label>
+            <label>Size
+              <select id="set-zoom">
+                <option value="90">Small</option>
+                <option value="100">Normal</option>
+                <option value="110">Large</option>
+                <option value="125">Extra large</option>
+              </select>
+            </label>
+          </div>
         </section>
 
         <section class="tab-panel" data-panel="rules" role="tabpanel" hidden>
@@ -331,23 +363,6 @@
             <input id="set-seconds" type="number" min="0" max="600" step="1">
           </label>
           <label class="toggle"><input id="set-never" type="checkbox"> Never automatically (manual only)</label>
-          <div class="row-2">
-            <label>Theme
-              <select id="set-theme">
-                <option value="system">Same as the system</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </label>
-            <label>Size
-              <select id="set-zoom">
-                <option value="90">Small</option>
-                <option value="100">Normal</option>
-                <option value="110">Large</option>
-                <option value="125">Extra large</option>
-              </select>
-            </label>
-          </div>
           <label>Undo after archiving, deleting or moving
             <select id="set-undo">
               <option value="0">Off</option>
