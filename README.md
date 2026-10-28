@@ -38,6 +38,12 @@ Written in Rust with [Tauri](https://tauri.app).
 - Links in emails open in the default browser (mailto links open a new email).
 - Undo after archiving, deleting, marking as spam or moving emails; how long
   the "Undo" button stays (or no undo at all) is set in Settings → Reading.
+- Waiting column: in the board column of emails you are waiting on (the one
+  named "Waiting", or another chosen in Settings → Columns), an email shows
+  "↩ Replied" as soon as an answer in the same conversation arrives (click it
+  to open the answer), and "Waiting N days" once it has waited longer than the
+  chosen time (3 days by default). A reminder you send in the conversation
+  (found in Sent) restarts the count, and only answers after it count.
 - Board columns are edited from the settings (add, rename, drag to reorder,
   remove; type a new folder name to create it).
 - "Load more" at the bottom of a column or folder for older emails.
@@ -51,6 +57,17 @@ Written in Rust with [Tauri](https://tauri.app).
   was closed are processed when it starts again. Rules that also work with the
   app closed must live on the mail server (e.g. your provider's email filters).
 - Spam / Not spam, and "Empty Trash" / "Empty Junk" (with confirmation).
+- Copy on this Mac (a local SQLite database): every folder opens at once with
+  what is already known, then only new emails and changed flags are
+  downloaded. Recent emails of the Inbox and the board columns are downloaded
+  in the background, so they open instantly. Searching shows the matches on
+  this Mac first (sender, recipients, subject and the text of downloaded
+  emails, accents ignored), then the server results. Conversations are first
+  built from the local copy, then completed by the server.
+- Works without a connection: the board and the downloaded emails stay
+  readable and searchable; moving, archiving, deleting, pinning, read/unread
+  and sending are kept in a queue and done, in order, as soon as the server can
+  be reached again (the status line shows how many changes are waiting).
 - Instant start: the board of the last session is shown right away from a local
   cache, then refreshed from the server.
 - Calendar invitations (.ics) are shown with date, time, place and organizer;
@@ -58,6 +75,8 @@ Written in Rust with [Tauri](https://tauri.app).
   your calendar app.
 - Light, dark or system theme, six colored themes (Sand, Rose, Mint, Ocean,
   Forest, Midnight) and four interface sizes.
+- Preview text: none, 1 or 2 lines, on board cards and (separately) in folder
+  lists, where it runs under the sender and the subject.
 - Email reader. Remote images are blocked by default (they can reveal that you
   opened the email): load them per email with "Load images", or always from
   the settings. Inline images embedded in the email are always shown.
@@ -69,9 +88,14 @@ Written in Rust with [Tauri](https://tauri.app).
   compact list with a reading pane on the right (drag the divider to resize);
   drop a card on a sidebar folder to move it there. On the board, emails open
   in a popup.
+- Senders are shown with their initials in a colored circle.
 - Optional grouping by conversation (Settings → Reading): the board and the
   folder lists show one card per conversation, with its latest email, the
-  people involved and how many emails it has. Archive, delete, pin and drag act
+  people involved and how many emails it has (in folder lists: how many are
+  unread). In folder lists, › opens a conversation to show each of its emails
+  below it, also those in other folders such as Sent or Archive (tagged with
+  their folder); click one to read it, ⌄ closes it. Replies show › even when
+  the rest of their conversation is in other folders. Archive, delete, pin and drag act
   on the whole conversation.
 - "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,
   Junk and Drafts excluded) in one list, each tagged with its folder.
@@ -84,13 +108,17 @@ Written in Rust with [Tauri](https://tauri.app).
   compact rows above and below it, in one scrolling column with the open
   email shown in full inside its own box. The open email stays in place when
   the earlier rows arrive; scroll up (or click "↑ N earlier") to see them.
-  Click a row to open that email, or its reply button to answer it directly. Quoted earlier messages inside an email
+  Click a row to open that email, or its reply button to answer it directly.
+  A bar under the subject acts on the whole conversation: pin, read/unread,
+  archive, delete, spam and move to a folder (your own sent emails are left in
+  Sent when moving). Quoted earlier messages inside an email
   are hidden behind "Show quoted text".
 - Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
   In narrow columns, archive/delete appear on hover.
 - Resizable columns: drag the right edge (minimum 160 px); double-click the edge
   to return to automatic width.
-- Unread emails highlighted (blue bar and bold), unread count per column and an
+- Unread emails stand out: a dot and the subject in the theme color, bold
+  sender; unread count per column and an
   "Unread only" filter. The number of unread Inbox emails is shown as a badge
   on the app icon in the Dock (only the important ones while "Important only"
   is on).
@@ -106,12 +134,22 @@ Written in Rust with [Tauri](https://tauri.app).
 - An opened email is marked as read after a configurable number of seconds
   (0 = immediately, or never); read/unread can also be toggled by hand.
 - The compose area is always light, like the reader.
+- Recipients appear as chips with the person's name: double-click one to see
+  its address, click to select it (⌘-click for more), drag the selection
+  between To, Cc and Bcc, and remove it with × or Backspace.
 - ⌘↩ (Ctrl+Enter) sends the email from any field of the composer.
+- Undo send: after "Send" the email waits a few seconds (10 by default, set in
+  Settings → Writing, or off) with an "Undo" button that brings it back to the
+  composer. While it waits it is kept in Drafts, so quitting the app does not
+  lose it.
 - Write new emails, reply ("Reply" / "Reply all") quoting the original message,
   and forward ("Forward": the original text below a header, with its
   attachments).
-- Attach files with the paperclip button or by dropping them on the composer
-  (up to about 25 MB in total); attachments are kept in drafts too.
+- Attach files with the paperclip button (the system Open panel; the app reads
+  the files itself, downloading iCloud files if needed) or by dropping them on
+  the composer (up to about 25 MB in total); attachments are kept in drafts
+  too. An attachment whose content cannot be read is refused instead of being
+  sent empty.
 - Plain text, Markdown (bold, italic, lists, links, headings, tables and inline
   HTML, with a preview) or Rich: a visual editor with bold, italic, underline,
   lists, quotes and links, where pasted formatting and images are kept. Markdown
@@ -169,15 +207,18 @@ npx tauri build
 From the settings button on the board, grouped in tabs:
 
 - **Account**: sender name, SMTP server and port, export and import of the
-  settings, board columns file, disconnecting the account.
-- **Writing**: signature editor, "Always Bcc", address book suggestions.
-- **Columns**: the board columns.
+  settings, the copy on this Mac (space it may use, background download,
+  clearing it), board columns file, disconnecting the account.
+- **Writing**: signature editor, "Always Bcc", undo send delay, address book
+  suggestions.
+- **Columns**: the board columns and the waiting column.
 - **Reading**: undo time, notifications, seconds before an opened email is
   marked as read, grouping by conversation, remote images.
 - **Important**: colleagues of your domain, "always" and "never important" lists.
 - **Folders**: which folders the sidebar shows, their order and colors.
 - **Rules**: automatic rules for new Inbox emails.
-- **Appearance**: theme and interface size, previewed while you choose.
+- **Appearance**: theme, interface size and preview lines, previewed while you
+  choose.
 
 They are stored in `account.toml` and `settings.toml` in the configuration folder
 (`~/Library/Application Support/KanbanMail` on macOS), next to `board.toml`. The
@@ -208,6 +249,18 @@ On servers that keep every folder inside `INBOX` (such as SiteGround/Dovecot),
 writing `Todo` is enough: the app uses or creates `INBOX.Todo`. You can also
 give the full name, e.g. `folder = "INBOX.Waiting"`. Restart the app after
 editing.
+
+## Copy on this Mac
+
+The local copy is a SQLite database in `~/Library/Caches/KanbanMail` (one file
+per account). It holds the cards of the folders you opened, the content of the
+emails you read or that were downloaded in the background (emails over 3 MB
+only when opened), a full-text index for search and the changes waiting for the
+connection. The server always stays the reference: the copy can be cleared at
+any time from Settings → Account and is rebuilt as you use the app; it is
+deleted when you disconnect the account. Emails are stored unencrypted, like in
+other mail apps (FileVault encrypts the whole disk); the password is never
+stored there.
 
 ## Live updates
 

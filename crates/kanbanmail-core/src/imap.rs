@@ -11,8 +11,17 @@ use tokio_rustls::TlsConnector;
 
 pub type Session = async_imap::Session<TlsStream<TcpStream>>;
 
+/// How long to wait for the server before giving up (slow or no connection).
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Opens the TLS connection and logs in. Returns an authenticated session.
 pub async fn connect(account: &Account, password: &str) -> Result<Session> {
+    tokio::time::timeout(CONNECT_TIMEOUT, connect_now(account, password))
+        .await
+        .map_err(|_| anyhow!("no answer from {} (offline or very slow connection)", account.server))?
+}
+
+async fn connect_now(account: &Account, password: &str) -> Result<Session> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = ClientConfig::builder()
@@ -131,6 +140,17 @@ pub struct FolderCache {
     cards: std::collections::HashMap<u32, crate::message::Card>,
 }
 
+impl FolderCache {
+    /// Starts from cards kept locally, so only what changed is downloaded.
+    pub fn from_cards(uid_validity: Option<u32>, cards: Vec<crate::message::Card>) -> Self {
+        FolderCache { uid_validity, cards: cards.into_iter().map(|c| (c.uid, c)).collect() }
+    }
+
+    pub fn uid_validity(&self) -> Option<u32> {
+        self.uid_validity
+    }
+}
+
 /// Loads the most recent cards of a folder (at most `limit`).
 /// Downloads only new emails; for the others only the flags are refreshed.
 pub async fn load_cards(
@@ -218,6 +238,47 @@ pub async fn load_raw(session: &mut Session, folder: &str, uid: u32) -> Result<V
         .iter()
         .find_map(|f| f.body().map(<[u8]>::to_vec))
         .ok_or_else(|| anyhow!("the email no longer exists (moved by another program?)"))
+}
+
+/// Downloads several full emails of a folder (without marking them as read),
+/// skipping those bigger than `max_size` bytes. Returns (UID, content or None
+/// when too big, size).
+pub async fn fetch_raws(session: &mut Session, folder: &str, uids: &[u32], max_size: u64) -> Result<Vec<(u32, Option<Vec<u8>>, u64)>> {
+    if uids.is_empty() {
+        return Ok(Vec::new());
+    }
+    session.examine(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let sizes: Vec<_> = session
+        .uid_fetch(&set, "(UID RFC822.SIZE)")
+        .await
+        .context("reading sizes failed")?
+        .try_collect()
+        .await?;
+    let mut out = Vec::new();
+    let mut small = Vec::new();
+    for f in &sizes {
+        let (Some(uid), Some(size)) = (f.uid, f.size) else { continue };
+        if u64::from(size) > max_size {
+            out.push((uid, None, u64::from(size)));
+        } else {
+            small.push(uid);
+        }
+    }
+    if !small.is_empty() {
+        let set = small.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let fetched: Vec<_> = session
+            .uid_fetch(&set, "(UID BODY.PEEK[])")
+            .await
+            .context("reading the emails failed")?
+            .try_collect()
+            .await?;
+        for f in fetched {
+            let (Some(uid), Some(body)) = (f.uid, f.body()) else { continue };
+            out.push((uid, Some(body.to_vec()), body.len() as u64));
+        }
+    }
+    Ok(out)
 }
 
 /// Downloads the full email for the reader (without marking it as read).

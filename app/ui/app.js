@@ -46,7 +46,7 @@ function show(screenId) {
 let toastTimer;
 /// A message at the bottom. With `action` ({ label, run }) it shows a button
 /// (e.g. "Undo") and stays a little longer.
-function toast(message, kind = "error", action = null) {
+function toast(message, kind = "error", action = null, seconds = null) {
   const el = $("toast");
   el.replaceChildren(el_text(message));
   if (action) {
@@ -61,7 +61,8 @@ function toast(message, kind = "error", action = null) {
   el.className = "toast" + (kind === "info" ? " info" : "");
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), action ? (state.undoSeconds || 8) * 1000 : kind === "info" ? 2500 : 7000);
+  const ms = seconds ? seconds * 1000 : action ? (state.undoSeconds || 8) * 1000 : kind === "info" ? 2500 : 7000;
+  toastTimer = setTimeout(() => (el.hidden = true), ms);
 }
 
 function el_text(text) {
@@ -264,17 +265,30 @@ function offerUndo(message, moves) {
 // ---------- appearance ----------
 
 /// Theme ("system", "light", "dark") and interface size (percent).
-function applyAppearance(theme, zoom) {
+/// Theme, size and preview lines: { theme, zoom, preview_board, preview_list }.
+function applyAppearance(a) {
   const root = document.documentElement;
-  if (theme && theme !== "system") root.dataset.theme = theme;
+  if (a.theme && a.theme !== "system") root.dataset.theme = a.theme;
   else delete root.dataset.theme;
-  root.style.zoom = String((zoom || 100) / 100);
-  local.set("appearance", JSON.stringify({ theme, zoom }));
+  root.style.zoom = String((a.zoom || 100) / 100);
+  root.dataset.previewBoard = String(a.preview_board ?? 2);
+  root.dataset.previewList = String(a.preview_list ?? 1);
+  local.set("appearance", JSON.stringify(a));
 }
 try {
   const a = JSON.parse(localStorage.getItem("appearance") || "null");
-  if (a) applyAppearance(a.theme, a.zoom);
+  if (a) applyAppearance(a);
 } catch (_) {}
+
+/// The appearance chosen in the settings dialog (previewed before saving).
+function appearanceFromForm() {
+  return {
+    theme: $("set-theme").value,
+    zoom: parseInt($("set-zoom").value, 10),
+    preview_board: parseInt($("set-preview-board").value, 10),
+    preview_list: parseInt($("set-preview-list").value, 10),
+  };
+}
 
 function formatDate(ts, long = false) {
   if (!ts) return "";
@@ -305,8 +319,34 @@ function el(tag, className, text) {
   return e;
 }
 
+let syncText = "";
+/// The status line: connection state, plus the changes waiting to be sent.
 function setSyncStatus(text) {
-  $("sync-status").textContent = text;
+  if (text !== undefined) syncText = text;
+  const waiting = state.queued ? ` · ${state.queued} change${state.queued === 1 ? "" : "s"} waiting for the connection` : "";
+  $("sync-status").textContent = syncText + waiting;
+}
+
+/// The error means the server could not be reached (not that it refused).
+function isOfflineError(e) {
+  return /offline|no answer|did not answer|cannot reach|timed out|connection|broken pipe|network|tls|dns|os error|unexpected eof/i.test(String(e));
+}
+
+state.queued = 0;
+let offlineTimer = null;
+/// No connection: keep working on the copy on this Mac and try again regularly.
+function goOffline() {
+  if (!state.offline) {
+    state.offline = true;
+    toast("No connection to the server: showing the emails on this Mac. Changes are sent when it is back.", "info");
+  }
+  setSyncStatus("Offline · emails on this Mac");
+  invoke("queue_count").then((n) => {
+    state.queued = n;
+    setSyncStatus();
+  }).catch(() => {});
+  clearTimeout(offlineTimer);
+  offlineTimer = setTimeout(() => openBoard({ fromCache: true, retry: true }), 30_000);
 }
 
 // ---------- startup and login ----------
@@ -363,6 +403,32 @@ $("login-form").addEventListener("submit", async (ev) => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Connect";
+  }
+});
+
+async function showCacheStats() {
+  try {
+    const s = await invoke("cache_stats");
+    $("cache-stats").textContent = `${s.emails.toLocaleString()} emails known, ${s.bodies.toLocaleString()} downloaded (${formatSize(s.bytes)})${s.queued ? ` · ${s.queued} changes waiting` : ""}.`;
+  } catch (_) {
+    $("cache-stats").textContent = "";
+  }
+}
+
+$("clear-cache").addEventListener("click", async () => {
+  const choice = await ask("Clear the copy of your emails on this Mac? Nothing changes on the server; emails are downloaded again as you use the app. Changes still waiting for the connection are lost.", [
+    { label: "Cancel", value: null },
+    { label: "Clear", value: "yes", kind: "danger" },
+  ]);
+  if (choice !== "yes") return;
+  try {
+    await invoke("clear_cache");
+    state.queued = 0;
+    setSyncStatus();
+    showCacheStats();
+    toast("The copy on this Mac was cleared", "info");
+  } catch (e) {
+    toast("Could not clear it: " + e);
   }
 });
 
@@ -445,13 +511,15 @@ function applySettingsState(settings) {
   state.rules = settings.rules || [];
   state.notify = settings.notify || "important";
   state.undoSeconds = settings.undo_seconds ?? 8;
-  state.theme = settings.theme;
-  state.zoom = settings.zoom;
-  applyAppearance(settings.theme, settings.zoom);
+  state.undoSendSeconds = settings.undo_send_seconds ?? 10;
+  state.appearance = { theme: settings.theme, zoom: settings.zoom, preview_board: settings.preview_board, preview_list: settings.preview_list };
+  applyAppearance(state.appearance);
+  state.waitingSetting = settings.waiting_folder || "";
+  state.waitingDays = settings.waiting_days ?? 3;
   updateBadge();
 }
 
-async function openBoard({ fromCache = false } = {}) {
+async function openBoard({ fromCache = false, retry = false } = {}) {
   if (!fromCache) {
     show("loading");
     $("loading-text").textContent = "Preparing columns…";
@@ -470,6 +538,16 @@ async function openBoard({ fromCache = false } = {}) {
       if (settings.use_system_contacts) loadContacts();
     } catch (_) {}
     setSyncStatus(info.can_idle ? "Live updates on (IDLE)" : "Refreshing every 60 seconds");
+    clearTimeout(offlineTimer);
+    if (state.offline) {
+      state.offline = false;
+      toast("Connected again", "info");
+    }
+    // Changes made offline go to the server first, then the lists are refreshed.
+    invoke("flush_queue").then((n) => {
+      state.queued = n;
+      setSyncStatus();
+    }).catch(() => {});
     $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
     state.onlyImportant = local.get("onlyImportant") === "1";
     $("only-important").checked = state.onlyImportant;
@@ -483,9 +561,18 @@ async function openBoard({ fromCache = false } = {}) {
     if (!state.columns.some((c) => c.folder.toUpperCase() === "INBOX")) checkInbox();
   } catch (e) {
     if (fromCache) {
-      // Keep showing the last known board, and say why it is not updating.
-      setSyncStatus("Offline");
-      toast("Could not connect to the server: " + e);
+      // Keep showing the last known board (and the copy on this Mac) and retry.
+      if (!retry) {
+        renderColumns();
+        for (const c of state.columns) renderCards(c.folder);
+        show("board-screen");
+        for (const c of state.columns) loadColumn(c.folder);
+      }
+      if (isOfflineError(e)) goOffline();
+      else {
+        setSyncStatus("Not connected");
+        toast("Could not connect to the server: " + e);
+      }
       return;
     }
     show("login");
@@ -650,6 +737,16 @@ function columnEl(folder) {
 async function loadColumn(folder) {
   if (folder === SEARCH_KEY) return runSearch();
   if (folder === ALL_KEY) return loadAllMail();
+  // What this Mac already knows is shown at once, then refreshed from the server.
+  if (!state.cards[folder]?.length) {
+    try {
+      const cached = await invoke("cached_column", { folder, limit: state.limits[folder] || state.defaultLimit });
+      if (cached.length && !state.cards[folder]?.length) {
+        state.cards[folder] = cached;
+        renderCards(folder);
+      }
+    } catch (_) {}
+  }
   try {
     state.cards[folder] = await invoke("load_column", { folder, limit: state.limits[folder] || null });
     renderCards(folder);
@@ -659,9 +756,22 @@ async function loadColumn(folder) {
       updateBadge();
     }
   } catch (e) {
-    toast(`Could not load ${folder}: ${e}`);
+    // Keep showing what is known (from this Mac, or loaded before).
+    renderCards(folder);
+    if (isOfflineError(e)) goOffline();
+    else toast(`Could not load ${folder}: ${e}`);
   }
 }
+
+listen("queue-changed", (ev) => {
+  state.queued = ev.payload || 0;
+  setSyncStatus();
+});
+listen("queue-error", (ev) => toast(String(ev.payload)));
+listen("queue-flushed", () => {
+  for (const c of visibleColumns()) loadColumn(c.folder);
+  scheduleFolderCounts();
+});
 
 // ---------- new Inbox emails: rules and notifications ----------
 
@@ -752,9 +862,12 @@ function scheduleReload(folder) {
 }
 
 function renderCards(folder) {
+  const waiting = waitingFolder();
+  if (folder !== waiting) scheduleWaitingRender();
   const column = columnEl(folder);
   if (!column) return;
   const all = state.cards[folder] || [];
+  state.waitingCtx = folder === waiting ? waitingContext(all) : null;
   const unread = all.filter((c) => !c.seen).length;
   column.querySelector(".count").textContent = all.length;
   column.querySelector(".unread").textContent = unread ? `${unread} unread` : "";
@@ -767,6 +880,7 @@ function renderCards(folder) {
   );
   const container = column.querySelector(".cards");
   container.replaceChildren();
+  container.classList.toggle("threads", !!state.groupThreads);
   if (!list.length) {
     if (searching) {
       container.append(el("div", "empty muted", state.view.searchDone ? "No emails found" : "Searching…"));
@@ -798,13 +912,214 @@ function renderCards(folder) {
   // Search results and All Mail come from several folders: each card carries its own.
   if (state.groupThreads) {
     for (const g of groupByThread(list, folder)) {
-      container.append(renderCard(g.rep.folder, g.rep.card, g.members.length > 1 ? g : null));
+      const thread = g.members.length > 1 ? g : null;
+      container.append(renderCard(g.rep.folder, g.rep.card, thread));
+      // An expanded conversation in a folder list shows each of its emails below,
+      // including those in other folders (Sent, Archive…).
+      if (state.view && state.expanded.has(threadKey(g))) {
+        for (const m of threadChildren(g, folder)) {
+          container.append(m.loading ? el("div", "thread-loading muted", "Looking for the rest of the conversation…") : renderCard(m.folder, m.card, null, { child: true }));
+        }
+      }
     }
   } else {
     for (const card of list) container.append(renderCard(card.__folder || folder, card));
   }
   const more = loadMore();
   if (more) container.append(more);
+}
+
+// ---------- waiting for an answer ----------
+
+/// The board column of emails waiting for an answer (null when there is none).
+function waitingFolder() {
+  const choice = state.waitingSetting || "";
+  if (choice === "none") return null;
+  if (choice && state.columns?.some((c) => c.folder === choice)) return choice;
+  return state.columns?.find((c) => /^(waiting|attesa|in attesa)$/i.test(c.name.trim()))?.folder || null;
+}
+
+function renderWaitingChoices(current) {
+  const select = $("set-waiting");
+  select.replaceChildren(new Option("Automatic (the column named “Waiting”)", ""), new Option("None", "none"));
+  for (const c of state.columns || []) select.append(new Option(c.name, c.folder));
+  select.value = [...select.options].some((o) => o.value === current) ? current : "";
+}
+
+let waitingRenderTimer;
+/// Other folders changed: the answers shown in the waiting column may have too.
+function scheduleWaitingRender() {
+  clearTimeout(waitingRenderTimer);
+  waitingRenderTimer = setTimeout(() => {
+    const f = waitingFolder();
+    if (f && columnEl(f)) renderCards(f);
+  }, 80);
+}
+
+/// What the waiting column needs to tag its cards: the answers that arrived
+/// (newest card referring to each Message-ID) and since when each email waits.
+function waitingContext(cards) {
+  refreshSentForWaiting();
+  const bare = (id) => (id || "").replace(/^<|>$/g, "").trim().toLowerCase();
+  const me = (state.email || "").toLowerCase();
+  const waiting = waitingFolder();
+  const answers = new Map();
+  // My own latest email in each conversation (a reminder restarts the wait).
+  const mine = new Map();
+  const noteMine = (card) => {
+    for (const id of [card.message_id, ...(card.thread_refs || [])].map(bare)) {
+      if (id && !(mine.get(id) >= card.date)) mine.set(id, card.date);
+    }
+  };
+  for (const card of state.sentCards) noteMine(card);
+  for (const [folder, list] of Object.entries(state.cards)) {
+    const kind = folderKind(folder);
+    if (["drafts", "trash", "junk"].includes(kind)) continue;
+    for (const card of list) {
+      if (kind === "sent" || (card.from_address || "").toLowerCase() === me) {
+        noteMine(card);
+        continue;
+      }
+      if (folder === waiting) continue;
+      for (const id of (card.thread_refs || []).map(bare)) {
+        const known = answers.get(id);
+        if (id && (!known || known.card.date < card.date)) answers.set(id, { folder: card.__folder || folder, card });
+      }
+    }
+  }
+  // When each email entered the column (first seen there); emails already
+  // there the first time count from their own date.
+  const key = "waiting:" + state.email;
+  let since = null;
+  try {
+    since = JSON.parse(local.get(key) || "null");
+  } catch (_) {}
+  const firstTime = !since;
+  since = since || {};
+  const now = Math.floor(Date.now() / 1000);
+  const present = {};
+  for (const card of cards) {
+    const id = bare(card.message_id);
+    if (id) present[id] = since[id] ?? (firstTime ? card.date : now);
+  }
+  if (cards.length) local.set(key, JSON.stringify(present));
+  return { bare, answers, mine, since: present, now };
+}
+
+// The Sent folder is read (newest 200, at most once a minute) so that a
+// reminder you send restarts the wait of the email in the waiting column.
+state.sentCards = [];
+let sentLoadedAt = 0;
+let sentLoading = false;
+function refreshSentForWaiting(force = false) {
+  const sent = state.folders?.find((f) => f.kind === "sent")?.name;
+  if (!sent || sentLoading || (!force && Date.now() - sentLoadedAt < 60_000)) return;
+  sentLoading = true;
+  invoke("load_column", { folder: sent, limit: 200 })
+    .then((cards) => {
+      state.sentCards = cards;
+      sentLoadedAt = Date.now();
+      scheduleWaitingRender();
+    })
+    .catch((e) => console.error(e))
+    .finally(() => (sentLoading = false));
+}
+
+/// The "Replied" / "Waiting N days" tags of an email (or conversation) in the waiting column.
+function waitingTags(members) {
+  const ctx = state.waitingCtx;
+  if (!ctx) return null;
+  // The wait starts when the email entered the column or when I last wrote in
+  // the conversation, whichever is later; only answers after that count.
+  let lastMine = Math.max(...members.map((m) => m.card.date));
+  for (const { card } of members) {
+    for (const id of [card.message_id, ...(card.thread_refs || [])].map(ctx.bare)) {
+      if (id && ctx.mine.get(id) > lastMine) lastMine = ctx.mine.get(id);
+    }
+  }
+  let answer = null;
+  for (const { card } of members) {
+    for (const id of [card.message_id, ...(card.thread_refs || [])].map(ctx.bare)) {
+      const a = id && ctx.answers.get(id);
+      if (a && a.card.date > lastMine && (!answer || answer.card.date < a.card.date)) answer = a;
+    }
+  }
+  const box = el("div", "wait-tags");
+  if (answer) {
+    const tag = el("button", "wait-tag replied", "↩ Replied · " + shortName(answer.card.from));
+    tag.type = "button";
+    tag.draggable = false;
+    tag.title = `${answer.card.from} answered on ${formatDate(answer.card.date, true)}: open the answer`;
+    tag.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openReader(answer.folder, answer.card);
+    });
+    box.append(tag);
+  } else if (state.waitingDays > 0) {
+    const entered = Math.min(...members.map((m) => ctx.since[ctx.bare(m.card.message_id)] ?? m.card.date));
+    const started = Math.max(entered, lastMine);
+    const days = Math.floor((ctx.now - started) / 86400);
+    if (days >= state.waitingDays) {
+      const tag = el("span", "wait-tag late", `Waiting ${days} days`);
+      tag.title = "No answer yet in this conversation";
+      box.append(tag);
+    }
+  }
+  return box.childElementCount ? box : null;
+}
+
+state.expanded = new Set(); // conversations opened with › in folder lists
+
+state.threadCache = new Map(); // conversation key -> its emails in every folder
+
+/// The emails of an expanded conversation: the ones in this list plus those
+/// found in other folders (looked up once, then shown).
+function threadChildren(group, listFolder) {
+  const key = threadKey(group);
+  const found = state.threadCache.get(key);
+  if (found === undefined) {
+    state.threadCache.set(key, null);
+    const refs = [...new Set(group.members.flatMap((m) => m.card.thread_refs || []))];
+    const messageId = group.rep.card.message_id;
+    (async () => {
+      // What this Mac knows first, then the server.
+      let local = [];
+      try {
+        local = await invoke("local_thread", { messageId, references: refs });
+        if (local.length && state.expanded.has(key)) {
+          state.threadLocal = state.threadLocal || new Map();
+          state.threadLocal.set(key, local);
+          renderCards(listFolder);
+        }
+      } catch (_) {}
+      try {
+        const entries = await invoke("load_thread", { folder: group.rep.folder, messageId, references: refs, columns: state.columns.map((c) => c.folder) });
+        state.threadCache.set(key, mergeThread(local, entries));
+      } catch (e) {
+        console.error("conversation lookup failed", e);
+        state.threadCache.set(key, local);
+      }
+      state.threadLocal?.delete(key);
+      renderCards(listFolder);
+    })();
+  }
+  const all = new Map();
+  const id = (m) => (m.card.message_id || "").toLowerCase() || `${m.folder}/${m.card.uid}`;
+  for (const m of [...group.members, ...(found || state.threadLocal?.get(key) || [])]) if (!all.has(id(m))) all.set(id(m), m);
+  const out = [...all.values()].sort((a, b) => b.card.date - a.card.date);
+  if (!found) out.push({ loading: true });
+  return out;
+}
+
+/// Replies can belong to a longer conversation, even when the rest is in another folder.
+function hasConversation(card) {
+  return (card.thread_refs || []).length > 0;
+}
+
+/// A conversation keeps its key while new emails arrive: its oldest email.
+function threadKey(group) {
+  const first = group.members[group.members.length - 1];
+  return first.card.message_id || `${first.folder}/${first.card.uid}`;
 }
 
 /// Groups cards of a list into conversations (Message-ID, In-Reply-To and
@@ -854,9 +1169,9 @@ function matchesFilter(card) {
 }
 
 /// One email, or a whole conversation when `group` is given (shown through its newest email).
-function renderCard(folder, card, group = null) {
+function renderCard(folder, card, group = null, { child = false } = {}) {
   const members = group ? group.members : [{ folder, card }];
-  const c = el("div", "card");
+  const c = el("div", child ? "card child" : "card");
   if (members.some((m) => m.card.flagged)) c.classList.add("pinned");
   if (members.some((m) => !m.card.seen)) c.classList.add("unseen");
   c.draggable = true;
@@ -873,7 +1188,7 @@ function renderCard(folder, card, group = null) {
   };
   const anyAttachment = members.some((m) => m.card.has_attachments);
   const fromLine = el("div", "from-line");
-  fromLine.append(el("span", "from", fromText));
+  fromLine.append(el("span", "unread-dot"), avatar(card.from || card.from_address || "?"), el("span", "from", fromText));
   if (group) fromLine.append(countBadge());
   if (anyAttachment) fromLine.append(icon("paperclip", "clip"));
   fromLine.append(el("span", "date", formatDate(card.date)));
@@ -900,17 +1215,51 @@ function renderCard(folder, card, group = null) {
   if (state.view) {
     // Compact row for the folder view.
     const main = el("div", "row-main");
-    main.append(el("span", "row-subject", card.subject || "(no subject)"), el("span", "row-preview", card.preview ? "  —  " + card.preview : ""));
+    // Inside an expanded conversation each email shows the start of its text.
+    if (child) main.append(el("span", "row-subject", card.preview || card.subject || "(no subject)"));
+    else main.append(el("span", "row-subject", card.subject || "(no subject)"));
     const date = el("span", "row-date");
     if (anyAttachment) date.append(icon("paperclip", "clip"));
     date.append(document.createTextNode(formatDate(card.date)));
-    if (state.view?.multi) date.prepend(folderTag(folder));
-    const from = el("span", "row-from", fromText);
-    if (group) from.append(countBadge());
+    if (state.view?.multi || (child && folder !== state.view.folder)) date.prepend(folderTag(folder));
+    const from = el("span", "row-from");
+    const thread = group || (!child && state.groupThreads && hasConversation(card) ? { members, rep: { folder, card } } : null);
+    if (thread) {
+      const open = state.expanded.has(threadKey(thread));
+      const chev = el("button", "chevron" + (open ? " open" : ""));
+      chev.type = "button";
+      chev.draggable = false;
+      chev.title = open ? "Hide the emails of this conversation" : "Show the emails of this conversation";
+      chev.append(icon("chevron"));
+      chev.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const key = threadKey(thread);
+        if (state.expanded.delete(key)) state.threadCache.delete(key); // looked up again next time
+        else state.expanded.add(key);
+        renderCards(c.closest(".column").dataset.folder);
+      });
+      from.append(chev);
+    } else if (!child && state.groupThreads) {
+      from.append(el("span", "chevron-space"));
+    }
+    from.append(el("span", "unread-dot"), avatar(card.from || card.from_address || "?"), el("span", "row-name", child ? card.from || "(unknown sender)" : fromText));
+    // In lists the number counts the unread emails of the conversation.
+    const unreadInThread = members.filter((m) => !m.card.seen).length;
+    if (group && unreadInThread) {
+      const b = el("span", "thread-count unread-count", String(unreadInThread));
+      b.title = `${unreadInThread} unread of ${members.length} emails in this conversation`;
+      from.append(b);
+    }
+    const tags = waitingTags(members);
+    if (tags) date.prepend(tags);
     c.append(from, main, date, actions);
+    // Preview below, from under the sender to under the subject.
+    if (card.preview && !child) c.append(el("div", "row-preview", card.preview));
     if (readerCard && readerCard.folder === folder && readerCard.card.uid === card.uid) c.classList.add("selected");
   } else {
     c.append(actions, fromLine, el("div", "subject", card.subject || "(no subject)"), el("div", "preview", card.preview));
+    const tags = waitingTags(members);
+    if (tags) c.append(tags);
   }
 
   if (members.every((m) => state.selection.has(selKey(m.folder, m.card)))) c.classList.add("multi-selected");
@@ -985,14 +1334,15 @@ async function moveMany(members, to, { quiet = false } = {}) {
   const moves = [];
   for (const m of members) {
     try {
-      await invoke("move_card", { from: m.folder, uid: m.card.uid, to });
-      moves.push({ message_id: m.card.message_id, now: to, back: m.folder });
+      const now = await invoke("move_card", { from: m.folder, uid: m.card.uid, to });
+      moves.push({ message_id: m.card.message_id, now: now ? to : "", back: m.folder });
     } catch (e) {
       failed++;
       console.error(e);
     }
   }
   if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
+  else if (moves.some((m) => !m.now)) toast(`No connection: ${members.length} emails will be moved to ${folderLabel(to)} when the server can be reached`, "info");
   else if (!quiet) offerUndo(`${members.length} emails moved to ${folderLabel(to)}`, moves);
   await afterBulkChange();
   return moves;
@@ -1015,6 +1365,7 @@ async function fileMany(members, kind) {
     }
   }
   if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
+  else if (moves.some((m) => !m.now)) toast(`No connection: ${members.length} email${members.length === 1 ? "" : "s"} will be moved to ${kind} when the server can be reached`, "info");
   else offerUndo(`${members.length} email${members.length === 1 ? "" : "s"} moved to ${folderLabel(target || kind)}`, moves);
   await afterBulkChange();
 }
@@ -1054,8 +1405,9 @@ async function moveCard(from, uid, to) {
   movedEl?.classList.add("busy");
 
   try {
-    await invoke("move_card", { from, uid, to });
-    offerUndo(`Moved to ${folderLabel(to)}`, [{ message_id: card.message_id, now: to, back: from }]);
+    const now = await invoke("move_card", { from, uid, to });
+    if (now) offerUndo(`Moved to ${folderLabel(to)}`, [{ message_id: card.message_id, now: to, back: from }]);
+    else toast(`No connection: it will be moved to ${folderLabel(to)} when the server can be reached`, "info");
   } catch (e) {
     toast("Move failed: " + e);
   }
@@ -1179,11 +1531,13 @@ const FOLDER_ICONS = { inbox: "inbox", drafts: "drafts", sent: "sent", archive: 
 async function loadFolders() {
   try {
     state.folders = await invoke("list_folders");
+    refreshSentForWaiting();
     cacheSet("folders", state.folders);
     renderFolders();
     updateBadge();
   } catch (e) {
-    toast("Could not read folders: " + e);
+    if (isOfflineError(e)) goOffline();
+    else toast("Could not read folders: " + e);
   }
 }
 
@@ -1212,6 +1566,15 @@ async function loadAllMail() {
     state.cards[ALL_KEY] = entries.map((e) => ({ ...e.card, __folder: e.folder }));
     renderCards(ALL_KEY);
   } catch (e) {
+    if (isOfflineError(e)) {
+      // The newest emails known on this Mac instead.
+      const local = await invoke("cached_all_mail").catch(() => []);
+      state.cards[ALL_KEY] = local
+        .filter((x) => !["trash", "junk", "drafts"].includes(folderKind(x.folder)))
+        .map((x) => ({ ...x.card, __folder: x.folder }));
+      renderCards(ALL_KEY);
+      return goOffline();
+    }
     toast("Could not load All Mail: " + e);
   }
 }
@@ -1345,22 +1708,36 @@ async function runSearch() {
   const folders = state.columns.map((c) => c.folder);
   if (view.from && !folders.includes(view.from)) folders.push(view.from);
   const args = { text: view.search, inBody: !!view.inBody, folders };
+  // Results found on this Mac come first (instant, also offline); the server
+  // results are merged in as they arrive and win for the same email.
   let entries = [];
+  const key = (e) => (e.card.message_id || "").toLowerCase() || e.folder + "/" + e.card.uid;
+  const merge = (found) => {
+    const byKey = new Map(entries.map((e) => [key(e), e]));
+    for (const e of found) byKey.set(key(e), e);
+    entries = [...byKey.values()];
+  };
   const show = () => {
     entries.sort((a, b) => b.card.date - a.card.date);
     state.cards[SEARCH_KEY] = entries.map((e) => ({ ...e.card, __folder: e.folder }));
     renderCards(SEARCH_KEY);
   };
+  let local = [];
   try {
-    setStatus(view.inBody ? "Searching the main folders, in the text too (slow)…" : "Searching the main folders…");
-    entries = await invoke("search_emails", { ...args, scope: "main" });
+    local = (await invoke("search_local", { text: view.search })).filter((e) => !["trash", "junk", "drafts"].includes(folderKind(e.folder)));
+  } catch (_) {}
+  if (!alive()) return;
+  merge(local);
+  if (local.length) show();
+  const onMac = local.length ? `${local.length} on this Mac · ` : "";
+  try {
+    setStatus(onMac + (view.inBody ? "Searching the main folders, in the text too (slow)…" : "Searching the main folders…"));
+    merge(await invoke("search_emails", { ...args, scope: "main" }));
     if (!alive()) return;
     show();
     setStatus(summary(entries) + " · searching the other folders…");
-    const rest = await invoke("search_emails", { ...args, scope: "rest" });
+    merge(await invoke("search_emails", { ...args, scope: "rest" }));
     if (!alive()) return;
-    const seen = new Set(entries.map((e) => e.card.message_id || e.folder + "/" + e.card.uid));
-    entries = entries.concat(rest.filter((e) => !seen.has(e.card.message_id || e.folder + "/" + e.card.uid)));
     view.searchDone = true;
     show();
     setStatus(summary(entries) + " · all folders searched");
@@ -1368,8 +1745,12 @@ async function runSearch() {
     if (!alive()) return;
     view.searchDone = true;
     show();
-    setStatus("Search failed");
-    toast("Search failed: " + e);
+    if (entries.length) {
+      setStatus(summary(entries) + " · server not reachable: results from this Mac");
+    } else {
+      setStatus("Search failed");
+      toast("Search failed: " + e);
+    }
   }
 }
 
@@ -1439,6 +1820,8 @@ document.addEventListener("keydown", (ev) => {
     toggleSidebar();
   }
 });
+
+listen("open-link", (ev) => openLink(ev.payload));
 
 listen("folder-changed", (ev) => {
   if (String(ev.payload).toUpperCase() === "INBOX" && !columnEl(ev.payload)) checkInbox();
@@ -1582,7 +1965,8 @@ async function fileCard(folder, card, kind) {
   renderCards(folder);
   try {
     const target = await invoke("file_card", { folder, uid: card.uid, kind });
-    offerUndo(`Moved to ${folderLabel(target)}`, [{ message_id: card.message_id, now: target, back: folder }]);
+    if (target) offerUndo(`Moved to ${folderLabel(target)}`, [{ message_id: card.message_id, now: target, back: folder }]);
+    else toast(`No connection: it will be moved to ${kind} when the server can be reached`, "info");
   } catch (e) {
     toast(({ trash: "Delete", junk: "Spam", archive: "Archive" }[kind] || "Move") + " failed: " + e);
   }
@@ -1653,6 +2037,7 @@ async function openReader(folder, card, opts = {}) {
   readerQuoteShown = false;
   if (!opts.thread) readerThread = opts.cachedThread || null;
   else readerThread = opts.thread;
+  updateConvBar();
   $("reader-spacer").style.height = "0px";
   renderThread({ anchor: false });
   placeReader();
@@ -1704,12 +2089,36 @@ async function openReader(folder, card, opts = {}) {
     if (opts.then === "reply") replyTo(false);
     if (!opts.thread) loadThread(folder, card, msg);
   } catch (e) {
-    $("reader-body").replaceChildren(el("pre", "error", String(e)));
+    $("reader-body").replaceChildren(
+      isOfflineError(e)
+        ? el("p", "muted offline-note", "This email is not on this Mac yet and the server cannot be reached. It will open when the connection is back.")
+        : el("pre", "error", String(e)),
+    );
   }
+}
+
+/// Joins conversation lists (local and from the server): one entry per email,
+/// the later list wins, oldest first.
+function mergeThread(...lists) {
+  const byKey = new Map();
+  for (const list of lists) {
+    for (const e of list || []) byKey.set((e.card.message_id || "").toLowerCase() || `${e.folder}/${e.card.uid}`, e);
+  }
+  return [...byKey.values()].sort((a, b) => a.card.date - b.card.date);
 }
 
 async function loadThread(folder, card, msg) {
   if (!msg.message_id && !msg.references.length) return;
+  // First what this Mac knows (instant), then the server lookup.
+  let local = [];
+  try {
+    local = await invoke("local_thread", { messageId: msg.message_id, references: msg.references });
+    if (readerCard?.card !== card) return;
+    if (local.length > 1) {
+      readerThread = mergeThread(local);
+      renderThread({ anchor: true });
+    }
+  } catch (_) {}
   try {
     const entries = await invoke("load_thread", {
       folder,
@@ -1718,7 +2127,7 @@ async function loadThread(folder, card, msg) {
       columns: state.columns.map((c) => c.folder),
     });
     if (readerCard?.card !== card) return; // another email was opened meanwhile
-    readerThread = entries;
+    readerThread = mergeThread(local, entries);
     renderThread({ anchor: true });
   } catch (e) {
     console.error("conversation lookup failed", e);
@@ -1727,8 +2136,13 @@ async function loadThread(folder, card, msg) {
 
 const AVATAR_COLORS = ["#4f8fd6", "#43a07a", "#c4684f", "#8a6fd1", "#c98a2e", "#3e9bb0", "#b85c8f"];
 
+/// A round badge with the sender's initials ("Anna Bianchi" -> AB), in a color of its own for each name.
 function setAvatar(a, name) {
-  a.textContent = (name.trim()[0] || "?").toUpperCase();
+  const n = name.trim();
+  const words = n.includes("@") ? [] : n.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  const initials = words.length > 1 ? words[0][0] + words[words.length - 1][0] : (words[0] || n)[0] || "?";
+  a.textContent = initials.toUpperCase();
+  a.setAttribute("aria-hidden", "true");
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   a.style.background = AVATAR_COLORS[h % AVATAR_COLORS.length];
@@ -1763,9 +2177,128 @@ function scrollToMessage(smooth = false) {
 
 $("reader-earlier").addEventListener("click", () => $("reader-scroll").scrollTo({ top: 0, behavior: "smooth" }));
 
+// ---------- actions on the whole conversation ----------
+
+/// Every email of the open conversation (just the open email until the rest is found).
+function convMembers() {
+  if (!readerCard) return [];
+  const seen = new Set();
+  const out = [];
+  for (const m of [readerCard, ...(readerThread || [])]) {
+    const key = `${m.folder}/${m.card.uid}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(m);
+    }
+  }
+  return out;
+}
+
+/// The emails to move: your own sent emails and drafts stay where they are
+/// (unless the conversation is only those).
+function convMovable() {
+  const all = convMembers();
+  const received = all.filter((m) => !["sent", "drafts"].includes(folderKind(m.folder)));
+  return received.length ? received : all;
+}
+
+function updateConvBar() {
+  const members = convMembers();
+  const n = members.length;
+  $("conv-label").textContent = n > 1 ? `Conversation · ${n} emails` : "This email";
+  const what = n > 1 ? `all ${n} emails of the conversation` : "this email";
+  const pinned = members.some((m) => m.card.flagged);
+  $("conv-pin").classList.toggle("active", pinned);
+  $("conv-pin").title = pinned ? `Unpin ${what}` : `Pin ${what}`;
+  const unread = members.some((m) => !m.card.seen);
+  $("conv-seen").querySelector("use").setAttribute("href", unread ? "#i-envelope-open" : "#i-envelope");
+  $("conv-seen").title = unread ? `Mark ${what} as read` : `Mark ${what} as unread`;
+  const movable = convMovable().length;
+  const moveWhat = movable === n ? what : `the ${movable} received email${movable === 1 ? "" : "s"} (your sent ones stay)`;
+  $("conv-archive").title = `Archive ${moveWhat}`;
+  $("conv-trash").title = `Delete ${moveWhat} (move to trash)`;
+  const inJunk = readerCard && folderKind(readerCard.folder) === "junk";
+  $("conv-spam").title = inJunk ? `Not spam: move ${moveWhat} back to the Inbox` : `Mark ${moveWhat} as spam`;
+  $("conv-move").title = `Move ${moveWhat} to a folder…`;
+}
+
+$("conv-pin").addEventListener("click", async () => {
+  const members = convMembers();
+  const pinned = !members.some((m) => m.card.flagged);
+  for (const m of members) m.card.flagged = pinned;
+  updateConvBar();
+  await pinMany(members, pinned, $("conv-pin"));
+  $("conv-pin").classList.remove("busy");
+});
+
+$("conv-seen").addEventListener("click", async () => {
+  const members = convMembers();
+  const seen = members.some((m) => !m.card.seen);
+  if (!seen) stopSeenTimer(); // otherwise the open email would be marked read again
+  await markMany(members, seen);
+  updateConvBar();
+  updateSeenButton();
+  fillThread();
+});
+
+for (const [id, kind] of [["conv-archive", "archive"], ["conv-trash", "trash"]]) {
+  $(id).addEventListener("click", () => {
+    const members = convMovable();
+    closeReader();
+    fileMany(members, kind);
+  });
+}
+
+$("conv-spam").addEventListener("click", () => {
+  const members = convMovable();
+  const inJunk = folderKind(readerCard.folder) === "junk";
+  closeReader();
+  if (inJunk) moveMany(members, "INBOX");
+  else fileMany(members, "junk");
+});
+
+function closeConvMenu() {
+  document.querySelector(".conv-menu")?.remove();
+}
+
+$("conv-move").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  if (document.querySelector(".conv-menu")) return closeConvMenu();
+  const menu = el("div", "conv-menu");
+  const here = readerCard?.folder;
+  for (const f of state.folders || []) {
+    if (f.selectable === false || f.name === here || folderKind(f.name) === "drafts") continue;
+    const b = el("button");
+    b.type = "button";
+    b.style.paddingLeft = 10 + (f.depth || 0) * 14 + "px";
+    b.append(icon("folder"), el("span", "", folderLabel(f.name)));
+    b.addEventListener("click", () => {
+      const members = convMovable();
+      closeConvMenu();
+      closeReader();
+      moveMany(members, f.name);
+    });
+    menu.append(b);
+  }
+  document.body.append(menu);
+  const r = $("conv-move").getBoundingClientRect();
+  menu.style.top = r.bottom + 6 + "px";
+  menu.style.left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8)) + "px";
+});
+document.addEventListener("mousedown", (ev) => {
+  if (!ev.target.closest?.(".conv-menu, #conv-move")) closeConvMenu();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && document.querySelector(".conv-menu")) {
+    ev.stopImmediatePropagation();
+    closeConvMenu();
+  }
+}, true);
+
 /// Earlier and later emails of the conversation as compact rows around the open one.
 /// With `anchor`, the open email keeps its place on screen while rows are added above it.
 function renderThread({ anchor = false } = {}) {
+  updateConvBar();
   const scroller = $("reader-scroll");
   const card = $("message-card");
   const offsetBefore = card.offsetTop;
@@ -1919,6 +2452,7 @@ $("reader-toggle").addEventListener("click", () => {
 
 function closeReader() {
   stopSeenTimer();
+  closeConvMenu();
   if (readerInPane()) {
     $("reader").append($("reader-article"));
     $("reader-article").classList.remove("in-pane");
@@ -1994,17 +2528,17 @@ const compose = {
 const MAX_ATTACH_BYTES = 25 * 1024 * 1024; // most mail servers refuse larger emails
 
 function composeSnapshot() {
-  return ["compose-to", "compose-cc", "compose-bcc", "compose-subject", "compose-body"]
-    .map((id) => $(id).value)
+  return RCPT_FIELDS.map(recipientValue)
+    .concat(["compose-subject", "compose-body"].map((id) => $(id).value))
     .concat(compose.rich ? $("compose-rich").innerHTML : compose.markdown ? "md" : "plain", compose.attachments.map((a) => a.name + ":" + a.size).join("|"))
     .join("\u0000");
 }
 
 function composeDraft() {
   return {
-    to: $("compose-to").value,
-    cc: $("compose-cc").value,
-    bcc: $("compose-bcc").value,
+    to: recipientValue("compose-to"),
+    cc: recipientValue("compose-cc"),
+    bcc: recipientValue("compose-bcc"),
     subject: $("compose-subject").value,
     body: compose.rich ? richText() : $("compose-body").value,
     html: compose.rich ? $("compose-rich").innerHTML : null,
@@ -2052,9 +2586,9 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   renderComposeAttachments();
   renderFormat();
   $("compose-title").textContent = title;
-  $("compose-to").value = to;
-  $("compose-cc").value = cc;
-  $("compose-bcc").value = bcc;
+  setRecipients("compose-to", to);
+  setRecipients("compose-cc", cc);
+  setRecipients("compose-bcc", bcc);
   $("compose-subject").value = subject;
   $("compose-body").value = body;
   if (compose.rich) $("compose-rich").innerHTML = textToRichHtml(body);
@@ -2185,13 +2719,25 @@ function renderComposeAttachments() {
   formatSizeTotal();
 }
 
-function readFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
+/// A file's content as base64. Throws when nothing could be read, so an
+/// attachment is never sent empty.
+async function readFile(file) {
+  let bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.length && file.size) {
+    // Some files (e.g. not yet downloaded from iCloud/OneDrive) need a second try.
+    await new Promise((r) => setTimeout(r, 400));
+    bytes = new Uint8Array(await file.arrayBuffer());
+  }
+  if (!bytes.length) {
+    throw new Error(
+      file.size
+        ? "its content could not be read. If it is in iCloud Drive, OneDrive or Dropbox, make sure it is downloaded to this Mac, then attach it again"
+        : "the file is empty",
+    );
+  }
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
 }
 
 async function addFiles(files) {
@@ -2203,9 +2749,10 @@ async function addFiles(files) {
       continue;
     }
     try {
-      compose.attachments.push({ name: file.name, mime: file.type || "application/octet-stream", size: file.size, data: await readFile(file) });
+      const data = await readFile(file);
+      compose.attachments.push({ name: file.name, mime: file.type || "application/octet-stream", size: Math.floor((data.length * 3) / 4), data });
     } catch (e) {
-      toast(`Could not read ${file.name}: ${e}`);
+      toast(`Could not attach ${file.name}: ${e.message || e}`);
     }
   }
   renderComposeAttachments();
@@ -2225,11 +2772,24 @@ async function loadAttachments(folder, uid, list) {
   return out;
 }
 
-$("compose-attach").addEventListener("click", () => {
-  $("compose-file").value = "";
-  $("compose-file").click();
+// The paperclip opens the system "Open" panel and the app reads the files
+// itself (the web view's file picker could hand over files with no content).
+$("compose-attach").addEventListener("click", async () => {
+  let picked;
+  try {
+    picked = await invoke("pick_attachments");
+  } catch (e) {
+    return toast("Could not attach: " + e);
+  }
+  for (const f of picked) {
+    if (formatSizeTotal() + f.size > MAX_ATTACH_BYTES) {
+      toast(`${f.name} is too big: emails can carry about ${formatSize(MAX_ATTACH_BYTES)} in total.`);
+      continue;
+    }
+    compose.attachments.push({ name: f.name, mime: f.mime, size: f.size, data: f.data });
+  }
+  renderComposeAttachments();
 });
-$("compose-file").addEventListener("change", () => addFiles([...$("compose-file").files]));
 
 // Drop files anywhere on the composer.
 let dragDepth = 0;
@@ -2483,6 +3043,13 @@ $("compose-form").addEventListener("keydown", (ev) => {
 
 $("compose-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  for (const id of RCPT_FIELDS) commitRecipients(id, true);
+  if (!recipientValue("compose-to")) {
+    $("compose-to").focus();
+    return toast("Add at least one recipient in To.");
+  }
+  const invalid = RCPT_FIELDS.flatMap((id) => compose.rcpt[id]).filter((r) => !validAddress(r.email));
+  if (invalid.length) return toast("Check this address: " + invalid[0].email);
   if (!$("compose-subject").value.trim()) {
     const choice = await ask("This email has no subject. Send it anyway?", [
       { label: "Cancel", value: null },
@@ -2491,32 +3058,83 @@ $("compose-form").addEventListener("submit", async (ev) => {
     if (choice !== "send") return;
   }
   if (formatSizeTotal() > MAX_ATTACH_BYTES) return toast("The attachments are too big to send: remove some of them.");
-  const btn = $("compose-send");
-  btn.disabled = true;
-  btn.textContent = "Sending…";
   clearInterval(compose.timer);
-  if (compose.saving) await compose.saving;
+  // Everything needed to send it, or to bring it back to the composer on "Undo".
+  const pending = {
+    draft: composeDraft(),
+    reply: compose.reply,
+    context: compose.context,
+    title: $("compose-title").textContent,
+    rich: compose.rich,
+    markdown: compose.markdown,
+    hasDraft: compose.hasDraft,
+    attachments: compose.attachments,
+    // Kept in Drafts while it waits, so closing the app does not lose it.
+    saved: state.undoSendSeconds > 0 ? saveDraft() : compose.saving,
+  };
+  hideComposer();
+  if (!(state.undoSendSeconds > 0)) return sendPending(pending);
+  pending.timer = setTimeout(() => sendPending(pending), state.undoSendSeconds * 1000);
+  toast("Sending…", "info", { label: "Undo", run: () => undoSend(pending) }, state.undoSendSeconds);
+});
+
+/// Sends an email the composer handed over (after the undo delay, if any).
+async function sendPending(pending) {
+  if (pending.cancelled) return;
+  pending.sending = true;
+  await pending.saved;
   try {
-    const result = await invoke("send_mail", { draft: composeDraft(), reply: compose.reply });
-    hideComposer();
+    const result = await invoke("send_mail", { draft: pending.draft, reply: pending.reply });
     // People you just wrote to become known senders right away.
-    const sent = composeDraft();
+    const sent = pending.draft;
     for (const part of [sent.to, sent.cc, sent.bcc].join(",").split(/[,;]/)) {
       const m = part.match(/<([^>]+)>/) || part.match(/(\S+@\S+)/);
       if (m) state.known.add(m[1].trim().toLowerCase());
     }
     if (result.warning) toast(result.warning);
     else toast(`Email sent (copy saved to ${result.saved_to})`, "info");
-    const drafts = state.folders.find((f) => f.kind === "drafts")?.name;
-    if (drafts && columnEl(drafts)) loadColumn(drafts);
+    refreshSentForWaiting(true);
   } catch (e) {
-    toast("Sending failed: " + e);
-    compose.timer = setInterval(saveDraft, DRAFT_AUTOSAVE_MS);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Send";
+    toast("Sending failed: " + e, "error", { label: "Open", run: () => reopenPending(pending) });
   }
-});
+  const drafts = state.folders.find((f) => f.kind === "drafts")?.name;
+  if (drafts && columnEl(drafts)) loadColumn(drafts);
+}
+
+/// "Undo": the email is not sent and goes back to the composer.
+async function undoSend(pending) {
+  if (pending.sending) return toast("Too late: the email is already being sent.");
+  pending.cancelled = true;
+  clearTimeout(pending.timer);
+  const saved = await pending.saved;
+  await reopenPending(pending, saved === true || pending.hasDraft);
+}
+
+async function reopenPending(pending, fromDraft = true) {
+  if (!$("composer").hidden) {
+    // Another email is open: this one stays in Drafts.
+    return toast("Not sent: the email is in Drafts.", "info");
+  }
+  const d = pending.draft;
+  await openComposer({
+    to: d.to,
+    cc: d.cc,
+    bcc: d.bcc,
+    subject: d.subject,
+    body: d.body,
+    reply: pending.reply,
+    context: pending.context,
+    title: pending.title,
+    messageId: d.message_id,
+    fromDraft,
+    attachments: pending.attachments,
+  });
+  compose.rich = pending.rich;
+  compose.markdown = pending.markdown;
+  renderFormat();
+  if (pending.rich) $("compose-rich").innerHTML = d.html || "";
+  compose.initial = compose.saved = composeSnapshot();
+}
 
 // ---------- settings ----------
 
@@ -2547,8 +3165,17 @@ $("open-settings").addEventListener("click", async () => {
     $("set-group").checked = s.group_threads;
     $("set-theme").value = s.theme || "system";
     $("set-zoom").value = String(s.zoom || 100);
+    $("set-preview-board").value = String(s.preview_board ?? 2);
+    $("set-preview-list").value = String(s.preview_list ?? 1);
+    renderWaitingChoices(s.waiting_folder || "");
+    $("set-waiting-days").value = String(s.waiting_days ?? 3);
+    $("set-cache-mb").value = String(s.cache_max_mb ?? 1024);
+    if (!$("set-cache-mb").value) $("set-cache-mb").value = "1024";
+    $("set-prefetch").checked = s.prefetch ?? true;
+    showCacheStats();
     $("set-notify").value = s.notify || "important";
     $("set-undo").value = String(s.undo_seconds ?? 8);
+    $("set-undo-send").value = String(s.undo_send_seconds ?? 10);
     rulesDraft = (s.rules || []).map((r) => ({ ...r }));
     columnsDraft = state.columns.map((c) => ({ name: c.name, folder: c.folder }));
     columnsChanged = false;
@@ -2570,11 +3197,11 @@ $("open-settings").addEventListener("click", async () => {
 
 $("set-never").addEventListener("change", (ev) => ($("set-seconds").disabled = ev.target.checked));
 // Theme and size preview while choosing; Cancel restores the saved ones.
-for (const id of ["set-theme", "set-zoom"]) {
-  $(id).addEventListener("change", () => applyAppearance($("set-theme").value, parseInt($("set-zoom").value, 10)));
+for (const id of ["set-theme", "set-zoom", "set-preview-board", "set-preview-list"]) {
+  $(id).addEventListener("change", () => applyAppearance(appearanceFromForm()));
 }
 function closeSettingsWithoutSaving() {
-  applyAppearance(state.theme, state.zoom);
+  if (state.appearance) applyAppearance(state.appearance);
   $("settings").hidden = true;
 }
 $("settings-cancel").addEventListener("click", closeSettingsWithoutSaving);
@@ -2604,8 +3231,12 @@ $("settings-form").addEventListener("submit", async (ev) => {
         rules: rulesDraft.filter((r) => r.contains.trim() && r.folder.trim()),
         notify: $("set-notify").value,
         undo_seconds: parseInt($("set-undo").value, 10),
-        theme: $("set-theme").value,
-        zoom: parseInt($("set-zoom").value, 10),
+        undo_send_seconds: parseInt($("set-undo-send").value, 10),
+        ...appearanceFromForm(),
+        waiting_folder: $("set-waiting").value,
+        waiting_days: parseInt($("set-waiting-days").value, 10),
+        cache_max_mb: parseInt($("set-cache-mb").value, 10),
+        prefetch: $("set-prefetch").checked,
       },
     });
     const saved = await invoke("get_settings");
@@ -2629,6 +3260,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
     state.signature = sig.text;
     state.signatureHtml = sig.html;
     state.defaultBcc = $("set-bcc").value.trim();
+    state.undoSendSeconds = parseInt($("set-undo-send").value, 10);
     state.loadRemoteImages = $("set-remote").checked;
     $("settings").hidden = true;
     toast("Settings saved", "info");
@@ -3123,6 +3755,11 @@ function pickSuggestion(i) {
   const input = suggest.input;
   const c = suggest.items[i];
   if (!input || !c) return;
+  if (RCPT_FIELDS.includes(input.id)) {
+    input.value = "";
+    addRecipients(input.id, [{ name: c.name, email: c.email }]);
+    return hideSuggestions();
+  }
   const { start } = currentToken(input);
   // Use "Name <address>" only when the name has no characters that would break the list.
   const entry = c.name && !/[,;"<>]/.test(c.name) ? `${c.name} <${c.email}>` : c.email;
@@ -3158,5 +3795,207 @@ for (const id of ["compose-to", "compose-cc", "compose-bcc", "set-bcc"]) {
     }
   });
 }
+
+// ---------- recipients as chips ----------
+
+const RCPT_FIELDS = ["compose-to", "compose-cc", "compose-bcc"];
+compose.rcpt = { "compose-to": [], "compose-cc": [], "compose-bcc": [] };
+let chipDrag = null; // { from, items } while a chip is being dragged
+
+function validAddress(email) {
+  return /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(email);
+}
+
+/// "Name <a@b.c>, d@e.f; \"Doe, John\" <j@x.y>" -> [{ name, email }]
+function parseAddresses(text) {
+  const parts = [];
+  let cur = "";
+  let quoted = false;
+  let angle = false;
+  for (const ch of text || "") {
+    if (ch === '"') quoted = !quoted;
+    else if (ch === "<" && !quoted) angle = true;
+    else if (ch === ">" && !quoted) angle = false;
+    if ((ch === "," || ch === ";") && !quoted && !angle) {
+      parts.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  parts.push(cur);
+  return parts
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => {
+      const m = p.match(/^(.*?)<([^>]*)>\s*$/);
+      const name = m ? m[1].trim().replace(/^"(.*)"$/, "$1").trim() : "";
+      const email = (m ? m[2] : p).trim();
+      return { name, email };
+    });
+}
+
+/// One address as the SMTP side expects it (no commas or quotes in names).
+function formatAddress({ name, email }) {
+  const clean = (name || "").replace(/[,;"<>]+/g, " ").replace(/\s+/g, " ").trim();
+  return clean && clean.toLowerCase() !== email.toLowerCase() ? `${clean} <${email}>` : email;
+}
+
+/// The chips plus whatever is still being typed, as an address list.
+function recipientValue(id) {
+  return [...compose.rcpt[id], ...parseAddresses($(id).value)].map(formatAddress).join(", ");
+}
+
+function setRecipients(id, text) {
+  compose.rcpt[id] = [];
+  $(id).value = "";
+  addRecipients(id, parseAddresses(text));
+}
+
+/// Adds addresses (skipping ones already in the field), finding a name for bare addresses.
+function addRecipients(id, items) {
+  const list = compose.rcpt[id];
+  const pool = items.some((r) => !r.name) ? addressPool() : [];
+  for (const r of items) {
+    if (list.some((x) => x.email.toLowerCase() === r.email.toLowerCase())) continue;
+    const name = r.name || pool.find((p) => p.email.toLowerCase() === r.email.toLowerCase())?.name || "";
+    list.push({ name, email: r.email });
+  }
+  renderChips(id);
+}
+
+/// Turns typed text into chips: what comes before a comma, or everything when `all`.
+function commitRecipients(id, all = false) {
+  const input = $(id);
+  const text = input.value;
+  const cut = all ? text.length : Math.max(text.lastIndexOf(","), text.lastIndexOf(";"));
+  if (cut < 0 || !text.slice(0, cut).trim()) return;
+  input.value = text.slice(cut + (all ? 0 : 1)).trimStart();
+  addRecipients(id, parseAddresses(text.slice(0, cut)));
+}
+
+function clearChipSelection(except = null) {
+  for (const c of document.querySelectorAll(".chip.selected")) if (c !== except) c.classList.remove("selected");
+}
+
+function renderChips(id) {
+  const input = $(id);
+  const box = input.parentElement;
+  for (const c of box.querySelectorAll(".chip")) c.remove();
+  input.dataset.placeholder ??= input.placeholder;
+  input.placeholder = compose.rcpt[id].length ? "" : input.dataset.placeholder;
+  compose.rcpt[id].forEach((r) => {
+    const chip = el("span", "chip" + (validAddress(r.email) ? "" : " invalid"));
+    chip.draggable = true;
+    chip.title = formatAddress(r);
+    chip._rcpt = r;
+    chip.append(el("span", "chip-name", r.name || r.email));
+    if (r.name) chip.append(el("span", "chip-email", r.email));
+    const x = el("button", "chip-x", "×");
+    x.type = "button";
+    x.title = "Remove";
+    x.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      removeRecipients(id, [r]);
+    });
+    chip.append(x);
+    // Click selects (⌘/Ctrl-click adds to the selection), double-click shows the address.
+    chip.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (!(ev.metaKey || ev.ctrlKey || ev.shiftKey)) clearChipSelection(chip);
+      chip.classList.toggle("selected", ev.metaKey || ev.ctrlKey || ev.shiftKey ? !chip.classList.contains("selected") : true);
+      box.querySelector("input").focus();
+    });
+    chip.addEventListener("dblclick", (ev) => {
+      ev.stopPropagation();
+      chip.classList.toggle("expanded");
+    });
+    chip.addEventListener("dragstart", (ev) => {
+      if (!chip.classList.contains("selected")) {
+        clearChipSelection();
+        chip.classList.add("selected");
+      }
+      const items = [...document.querySelectorAll("#compose-form .chip.selected")].map((c) => ({
+        from: c.parentElement.querySelector("input").id,
+        r: c._rcpt,
+      }));
+      chipDrag = { items };
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", items.map((i) => formatAddress(i.r)).join(", "));
+      requestAnimationFrame(() => chip.classList.add("dragging"));
+    });
+    chip.addEventListener("dragend", () => {
+      chip.classList.remove("dragging");
+      chipDrag = null;
+      for (const b of document.querySelectorAll(".rcpt.drop-target")) b.classList.remove("drop-target");
+    });
+    box.insertBefore(chip, box.querySelector("input"));
+  });
+}
+
+function removeRecipients(id, items) {
+  compose.rcpt[id] = compose.rcpt[id].filter((r) => !items.includes(r));
+  renderChips(id);
+}
+
+for (const id of RCPT_FIELDS) {
+  const input = $(id);
+  const box = input.parentElement;
+  box.addEventListener("mousedown", (ev) => {
+    if (ev.target === box) {
+      ev.preventDefault();
+      clearChipSelection();
+      input.focus();
+    }
+  });
+  input.addEventListener("input", () => {
+    clearChipSelection();
+    if (/[,;]/.test(input.value)) commitRecipients(id);
+  });
+  input.addEventListener("blur", () => setTimeout(() => {
+    if (document.activeElement !== input) commitRecipients(id, true);
+  }, 150));
+  input.addEventListener("keydown", (ev) => {
+    const suggesting = !$("suggestions").hidden && suggest.input === input;
+    if (suggesting) return;
+    if (ev.key === "Enter" && !ev.metaKey && !ev.ctrlKey && input.value.trim()) {
+      ev.preventDefault();
+      commitRecipients(id, true);
+    } else if ((ev.key === "Backspace" || ev.key === "Delete") && !input.value) {
+      // Delete selected chips; otherwise Backspace selects the last one first.
+      const selected = [...box.querySelectorAll(".chip.selected")].map((c) => c._rcpt);
+      if (selected.length) {
+        ev.preventDefault();
+        removeRecipients(id, selected);
+      } else if (ev.key === "Backspace" && compose.rcpt[id].length) {
+        ev.preventDefault();
+        box.querySelectorAll(".chip")[compose.rcpt[id].length - 1].classList.add("selected");
+      }
+    }
+  });
+  box.addEventListener("dragover", (ev) => {
+    if (!chipDrag) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "move";
+    box.classList.add("drop-target");
+  });
+  box.addEventListener("dragleave", (ev) => {
+    if (!box.contains(ev.relatedTarget)) box.classList.remove("drop-target");
+  });
+  box.addEventListener("drop", (ev) => {
+    if (!chipDrag) return;
+    ev.preventDefault();
+    box.classList.remove("drop-target");
+    const moving = chipDrag.items.filter((i) => i.from !== id);
+    for (const from of new Set(moving.map((i) => i.from))) {
+      removeRecipients(from, moving.filter((i) => i.from === from).map((i) => i.r));
+    }
+    addRecipients(id, moving.map((i) => i.r));
+    chipDrag = null;
+    input.focus();
+  });
+}
+// Clicking elsewhere in the composer clears the chip selection.
+$("compose-form").addEventListener("mousedown", (ev) => {
+  if (!ev.target.closest?.(".chip")) clearChipSelection();
+});
 
 start();

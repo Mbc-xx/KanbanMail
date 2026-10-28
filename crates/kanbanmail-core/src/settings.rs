@@ -56,6 +56,49 @@ pub struct Settings {
     /// How long the "Undo" button stays after a move, in seconds (0 = no undo).
     #[serde(default = "default_undo")]
     pub undo_seconds: u32,
+    /// How long a sent email waits, with an "Undo" button, before it really
+    /// leaves (0 = sent at once).
+    #[serde(default = "default_undo_send")]
+    pub undo_send_seconds: u32,
+    /// Lines of preview text under the subject on board cards (0, 1 or 2).
+    #[serde(default = "default_preview_board")]
+    pub preview_board: u32,
+    /// Lines of preview text under the sender and subject in folder lists (0, 1 or 2).
+    #[serde(default = "default_preview_list")]
+    pub preview_list: u32,
+    /// The board column of emails waiting for an answer: "" = the column named
+    /// "Waiting", "none" = no such column.
+    #[serde(default)]
+    pub waiting_folder: String,
+    /// Emails in the waiting column are flagged after this many days (0 = never).
+    #[serde(default = "default_waiting_days")]
+    pub waiting_days: u32,
+    /// Most space the local copy of emails may take, in MB.
+    #[serde(default = "default_cache_mb")]
+    pub cache_max_mb: u32,
+    /// Download recent emails in the background so they open instantly.
+    #[serde(default = "default_true")]
+    pub prefetch: bool,
+}
+
+fn default_cache_mb() -> u32 {
+    1024
+}
+
+fn default_preview_board() -> u32 {
+    2
+}
+
+fn default_preview_list() -> u32 {
+    1
+}
+
+fn default_waiting_days() -> u32 {
+    3
+}
+
+fn default_undo_send() -> u32 {
+    10
 }
 
 fn default_undo() -> u32 {
@@ -129,6 +172,13 @@ impl Default for Settings {
             theme: default_theme(),
             zoom: default_zoom(),
             undo_seconds: default_undo(),
+            undo_send_seconds: default_undo_send(),
+            preview_board: default_preview_board(),
+            preview_list: default_preview_list(),
+            waiting_folder: String::new(),
+            waiting_days: default_waiting_days(),
+            cache_max_mb: default_cache_mb(),
+            prefetch: true,
         }
     }
 }

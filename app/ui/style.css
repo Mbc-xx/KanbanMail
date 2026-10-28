@@ -265,7 +265,7 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 .card.dragging { opacity: 0.4; }
 .card.busy { opacity: 0.6; pointer-events: none; }
 .card.pinned { background: var(--pinned-bg); border-color: var(--pin); }
-.card .from-line { display: flex; gap: 8px; font-size: 12px; color: var(--muted); padding-right: 70px; }
+.card .from-line { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); padding-right: 70px; }
 .card .from { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .date { flex-shrink: 0; }
 .card .subject { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -278,6 +278,37 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* How much preview text cards and folder rows show (Settings → Appearance). */
+:root[data-preview-board="1"] .card .preview { -webkit-line-clamp: 1; }
+:root[data-preview-board="0"] .cards:not(.rows) .card .preview { display: none; }
+.cards.rows .row-preview {
+  grid-column: 1 / 3;
+  margin-top: -6px;
+  padding-left: 46px; /* under the sender's name, past the dot and the initials */
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+:root[data-preview-list="0"] .cards.rows .row-preview { display: none; }
+:root[data-preview-list="2"] .cards.rows .row-preview { -webkit-line-clamp: 2; }
+/* Waiting column: an answer has arrived / waiting for a long time. */
+.wait-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.cards.rows .wait-tags { margin: 0; }
+.wait-tag {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 0 7px;
+  border-radius: 9px;
+  border: 0;
+  white-space: nowrap;
+}
+.wait-tag.replied { background: color-mix(in srgb, #1f9d55 18%, transparent); color: #1b8a4a; cursor: pointer; font-weight: 600; }
+.wait-tag.replied:hover { filter: brightness(0.95); }
+.wait-tag.late { background: color-mix(in srgb, var(--pin) 18%, transparent); color: var(--pin); }
+:root[data-theme="dark"] .wait-tag.replied, :root[data-theme="ocean"] .wait-tag.replied, :root[data-theme="forest"] .wait-tag.replied, :root[data-theme="midnight"] .wait-tag.replied { color: #4ade80; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme]) .wait-tag.replied { color: #4ade80; } }
 /* Quick actions on each card. */
 .card-actions {
   position: absolute;
@@ -334,6 +365,39 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 }
 .reader-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 4px; }
 .reader-head h2 { margin: 0; flex: 1; font-size: 18px; }
+.conv-bar { display: flex; align-items: center; gap: 6px; padding: 2px 16px 8px; }
+.conv-label { flex: 1; min-width: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+}
+.conv-btn:hover { color: var(--text); border-color: var(--accent); }
+.conv-btn.active { color: var(--pin); border-color: var(--pin); }
+.conv-btn .icon { width: 16px; height: 16px; }
+.conv-btn[disabled] { opacity: 0.4; }
+.conv-menu {
+  position: fixed;
+  z-index: 45;
+  min-width: 200px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+.conv-menu button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 5px; color: var(--text); }
+.conv-menu button:hover { background: var(--drop); }
+.conv-menu .icon { width: 14px; height: 14px; color: var(--muted); }
 .reader-meta {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -404,16 +468,40 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 button.danger { color: var(--error); }
 button:disabled { opacity: 0.6; cursor: default; }
 .column-head .unread { font-size: 12px; color: var(--accent); font-weight: 600; }
-.card.unseen::before {
-  content: "";
-  position: absolute;
-  left: -1px;
-  top: 10px;
-  bottom: 10px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--accent);
+/* Unread: a dot in the theme color, bold sender and a subject in the theme color. */
+.unread-dot { flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%; background: transparent; align-self: center; }
+.card.unseen .unread-dot { background: var(--accent); }
+.card.unseen .subject, .card.unseen .row-subject { color: var(--accent); font-weight: 700; }
+.card.unseen .from, .card.unseen .row-name { color: var(--text); font-weight: 700; }
+.card.child.unseen .row-subject { color: var(--text); font-weight: 400; }
+/* Sender initials */
+.card .avatar { flex-shrink: 0; width: 18px; height: 18px; font-size: 9px; font-weight: 700; align-self: center; }
+.cards.rows .avatar { width: 26px; height: 26px; font-size: 11px; }
+.cards.rows .card.child .avatar { width: 22px; height: 22px; font-size: 10px; }
+/* Conversations in folder lists: › opens them, ⌄ closes them. */
+.chevron {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
 }
+.chevron:hover { background: var(--drop); color: var(--text); }
+.chevron .icon { width: 14px; height: 14px; transition: transform 0.15s; }
+.chevron.open .icon { transform: rotate(90deg); }
+.chevron-space { flex-shrink: 0; width: 18px; }
+.cards.rows .card.child { padding-left: 48px; }
+.cards.rows.threads .row-preview { padding-left: 70px; }
+.thread-loading { padding: 6px 12px 6px 48px; font-size: 12px; }
+.cards.rows .card.child .row-subject { color: var(--muted); }
+.thread-count.unread-count { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 .reader-actions {
   display: flex;
@@ -427,6 +515,47 @@ button:disabled { opacity: 0.6; cursor: default; }
 .composer { width: min(760px, 100%); }
 .compose-fields { display: flex; flex-direction: column; gap: 6px; padding: 4px 16px 10px; }
 .compose-fields label { display: grid; grid-template-columns: 70px 1fr; align-items: center; color: var(--muted); }
+.compose-fields .field-row { display: grid; grid-template-columns: 70px 1fr; align-items: center; color: var(--muted); }
+/* Recipients as chips: click to select, double-click to see the address, drag between To / Cc / Bcc. */
+.rcpt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 34px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: text;
+}
+.rcpt:focus-within { border-color: var(--accent); }
+.rcpt.drop-target { border-color: var(--accent); background: var(--drop); }
+.composer .rcpt input { flex: 1; min-width: 140px; border: 0; padding: 5px 4px; background: transparent; outline: none; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 3px 2px 9px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip .chip-email { display: none; opacity: 0.75; }
+.chip.expanded .chip-email { display: inline; }
+.chip.selected { background: var(--accent); color: #fff; }
+.chip.invalid { background: color-mix(in srgb, #dc2626 16%, transparent); color: #b91c1c; }
+.chip.dragging { opacity: 0.4; }
+.chip-x { border: 0; background: none; color: inherit; opacity: 0.55; padding: 0 4px; font-size: 14px; line-height: 1; cursor: pointer; }
+.chip-x:hover { opacity: 1; }
 .composer input, .composer textarea, .settings-card input, .settings-card select, .settings-card textarea, .tab-panel input {
   font: inherit;
   color: var(--text);
@@ -485,6 +614,8 @@ button:disabled { opacity: 0.6; cursor: default; }
 .tab-panel p { margin: 0; }
 .tab-panel input[type="text"], .tab-panel input[type="number"], .tab-panel input[type="url"] { font-weight: normal; }
 .row-2 { display: grid; grid-template-columns: 1fr 170px; gap: 10px; }
+.row-2.even { grid-template-columns: 1fr 1fr; }
+.settings-sub { margin: 14px 0 0; font-size: 13px; font-weight: 600; }
 .contacts-status { display: flex; align-items: center; gap: 8px; margin-top: -8px; padding-left: 24px; }
 .contacts-status button { font-size: 12px; padding: 3px 8px; }
 .danger-zone { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
@@ -618,9 +749,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 .cards.rows .card:hover { border-color: var(--border); }
 .cards.rows .card.selected { border-color: var(--accent); background: var(--drop); }
-.cards.rows .card.unseen::before { top: 8px; bottom: 8px; }
-.cards.rows .row-from { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cards.rows .card.unseen .row-from, .cards.rows .card.unseen .row-subject { font-weight: 700; }
+.cards.rows .row-from { overflow: hidden; white-space: nowrap; min-width: 0; }
+.cards.rows .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .cards.rows .row-main { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .cards.rows .row-preview { color: var(--muted); }
 .cards.rows .row-date { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
@@ -666,6 +796,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .thread-row:hover { border-color: var(--accent); }
 .thread-row.unseen .t-from { font-weight: 700; }
 .avatar {
+  flex-shrink: 0;
   width: 28px; height: 28px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
   color: #fff; font-size: 12px; font-weight: 600;
@@ -700,7 +831,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-radius: 8px; font-size: 11px; font-weight: 600;
   background: var(--panel); color: var(--muted); border: 1px solid var(--border);
 }
-.cards.rows .row-from { display: flex; align-items: center; gap: 2px; }
+.cards.rows .row-from { display: flex; align-items: center; gap: 6px; }
 .column { border-top: 3px solid var(--folder-color, transparent); }
 .folder-prefs { display: flex; flex-direction: column; gap: 2px; }
 .column-pref { grid-template-columns: auto 1fr 1fr auto; }

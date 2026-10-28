@@ -1,14 +1,14 @@
 //! Sending email over SMTP (port 465 SSL/TLS or 587 STARTTLS).
 
 use crate::account::Account;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use lettre::message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::Deserialize;
 
 /// An email written in the app. Addresses are comma-separated.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct Draft {
     pub to: String,
     #[serde(default)]
@@ -320,6 +320,9 @@ fn attachment_parts(list: &[OutgoingAttachment]) -> Result<Vec<SinglePart>> {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(a.data.trim())
                 .map_err(|_| anyhow!("attachment {} is not valid", a.name))?;
+            if bytes.is_empty() {
+                bail!("the attachment {} is empty: remove it and attach the file again", a.name);
+            }
             let ctype = ContentType::parse(if a.mime.is_empty() { "application/octet-stream" } else { &a.mime })
                 .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
             Ok(Attachment::new(a.name.clone()).body(bytes, ctype))
@@ -577,6 +580,9 @@ mod tests {
         let plain = Draft { markdown: false, ..draft };
         let raw = String::from_utf8(build(&acc, &plain, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/mixed") && !raw.contains("text/html"), "{raw}");
+        // An empty attachment is refused instead of being sent as 0 bytes.
+        let empty = Draft { attachments: vec![OutgoingAttachment { name: "a.xlsx".into(), mime: String::new(), data: String::new() }], ..plain };
+        assert!(build(&acc, &empty, None).unwrap_err().to_string().contains("a.xlsx is empty"));
     }
 }
 

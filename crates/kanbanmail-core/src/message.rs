@@ -1,10 +1,10 @@
 //! Message (MIME) parsing for cards and the reader.
 
 use mail_parser::MessageParser;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A board card.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Card {
     pub uid: u32,
     pub from: String,

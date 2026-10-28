@@ -10,6 +10,7 @@
   <!-- Line icons (24×24, stroke = currentColor), referenced with <use href="#i-name"> -->
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
     <symbol id="i-allmail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9l1.6-4.2A1.5 1.5 0 0 1 7 4h10a1.5 1.5 0 0 1 1.4.8L20 9v4H4z"/><path d="M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M4 9h4l1 2h6l1-2h4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
     <symbol id="i-chevron-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></symbol>
     <symbol id="i-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></symbol>
     <symbol id="i-forward" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 7l5 5-5 5"/><path d="M20 12H10a6 6 0 0 0-6 6v1"/></symbol>
@@ -104,6 +105,16 @@
         <h2 id="reader-subject"></h2>
         <button id="reader-close" class="icon-btn" title="Close (Esc)"><svg class="icon"><use href="#i-close"/></svg></button>
       </header>
+      <!-- Actions on every email of the conversation -->
+      <div class="conv-bar">
+        <span id="conv-label" class="conv-label"></span>
+        <button type="button" id="conv-pin" class="conv-btn"><svg class="icon"><use href="#i-pin"/></svg></button>
+        <button type="button" id="conv-seen" class="conv-btn"><svg class="icon"><use href="#i-envelope-open"/></svg></button>
+        <button type="button" id="conv-archive" class="conv-btn"><svg class="icon"><use href="#i-archive"/></svg></button>
+        <button type="button" id="conv-trash" class="conv-btn"><svg class="icon"><use href="#i-trash"/></svg></button>
+        <button type="button" id="conv-spam" class="conv-btn"><svg class="icon"><use href="#i-junk"/></svg></button>
+        <button type="button" id="conv-move" class="conv-btn"><svg class="icon"><use href="#i-folder"/></svg></button>
+      </div>
       <!-- One scrolling column: earlier emails, the open email, later replies -->
       <div id="reader-scroll" class="reader-scroll">
         <div id="thread-before" class="thread" hidden></div>
@@ -179,9 +190,9 @@
         <button type="button" id="compose-close" class="icon-btn" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
       </header>
       <div class="compose-fields">
-        <label>To <input id="compose-to" type="text" placeholder="name@example.com, other@example.com" autocomplete="off" required></label>
-        <label>Cc <input id="compose-cc" type="text" autocomplete="off"></label>
-        <label>Bcc <input id="compose-bcc" type="text" autocomplete="off" placeholder="Blind copy: nobody sees these addresses"></label>
+        <div class="field-row"><span>To</span><div class="rcpt"><input id="compose-to" type="text" placeholder="name@example.com, other@example.com" autocomplete="off"></div></div>
+        <div class="field-row"><span>Cc</span><div class="rcpt"><input id="compose-cc" type="text" autocomplete="off"></div></div>
+        <div class="field-row"><span>Bcc</span><div class="rcpt"><input id="compose-bcc" type="text" autocomplete="off" placeholder="Blind copy: nobody sees these addresses"></div></div>
         <label>Subject <input id="compose-subject" type="text"></label>
       </div>
       <div class="compose-tools">
@@ -196,7 +207,6 @@
         <span id="compose-size" class="muted small"></span>
       </div>
       <div id="compose-attachments" class="attachments compose-files" hidden></div>
-      <input id="compose-file" type="file" multiple hidden>
       <div id="rich-toolbar" class="sig-toolbar rich-toolbar" hidden>
         <button type="button" class="icon-btn" data-rich="bold" title="Bold (⌘B)"><b>B</b></button>
         <button type="button" class="icon-btn" data-rich="italic" title="Italic (⌘I)"><i>I</i></button>
@@ -269,6 +279,24 @@
               <input id="import-file" type="file" accept=".json,application/json" hidden>
             </div>
           </div>
+          <div class="field">
+            <span class="field-label">Copy on this Mac</span>
+            <p class="muted small">Emails are kept on this Mac so they open instantly, can be searched and read without a connection, and changes made offline are sent later. Recent emails of the Inbox and the board columns are downloaded in the background.</p>
+            <p id="cache-stats" class="muted small"></p>
+            <div class="row-2">
+              <label>Space it may use
+                <select id="set-cache-mb">
+                  <option value="250">250 MB</option>
+                  <option value="500">500 MB</option>
+                  <option value="1024">1 GB</option>
+                  <option value="2048">2 GB</option>
+                  <option value="5120">5 GB</option>
+                </select>
+              </label>
+              <label class="toggle"><input id="set-prefetch" type="checkbox"> Download recent emails in the background</label>
+            </div>
+            <div><button type="button" id="clear-cache">Clear the copy on this Mac</button></div>
+          </div>
           <p class="muted small">Board columns are in the Columns tab (stored in <code id="settings-config-path"></code>).</p>
           <div class="field danger-zone">
             <span class="field-label">Disconnect</span>
@@ -281,6 +309,24 @@
           <p class="muted small">The board columns, left to right. Drag to reorder; each column shows an IMAP folder (choose an existing one, or type a new name to create it).</p>
           <div id="column-prefs" class="folder-prefs"></div>
           <div><button type="button" id="add-column">+ Add column</button></div>
+          <h3 class="settings-sub">Waiting for an answer</h3>
+          <div class="row-2 even">
+            <label>Column of emails you are waiting on
+              <select id="set-waiting"></select>
+            </label>
+            <label>Flag them after
+              <select id="set-waiting-days">
+                <option value="0">Never</option>
+                <option value="1">1 day</option>
+                <option value="2">2 days</option>
+                <option value="3">3 days</option>
+                <option value="5">5 days</option>
+                <option value="7">1 week</option>
+                <option value="14">2 weeks</option>
+              </select>
+            </label>
+          </div>
+          <p class="muted small">In this column, an email shows “Replied” when an answer in the same conversation has arrived (click it to open the answer), and how long it has been waiting once it passes the time above.</p>
           <datalist id="folder-names"></datalist>
         </section>
 
@@ -310,6 +356,22 @@
                 <option value="100">Normal</option>
                 <option value="110">Large</option>
                 <option value="125">Extra large</option>
+              </select>
+            </label>
+          </div>
+          <div class="row-2 even">
+            <label>Preview on board cards
+              <select id="set-preview-board">
+                <option value="0">None (subject only)</option>
+                <option value="1">1 line</option>
+                <option value="2">2 lines</option>
+              </select>
+            </label>
+            <label>Preview in folder lists
+              <select id="set-preview-list">
+                <option value="0">None (subject only)</option>
+                <option value="1">1 line under the subject line</option>
+                <option value="2">2 lines under the subject line</option>
               </select>
             </label>
           </div>
@@ -351,6 +413,16 @@
             <input id="set-bcc" type="text" placeholder="archive@example.com, me@example.com" autocomplete="off">
           </label>
           <p class="muted small">Added in blind copy to every new email and reply. You can still change it in each email.</p>
+          <label>Undo send
+            <select id="set-undo-send">
+              <option value="0">Off (send at once)</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="20">20 seconds</option>
+              <option value="30">30 seconds</option>
+            </select>
+          </label>
+          <p class="muted small">After "Send" the email waits this long with an "Undo" button, which brings it back to the composer. If the app is closed in the meantime, the email stays in Drafts.</p>
           <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
           <div class="contacts-status">
             <span id="contacts-status" class="muted small"></span>

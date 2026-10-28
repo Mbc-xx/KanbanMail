@@ -15,6 +15,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "hostname", "ring", "webpki-roots"] }
 mail-parser = "1.0.0"
 pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["full"] }

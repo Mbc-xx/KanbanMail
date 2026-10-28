@@ -11,6 +11,7 @@ use kanbanmail_core::{
     secret,
     settings::Settings,
     smtp::{self, Draft},
+    store::Store,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,6 +32,36 @@ struct Inner {
     caps: ServerCaps,
     caches: HashMap<String, FolderCache>,
     limit: u32,
+    /// When the server could last not be reached: for a short while new
+    /// attempts fail at once instead of waiting for a timeout each time.
+    offline_since: Option<std::time::Instant>,
+}
+
+/// How long the app considers itself offline after a failed connection.
+const OFFLINE_PAUSE: Duration = Duration::from_secs(30);
+/// Longest wait for one server operation on a slow connection.
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The error means the server could not be reached (not that it refused the action).
+fn is_offline(e: &str) -> bool {
+    let e = e.to_lowercase();
+    [
+        "offline",
+        "no answer",
+        "did not answer",
+        "cannot reach",
+        "timed out",
+        "connection",
+        "broken pipe",
+        "network",
+        "tls",
+        "dns",
+        "failed to lookup",
+        "os error",
+        "unexpected eof",
+    ]
+    .iter()
+    .any(|k| e.contains(k))
 }
 
 #[derive(Default)]
@@ -38,6 +69,34 @@ struct AppState {
     inner: Mutex<Inner>,
     /// Changes on every login/logout: old watchers stop.
     generation: Arc<AtomicU64>,
+    /// Local copy of the mailbox (None until an account is known, or if it
+    /// cannot be opened: the app then simply works without it).
+    store: std::sync::Mutex<Option<Store>>,
+    /// Held while the waiting changes are being sent (one replay at a time).
+    replaying: Mutex<()>,
+}
+
+impl AppState {
+    /// Runs something on the local copy. Its errors are only logged: the
+    /// cache must never stop the app from working with the server.
+    fn with_store<T>(&self, f: impl FnOnce(&mut Store) -> anyhow::Result<T>) -> Option<T> {
+        let mut guard = self.store.lock().ok()?;
+        let store = guard.as_mut()?;
+        match f(store) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("local copy: {e:#}");
+                None
+            }
+        }
+    }
+
+    fn open_store(&self, email: &str) {
+        let opened = Store::open(email).map_err(|e| eprintln!("local copy unavailable: {e:#}")).ok();
+        if let Ok(mut guard) = self.store.lock() {
+            *guard = opened;
+        }
+    }
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -52,7 +111,19 @@ impl Inner {
             let (Some(acc), Some(pw)) = (&self.account, &self.password) else {
                 anyhow::bail!("no account configured");
             };
-            let mut s = imap::connect(acc, pw).await?;
+            if self.offline_since.is_some_and(|t| t.elapsed() < OFFLINE_PAUSE) {
+                anyhow::bail!("offline: the server cannot be reached right now");
+            }
+            let mut s = match imap::connect(acc, pw).await {
+                Ok(s) => s,
+                Err(e) => {
+                    if is_offline(&format!("{e:#}")) {
+                        self.offline_since = Some(std::time::Instant::now());
+                    }
+                    return Err(e);
+                }
+            };
+            self.offline_since = None;
             self.caps = imap::server_caps(&mut s).await?;
             self.session = Some(s);
         }
@@ -67,20 +138,26 @@ macro_rules! with_retry {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            let res: anyhow::Result<_> = async {
+            let res: anyhow::Result<_> = tokio::time::timeout(OPERATION_TIMEOUT, async {
                 $inner.ensure_session().await?;
                 let $caps = $inner.caps;
                 let $s = $inner.session.as_mut().unwrap();
                 $body.await
-            }
-            .await;
+            })
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the server did not answer in time (slow connection)")));
             match res {
                 Ok(v) => break Ok(v),
-                Err(e) if attempt < 2 => {
-                    eprintln!("IMAP error, reconnecting: {e:#}");
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    // The connection may be half-broken: start a fresh one next time.
                     $inner.session = None;
+                    // Offline or too slow: retrying would only wait again.
+                    if attempt >= 2 || msg.starts_with("offline") || msg.contains("did not answer in time") {
+                        break Err(msg);
+                    }
+                    eprintln!("IMAP error, reconnecting: {msg}");
                 }
-                Err(e) => break Err(err(e)),
             }
         }
     }};
@@ -103,6 +180,7 @@ async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
             Some(pw) => {
                 inner.account = Some(a.clone());
                 inner.password = Some(pw);
+                state.open_store(&a.email);
                 true
             }
             None => false,
@@ -124,6 +202,7 @@ async fn login(server: String, email: String, password: String, state: State<'_,
     let caps = imap::server_caps(&mut session).await.map_err(err)?;
     account.save().map_err(err)?;
     secret::set_password(&account.email, &password).map_err(err)?;
+    state.open_store(&account.email);
     let mut inner = state.inner.lock().await;
     *inner = Inner { account: Some(account), password: Some(password), session: Some(session), caps, ..Default::default() };
     Ok(())
@@ -136,6 +215,10 @@ async fn forget_account(state: State<'_, AppState>) -> CmdResult<()> {
     let mut inner = state.inner.lock().await;
     if let Some(acc) = &inner.account {
         secret::delete_password(&acc.email).map_err(err)?;
+        if let Ok(mut guard) = state.store.lock() {
+            *guard = None;
+        }
+        kanbanmail_core::store::delete_for(&acc.email).ok();
     }
     if let Some(mut s) = inner.session.take() {
         s.logout().await.ok();
@@ -198,6 +281,10 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
         .filter(|f| !(caps.idle && f.eq_ignore_ascii_case("INBOX")))
         .collect();
     tauri::async_runtime::spawn(poll_folders(app.clone(), state.generation.clone(), generation, polled));
+    let mut prefetched: Vec<String> = vec!["INBOX".to_string()];
+    prefetched.extend(columns.iter().map(|c| c.folder.clone()).filter(|f| !f.eq_ignore_ascii_case("INBOX")));
+    tauri::async_runtime::spawn(prefetch_bodies(app.clone(), state.generation.clone(), generation, prefetched));
+    tauri::async_runtime::spawn(replay_loop(app.clone(), state.generation.clone(), generation));
 
     Ok(BoardInfo {
         columns,
@@ -249,6 +336,222 @@ async fn watch_folder(
     }
 }
 
+// ---------- actions made without a connection ----------
+
+/// A change to make on the server; kept in the local queue while offline.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum QueuedOp {
+    Move { from: String, uid: u32, to: String },
+    File { folder: String, uid: u32, kind: String },
+    Pin { folder: String, uid: u32, pinned: bool },
+    Seen { folder: String, uids: Vec<u32>, seen: bool },
+    Send { draft: Draft, reply: Option<ReplyTarget> },
+}
+
+impl QueuedOp {
+    fn kind(&self) -> &'static str {
+        match self {
+            QueuedOp::Move { .. } => "move",
+            QueuedOp::File { .. } => "file",
+            QueuedOp::Pin { .. } => "pin",
+            QueuedOp::Seen { .. } => "seen",
+            QueuedOp::Send { .. } => "send",
+        }
+    }
+
+    /// What it is, for messages to the user.
+    fn describe(&self) -> String {
+        match self {
+            QueuedOp::Move { to, .. } => format!("moving an email to {to}"),
+            QueuedOp::File { kind, .. } => format!("moving an email to {kind}"),
+            QueuedOp::Pin { .. } => "pinning an email".into(),
+            QueuedOp::Seen { .. } => "marking emails read/unread".into(),
+            QueuedOp::Send { draft, .. } => format!("sending “{}”", draft.subject),
+        }
+    }
+}
+
+/// Does it on the server. Returns the destination folder for File.
+async fn run_op(state: &AppState, op: &QueuedOp) -> CmdResult<Option<String>> {
+    if let QueuedOp::Send { draft, reply } = op {
+        return send_now(state, draft.clone(), reply.clone()).await.map(|_| None);
+    }
+    let mut inner = state.inner.lock().await;
+    match op {
+        QueuedOp::Move { from, uid, to } => with_retry!(inner, |s, caps| imap::move_message(s, caps, from, *uid, to)).map(|_| None),
+        QueuedOp::File { folder, uid, kind } => with_retry!(inner, |s, caps| async {
+            let target = imap::special_folder(s, kind).await?;
+            anyhow::ensure!(target != *folder, "the email is already in {target}");
+            imap::move_message(s, caps, folder, *uid, &target).await?;
+            Ok(target)
+        })
+        .map(Some),
+        QueuedOp::Pin { folder, uid, pinned } => with_retry!(inner, |s, _caps| imap::set_flagged(s, folder, *uid, *pinned)).map(|_| None),
+        QueuedOp::Seen { folder, uids, seen } => with_retry!(inner, |s, _caps| imap::set_seen_many(s, folder, uids, *seen)).map(|_| None),
+        QueuedOp::Send { .. } => unreachable!(),
+    }
+}
+
+fn queue_op(app: &AppHandle, state: &AppState, op: &QueuedOp) -> CmdResult<()> {
+    let payload = serde_json::to_string(op).map_err(|e| e.to_string())?;
+    state
+        .with_store(|st| st.enqueue(op.kind(), &payload))
+        .ok_or("no connection, and the change could not be kept for later")?;
+    emit_queue(app, state);
+    Ok(())
+}
+
+fn emit_queue(app: &AppHandle, state: &AppState) {
+    let count = state.with_store(|st| st.queue()).map(|q| q.len()).unwrap_or(0);
+    app.emit("queue-changed", count).ok();
+}
+
+/// Done on the server (with File's destination), or kept for later.
+enum Outcome {
+    Done(Option<String>),
+    Queued,
+}
+
+/// Does it now, or keeps it for later when the server cannot be reached.
+async fn perform_or_queue(app: &AppHandle, state: &AppState, op: QueuedOp) -> CmdResult<Outcome> {
+    // Changes keep their order: while older ones wait, new ones wait too.
+    let waiting = state.with_store(|st| st.queue()).map(|q| !q.is_empty()).unwrap_or(false);
+    if !waiting {
+        match run_op(state, &op).await {
+            Err(e) if is_offline(&e) => {}
+            other => return other.map(Outcome::Done),
+        }
+    }
+    queue_op(app, state, &op)?;
+    Ok(Outcome::Queued)
+}
+
+/// Sends the waiting changes, oldest first. Stops at the first one that
+/// cannot reach the server; one the server refuses is dropped and reported.
+async fn replay_queue(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let _running = state.replaying.lock().await;
+    let queue = state.with_store(|st| st.queue()).unwrap_or_default();
+    if queue.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    for item in queue {
+        let Ok(op) = serde_json::from_str::<QueuedOp>(&item.payload) else {
+            state.with_store(|st| st.dequeue(item.id));
+            continue;
+        };
+        match run_op(&state, &op).await {
+            Ok(_) => {
+                state.with_store(|st| st.dequeue(item.id));
+                changed = true;
+            }
+            Err(e) if is_offline(&e) => {
+                state.with_store(|st| st.queue_failed(item.id, &e));
+                break;
+            }
+            Err(e) => {
+                state.with_store(|st| st.dequeue(item.id));
+                changed = true;
+                app.emit("queue-error", format!("Could not finish {}: {e}", op.describe())).ok();
+            }
+        }
+    }
+    emit_queue(app, &state);
+    if changed {
+        app.emit("queue-flushed", ()).ok();
+    }
+}
+
+/// Tries the waiting changes now (when the app sees the connection is back).
+#[tauri::command]
+async fn flush_queue(app: AppHandle) -> usize {
+    replay_queue(&app).await;
+    let state = app.state::<AppState>();
+    state.with_store(|st| st.queue()).map(|q| q.len()).unwrap_or(0)
+}
+
+/// How many changes wait for the connection.
+#[tauri::command]
+fn queue_count(state: State<'_, AppState>) -> usize {
+    state.with_store(|st| st.queue()).map(|q| q.len()).unwrap_or(0)
+}
+
+/// Retries the waiting changes every 30 seconds.
+async fn replay_loop(app: AppHandle, current: Arc<AtomicU64>, generation: u64) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        if current.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        replay_queue(&app).await;
+    }
+}
+
+/// Emails bigger than this are not downloaded in the background (only when opened).
+const PREFETCH_MAX_SIZE: u64 = 3 * 1024 * 1024;
+
+/// Downloads, a few at a time, the content of the newest emails of the Inbox
+/// and the board columns, so they open instantly (and offline). Keeps the
+/// local copy under the size chosen in the settings.
+async fn prefetch_bodies(app: AppHandle, current: Arc<AtomicU64>, generation: u64, folders: Vec<String>) {
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    loop {
+        if current.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let settings = Settings::load().unwrap_or_default();
+        let state = app.state::<AppState>();
+        let mut downloaded = 0;
+        if settings.prefetch {
+            let missing = state.with_store(|st| st.missing_bodies(&folders, 6)).unwrap_or_default();
+            let mut by_folder: Vec<(String, Vec<u32>)> = Vec::new();
+            for (folder, uid) in missing {
+                match by_folder.iter_mut().find(|(f, _)| *f == folder) {
+                    Some((_, uids)) => uids.push(uid),
+                    None => by_folder.push((folder, vec![uid])),
+                }
+            }
+            for (folder, uids) in by_folder {
+                let res: Result<_, String> = {
+                    let mut inner = state.inner.lock().await;
+                    with_retry!(inner, |s, _caps| imap::fetch_raws(s, &folder, &uids, PREFETCH_MAX_SIZE))
+                };
+                let Ok(list) = res else { break }; // offline or slow: try again later
+                for (uid, raw, size) in list {
+                    match raw {
+                        Some(raw) => state.with_store(|st| st.put_raw(&folder, uid, &raw)),
+                        None => state.with_store(|st| st.mark_too_big(&folder, uid, size)),
+                    };
+                    downloaded += 1;
+                }
+            }
+            state.with_store(|st| st.evict(u64::from(settings.cache_max_mb) * 1024 * 1024));
+        }
+        // Quick rounds while there is something to download, then rest.
+        tokio::time::sleep(Duration::from_secs(if downloaded > 0 { 2 } else { 120 })).await;
+    }
+}
+
+/// How much the local copy holds.
+#[tauri::command]
+fn cache_stats(state: State<'_, AppState>) -> kanbanmail_core::store::StoreStats {
+    state.with_store(|st| st.stats()).unwrap_or_default()
+}
+
+/// Deletes the local copy (it is rebuilt as folders are opened again).
+#[tauri::command]
+async fn clear_cache(state: State<'_, AppState>) -> CmdResult<()> {
+    let email = state.inner.lock().await.account.as_ref().map(|a| a.email.clone()).ok_or("no account configured")?;
+    if let Ok(mut guard) = state.store.lock() {
+        *guard = None;
+    }
+    let result = kanbanmail_core::store::delete_for(&email).map_err(err);
+    state.open_store(&email);
+    result
+}
+
 /// Checks the given folders every 60 seconds on the main connection and reports
 /// the ones that changed (new, removed, read or flagged emails) to the UI.
 async fn poll_folders(app: AppHandle, current: Arc<AtomicU64>, generation: u64, folders: Vec<String>) {
@@ -275,34 +578,86 @@ async fn load_column(folder: String, limit: Option<u32>, state: State<'_, AppSta
     let mut guard = state.inner.lock().await;
     let inner = &mut *guard;
     let limit = limit.unwrap_or(inner.limit).clamp(1, 5000);
-    let mut cache = inner.caches.remove(&folder).unwrap_or_default();
+    // Start from the local copy: only new emails and flags are downloaded.
+    let mut cache = match inner.caches.remove(&folder) {
+        Some(c) => c,
+        None => state
+            .with_store(|st| st.folder_cards(&folder))
+            .map(|(validity, cards)| FolderCache::from_cards(validity, cards))
+            .unwrap_or_default(),
+    };
     let res = with_retry!(inner, |s, _caps| imap::load_cards(s, &folder, &mut cache, limit));
+    if let Ok(cards) = &res {
+        let complete = (cards.len() as u32) < limit;
+        state.with_store(|st| st.save_cards(&folder, cache.uid_validity(), cards, complete));
+    }
     inner.caches.insert(folder, cache);
     res
 }
 
+/// The cards of a folder kept locally (instant, works offline).
 #[tauri::command]
-async fn move_card(from: String, uid: u32, to: String, state: State<'_, AppState>) -> CmdResult<()> {
-    let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, caps| imap::move_message(s, caps, &from, uid, &to))
+fn cached_column(folder: String, limit: u32, state: State<'_, AppState>) -> Vec<Card> {
+    state.with_store(|st| st.cards(&folder, limit)).unwrap_or_default()
+}
+
+/// The newest emails known on this Mac across folders (All Mail offline).
+#[tauri::command]
+fn cached_all_mail(state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
+    state.with_store(|st| st.recent(300)).unwrap_or_default()
+}
+
+/// The full email: from the local copy if it is there, otherwise from the
+/// server (and then kept).
+async fn raw_email(state: &AppState, folder: &str, uid: u32) -> CmdResult<Vec<u8>> {
+    if let Some(Some(raw)) = state.with_store(|st| st.raw(folder, uid)) {
+        return Ok(raw);
+    }
+    let raw = {
+        let mut inner = state.inner.lock().await;
+        with_retry!(inner, |s, _caps| imap::load_raw(s, folder, uid))
+    };
+    match raw {
+        Ok(raw) => {
+            state.with_store(|st| st.put_raw(folder, uid, &raw));
+            Ok(raw)
+        }
+        Err(e) => {
+            // Moved or deleted by another program: forget the stale card.
+            if e.contains("no longer exists") {
+                state.with_store(|st| st.remove(folder, &[uid]));
+            }
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
-async fn set_pin(folder: String, uid: u32, pinned: bool, state: State<'_, AppState>) -> CmdResult<()> {
-    let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, _caps| imap::set_flagged(s, &folder, uid, pinned))
+/// true when moved now, false when the move waits for the connection.
+async fn move_card(from: String, uid: u32, to: String, app: AppHandle, state: State<'_, AppState>) -> CmdResult<bool> {
+    let outcome = perform_or_queue(&app, &state, QueuedOp::Move { from: from.clone(), uid, to }).await?;
+    state.with_store(|st| st.remove(&from, &[uid]));
+    Ok(matches!(outcome, Outcome::Done(_)))
+}
+
+#[tauri::command]
+async fn set_pin(folder: String, uid: u32, pinned: bool, app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    perform_or_queue(&app, &state, QueuedOp::Pin { folder: folder.clone(), uid, pinned }).await?;
+    state.with_store(|st| st.set_flags(&folder, &[uid], None, Some(pinned)));
+    Ok(())
 }
 
 #[tauri::command]
 async fn read_message(folder: String, uid: u32, state: State<'_, AppState>) -> CmdResult<MessageView> {
-    let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, _caps| imap::load_message(s, &folder, uid))
+    let raw = raw_email(&state, &folder, uid).await?;
+    Ok(kanbanmail_core::message::parse_view(&raw))
 }
 
 #[tauri::command]
-async fn set_seen(folder: String, uid: u32, seen: bool, state: State<'_, AppState>) -> CmdResult<()> {
-    let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, _caps| imap::set_seen(s, &folder, uid, seen))
+async fn set_seen(folder: String, uid: u32, seen: bool, app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    perform_or_queue(&app, &state, QueuedOp::Seen { folder: folder.clone(), uids: vec![uid], seen }).await?;
+    state.with_store(|st| st.set_flags(&folder, &[uid], Some(seen), None));
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -327,6 +682,28 @@ struct SettingsView {
     theme: String,
     zoom: u32,
     undo_seconds: u32,
+    #[serde(default)]
+    undo_send_seconds: u32,
+    #[serde(default)]
+    preview_board: u32,
+    #[serde(default)]
+    preview_list: u32,
+    #[serde(default)]
+    waiting_folder: String,
+    #[serde(default)]
+    waiting_days: u32,
+    #[serde(default = "default_cache_mb")]
+    cache_max_mb: u32,
+    #[serde(default = "default_yes")]
+    prefetch: bool,
+}
+
+fn default_cache_mb() -> u32 {
+    1024
+}
+
+fn default_yes() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -355,6 +732,13 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         theme: settings.theme,
         zoom: settings.zoom,
         undo_seconds: settings.undo_seconds,
+        undo_send_seconds: settings.undo_send_seconds,
+        preview_board: settings.preview_board,
+        preview_list: settings.preview_list,
+        waiting_folder: settings.waiting_folder,
+        waiting_days: settings.waiting_days,
+        cache_max_mb: settings.cache_max_mb,
+        prefetch: settings.prefetch,
     })
 }
 
@@ -389,13 +773,20 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         theme: settings.theme,
         zoom: settings.zoom.clamp(80, 150),
         undo_seconds: settings.undo_seconds.min(60),
+        undo_send_seconds: settings.undo_send_seconds.min(60),
+        preview_board: settings.preview_board.min(2),
+        preview_list: settings.preview_list.min(2),
+        waiting_folder: settings.waiting_folder.trim().to_string(),
+        waiting_days: settings.waiting_days.min(365),
+        cache_max_mb: settings.cache_max_mb.clamp(100, 20_000),
+        prefetch: settings.prefetch,
     }
         .save()
         .map_err(err)
 }
 
 /// The email being replied to, so it can be marked as answered.
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ReplyTarget {
     folder: String,
     uid: u32,
@@ -410,7 +801,23 @@ struct SendResult {
 }
 
 #[tauri::command]
-async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, AppState>) -> CmdResult<SendResult> {
+async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, app: AppHandle, state: State<'_, AppState>) -> CmdResult<SendResult> {
+    match send_now(&state, draft.clone(), reply.clone()).await {
+        Err(e) if is_offline(&e) => {
+            queue_op(&app, &state, &QueuedOp::Send { draft, reply })?;
+            Ok(SendResult {
+                saved_to: None,
+                warning: Some("No connection: the email will be sent as soon as the server can be reached.".into()),
+            })
+        }
+        other => other,
+    }
+}
+
+/// Longest wait for the mail server to accept an email (attachments on a slow line).
+const SEND_TIMEOUT: Duration = Duration::from_secs(300);
+
+async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) -> CmdResult<SendResult> {
     let (account, password) = {
         let inner = state.inner.lock().await;
         (
@@ -425,7 +832,10 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, state: State<'_, Ap
     }
     let signature = Settings::load().map_err(err)?.html_signature();
     let message = smtp::build(&account, &draft, signature.as_ref()).map_err(err)?;
-    smtp::send(&account, &password, &message).await.map_err(err)?;
+    tokio::time::timeout(SEND_TIMEOUT, smtp::send(&account, &password, &message))
+        .await
+        .map_err(|_| "the mail server did not answer in time (slow connection)".to_string())?
+        .map_err(err)?;
 
     // The email has been sent: from here on errors are only warnings.
     let raw = smtp::build_sent_copy(&account, &draft, signature.as_ref())
@@ -498,6 +908,22 @@ async fn load_thread(
         }
         imap::load_thread(s, message_id.as_deref(), &references, &unique).await
     })
+    .inspect(|entries| {
+        state.with_store(|st| st.add_cards(entries));
+    })
+}
+
+/// The conversation as far as the local copy knows it (instant, offline).
+#[tauri::command]
+fn local_thread(message_id: Option<String>, references: Vec<String>, state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
+    state.with_store(|st| st.thread(message_id.as_deref(), &references)).unwrap_or_default()
+}
+
+/// Searches the local copy: sender, recipients, subject and the text of the
+/// emails downloaded so far. Instant and offline; newest first.
+#[tauri::command]
+fn search_local(text: String, state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
+    state.with_store(|st| st.search(&text, 200)).unwrap_or_default()
 }
 
 /// Sets the "Important only" rule for a sender (an address or `@domain`):
@@ -574,7 +1000,7 @@ async fn search_emails(
         let inner = state.inner.lock().await;
         (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
     };
-    match imap::connect(&account, &password).await {
+    let found = match imap::connect(&account, &password).await {
         Ok(mut session) => {
             let result = run(&mut session, &text, in_body, &folders, &scope).await;
             session.logout().await.ok();
@@ -585,7 +1011,9 @@ async fn search_emails(
             let mut inner = state.inner.lock().await;
             with_retry!(inner, |s, _caps| run(s, &text, in_body, &folders, &scope))
         }
-    }
+    }?;
+    state.with_store(|st| st.add_cards(&found));
+    Ok(found)
 }
 
 /// Shows the number of unread Inbox emails on the app icon (Dock on macOS,
@@ -601,10 +1029,7 @@ fn set_unread_badge(count: u32, window: tauri::WebviewWindow) -> CmdResult<()> {
 /// Returns the saved file path.
 #[tauri::command]
 async fn save_attachment(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<String> {
-    let raw = {
-        let mut inner = state.inner.lock().await;
-        with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?
-    };
+    let raw = raw_email(&state, &folder, uid).await?;
     let (name, bytes) = kanbanmail_core::message::attachment(&raw, index).ok_or("attachment not found")?;
     let dir = directories::UserDirs::new()
         .and_then(|d| d.download_dir().map(|p| p.to_path_buf()))
@@ -668,13 +1093,13 @@ async fn list_folders(state: State<'_, AppState>) -> CmdResult<Vec<imap::FolderI
 /// Moves the email to the trash (`kind` = "trash") or the archive ("archive").
 /// Returns the destination folder name.
 #[tauri::command]
-async fn file_card(folder: String, uid: u32, kind: String, state: State<'_, AppState>) -> CmdResult<String> {
-    let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, caps| async {
-        let target = imap::special_folder(s, &kind).await?;
-        anyhow::ensure!(target != folder, "the email is already in {target}");
-        imap::move_message(s, caps, &folder, uid, &target).await?;
-        Ok(target)
+/// Returns the destination folder, or "" when the move waits for the connection.
+async fn file_card(folder: String, uid: u32, kind: String, app: AppHandle, state: State<'_, AppState>) -> CmdResult<String> {
+    let outcome = perform_or_queue(&app, &state, QueuedOp::File { folder: folder.clone(), uid, kind }).await?;
+    state.with_store(|st| st.remove(&folder, &[uid]));
+    Ok(match outcome {
+        Outcome::Done(target) => target.unwrap_or_default(),
+        Outcome::Queued => String::new(),
     })
 }
 
@@ -701,6 +1126,9 @@ async fn load_all_mail(state: State<'_, AppState>) -> CmdResult<Vec<imap::Thread
         imap::load_all_mail(s, &folders, &mut caches, 200).await
     });
     inner.caches = caches;
+    if let Ok(entries) = &res {
+        state.with_store(|st| st.add_cards(entries));
+    }
     res
 }
 
@@ -715,12 +1143,84 @@ fn render_markdown(text: String) -> String {
 #[tauri::command]
 async fn attachment_data(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<smtp::OutgoingAttachment> {
     use base64::Engine;
-    let raw = {
-        let mut inner = state.inner.lock().await;
-        with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?
-    };
+    let raw = raw_email(&state, &folder, uid).await?;
     let (name, mime, bytes) = kanbanmail_core::message::attachment_with_mime(&raw, index).ok_or("attachment not found")?;
     Ok(smtp::OutgoingAttachment { name, mime, data: base64::engine::general_purpose::STANDARD.encode(bytes) })
+}
+
+/// A file chosen with the paperclip, read here rather than by the web view
+/// (which could hand over files with no content).
+#[derive(Serialize)]
+struct PickedFile {
+    name: String,
+    mime: String,
+    size: u64,
+    /// Content, base64.
+    data: String,
+}
+
+/// The macOS "Open" panel for attachments; reading a file that is only in
+/// iCloud Drive downloads it first.
+#[tauri::command]
+async fn pick_attachments(window: tauri::Window) -> CmdResult<Vec<PickedFile>> {
+    use base64::Engine;
+    let Some(files) = rfd::AsyncFileDialog::new().set_title("Attach files").set_parent(&window).pick_files().await else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for f in files {
+        let path = f.path().to_path_buf();
+        let name = f.file_name();
+        let bytes = tokio::fs::read(&path).await.map_err(|e| format!("could not read {name}: {e}"))?;
+        if bytes.is_empty() {
+            return Err(format!("{name} is empty (if it is in the cloud, download it to this Mac first)"));
+        }
+        out.push(PickedFile {
+            mime: mime_for(&name).to_string(),
+            size: bytes.len() as u64,
+            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            name,
+        });
+    }
+    Ok(out)
+}
+
+/// The media type of a file from its extension (what mail clients use to pick an app).
+fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "odt" => "application/vnd.oasis.opendocument.text",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
+        "rtf" => "application/rtf",
+        "txt" | "log" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "ics" => "text/calendar",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "gz" | "tgz" => "application/gzip",
+        "7z" => "application/x-7z-compressed",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "svg" => "image/svg+xml",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        _ => "application/octet-stream",
+    }
 }
 
 /// What an exported settings file contains (never the password).
@@ -804,6 +1304,12 @@ async fn import_settings(json: String, state: State<'_, AppState>) -> CmdResult<
 /// Opens a link of an email in the default browser (web links only).
 #[tauri::command]
 fn open_url(url: String) -> CmdResult<()> {
+    open_in_browser(&url)
+}
+
+/// Opens a web link in the default browser.
+fn open_in_browser(url: &str) -> CmdResult<()> {
+    let url = url.to_string();
     let lower = url.trim().to_ascii_lowercase();
     if !(lower.starts_with("https://") || lower.starts_with("http://")) {
         return Err("only web links can be opened".into());
@@ -817,6 +1323,24 @@ fn open_url(url: String) -> CmdResult<()> {
     r.map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Links clicked inside an email (an isolated frame) never navigate the app:
+/// web links open in the default browser, mailto links in a new email.
+fn external_links<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("external-links")
+        .on_navigation(|webview, url| match url.scheme() {
+            "http" | "https" if !matches!(url.host_str(), Some("localhost" | "tauri.localhost")) => {
+                let _ = open_in_browser(url.as_str());
+                false
+            }
+            "mailto" => {
+                let _ = webview.emit("open-link", url.as_str());
+                false
+            }
+            _ => true,
+        })
+        .build()
+}
+
 /// Undoes a move: the email (found by Message-ID in `now_in`) goes back to `back_to`.
 #[tauri::command]
 async fn undo_move(message_id: String, now_in: String, back_to: String, state: State<'_, AppState>) -> CmdResult<()> {
@@ -825,9 +1349,10 @@ async fn undo_move(message_id: String, now_in: String, back_to: String, state: S
 }
 
 #[tauri::command]
-async fn set_seen_many(folder: String, uids: Vec<u32>, seen: bool, state: State<'_, AppState>) -> CmdResult<()> {
-    let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, _caps| imap::set_seen_many(s, &folder, &uids, seen))
+async fn set_seen_many(folder: String, uids: Vec<u32>, seen: bool, app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    perform_or_queue(&app, &state, QueuedOp::Seen { folder: folder.clone(), uids: uids.clone(), seen }).await?;
+    state.with_store(|st| st.set_flags(&folder, &uids, Some(seen), None));
+    Ok(())
 }
 
 /// Permanently deletes everything in Trash (`kind` = "trash") or Junk ("junk").
@@ -837,6 +1362,7 @@ async fn empty_folder(kind: String, state: State<'_, AppState>) -> CmdResult<u32
     let mut inner = state.inner.lock().await;
     let (folder, count) = with_retry!(inner, |s, _caps| imap::empty_folder(s, &kind))?;
     inner.caches.remove(&folder);
+    state.with_store(|st| st.clear_folder(&folder));
     Ok(count)
 }
 
@@ -871,10 +1397,10 @@ fn notify(title: String, body: String, app: AppHandle) -> CmdResult<()> {
 /// Answers a calendar invitation ("ACCEPTED", "DECLINED", "TENTATIVE") to its organizer.
 #[tauri::command]
 async fn respond_invite(folder: String, uid: u32, response: String, state: State<'_, AppState>) -> CmdResult<()> {
-    let (raw, account, password) = {
-        let mut inner = state.inner.lock().await;
-        let raw = with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?;
-        (raw, inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+    let raw = raw_email(&state, &folder, uid).await?;
+    let (account, password) = {
+        let inner = state.inner.lock().await;
+        (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
     };
     let invite = kanbanmail_core::message::parse_view(&raw).invite.ok_or("this email has no invitation")?;
     let message = smtp::build_invite_reply(&account, &invite.ics, &response).map_err(err)?;
@@ -884,10 +1410,7 @@ async fn respond_invite(folder: String, uid: u32, response: String, state: State
 /// Opens the invitation with the default calendar app (Calendar on macOS).
 #[tauri::command]
 async fn add_to_calendar(folder: String, uid: u32, state: State<'_, AppState>) -> CmdResult<()> {
-    let raw = {
-        let mut inner = state.inner.lock().await;
-        with_retry!(inner, |s, _caps| imap::load_raw(s, &folder, uid))?
-    };
+    let raw = raw_email(&state, &folder, uid).await?;
     let invite = kanbanmail_core::message::parse_view(&raw).invite.ok_or("this email has no invitation")?;
     let path = std::env::temp_dir().join(format!("kanbanmail-{}.ics", uid));
     std::fs::write(&path, invite.ics).map_err(|e| e.to_string())?;
@@ -908,6 +1431,7 @@ fn open_contacts_privacy() {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(external_links())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_status,
@@ -936,6 +1460,15 @@ fn main() {
             open_contacts_privacy,
             load_all_mail,
             open_url,
+            pick_attachments,
+            cached_column,
+            cached_all_mail,
+            local_thread,
+            search_local,
+            cache_stats,
+            clear_cache,
+            flush_queue,
+            queue_count,
             undo_move,
             set_seen_many,
             empty_folder,
