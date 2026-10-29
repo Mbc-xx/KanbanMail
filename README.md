@@ -8,7 +8,9 @@ Written in Rust with [Tauri](https://tauri.app).
 
 ![The board: every column is an IMAP folder](docs/screenshot-board.png)
 
-![Reading an email with its conversation](docs/screenshot-reader.png)
+![Folder view: expandable conversations and the reading pane](docs/screenshot-folder.png)
+
+![Writing an email: recipients as draggable chips](docs/screenshot-compose.png)
 
 <sub>Screenshots taken with fictional demo data.</sub>
 
@@ -68,8 +70,11 @@ Written in Rust with [Tauri](https://tauri.app).
   readable and searchable; moving, archiving, deleting, pinning, read/unread
   and sending are kept in a queue and done, in order, as soon as the server can
   be reached again (the status line shows how many changes are waiting).
-- Instant start: the board of the last session is shown right away from a local
-  cache, then refreshed from the server.
+- Instant start: the board, the folders and All Mail are shown right away from
+  the copy on this Mac, while the connection to the server is made in the
+  background; new emails and changes then appear without reloading the lists.
+  Emails are downloaded in the background on a connection of their own, so
+  clicks never wait behind them.
 - Calendar invitations (.ics) are shown with date, time, place and organizer;
   answer Accept / Maybe / Decline (sent to the organizer) or add the event to
   your calendar app.
@@ -268,7 +273,8 @@ If the server supports IDLE, the app keeps one extra connection on the Inbox
 and is notified of changes right away (including those made by other clients).
 The other columns are checked every 60 seconds on the main connection. In
 total KanbanMail uses two connections, plus a short-lived one while searching
-or reading your sent emails.
+or reading your sent emails, and one while emails are being downloaded in the
+background (it is closed when there is nothing left to download).
 
 ## Reading safely
 

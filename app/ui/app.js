@@ -444,6 +444,7 @@ $("logout").addEventListener("click", async () => {
   $("settings").hidden = true;
   state.columns = [];
   state.cards = {};
+  state.fresh.clear();
   show("login");
 });
 
@@ -494,7 +495,22 @@ function showCachedBoard() {
   }
   setSyncStatus("Updating…");
   show("board-screen");
+  fillFromLocalCopy(columns.map((c) => c.folder));
   return true;
+}
+
+/// The cards kept in the copy on this Mac, shown while the server is reached.
+function fillFromLocalCopy(folders) {
+  for (const folder of folders) {
+    invoke("cached_column", { folder, limit: state.limits[folder] || state.defaultLimit })
+      .then((cached) => {
+        // Only until the server answers: its list is the fresher one.
+        if (!cached.length || state.fresh.has(folder)) return;
+        state.cards[folder] = cached;
+        renderCards(folder);
+      })
+      .catch(() => {});
+  }
 }
 
 function applySettingsState(settings) {
@@ -749,6 +765,7 @@ async function loadColumn(folder) {
   }
   try {
     state.cards[folder] = await invoke("load_column", { folder, limit: state.limits[folder] || null });
+    state.fresh.add(folder);
     renderCards(folder);
     if (state.columns.some((c) => c.folder === folder)) cacheSet("cards:" + folder, state.cards[folder].slice(0, 200));
     if (folder.toUpperCase() === "INBOX") {
@@ -776,6 +793,7 @@ listen("queue-flushed", () => {
 // ---------- new Inbox emails: rules and notifications ----------
 
 state.limits = {}; // folder -> how many emails to load ("Load more")
+state.fresh = new Set(); // folders already loaded from the server
 state.defaultLimit = 200;
 state.rules = [];
 state.notify = "important";
@@ -1561,17 +1579,22 @@ function scheduleFolderCounts() {
 // ---------- All Mail ----------
 
 async function loadAllMail() {
+  // The newest emails known on this Mac first, then the server's list.
+  const local = await invoke("cached_all_mail").catch(() => []);
+  const localCards = local
+    .filter((x) => !["trash", "junk", "drafts"].includes(folderKind(x.folder)))
+    .map((x) => ({ ...x.card, __folder: x.folder }));
+  if (localCards.length && !state.cards[ALL_KEY]?.length) {
+    state.cards[ALL_KEY] = localCards;
+    renderCards(ALL_KEY);
+  }
   try {
     const entries = await invoke("load_all_mail");
     state.cards[ALL_KEY] = entries.map((e) => ({ ...e.card, __folder: e.folder }));
     renderCards(ALL_KEY);
   } catch (e) {
     if (isOfflineError(e)) {
-      // The newest emails known on this Mac instead.
-      const local = await invoke("cached_all_mail").catch(() => []);
-      state.cards[ALL_KEY] = local
-        .filter((x) => !["trash", "junk", "drafts"].includes(folderKind(x.folder)))
-        .map((x) => ({ ...x.card, __folder: x.folder }));
+      state.cards[ALL_KEY] = localCards;
       renderCards(ALL_KEY);
       return goOffline();
     }

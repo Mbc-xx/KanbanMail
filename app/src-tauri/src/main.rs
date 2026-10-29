@@ -283,7 +283,14 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
     tauri::async_runtime::spawn(poll_folders(app.clone(), state.generation.clone(), generation, polled));
     let mut prefetched: Vec<String> = vec!["INBOX".to_string()];
     prefetched.extend(columns.iter().map(|c| c.folder.clone()).filter(|f| !f.eq_ignore_ascii_case("INBOX")));
-    tauri::async_runtime::spawn(prefetch_bodies(app.clone(), state.generation.clone(), generation, prefetched));
+    tauri::async_runtime::spawn(prefetch_bodies(
+        app.clone(),
+        state.generation.clone(),
+        generation,
+        account.clone(),
+        password.clone(),
+        prefetched,
+    ));
     tauri::async_runtime::spawn(replay_loop(app.clone(), state.generation.clone(), generation));
 
     Ok(BoardInfo {
@@ -494,12 +501,21 @@ const PREFETCH_MAX_SIZE: u64 = 3 * 1024 * 1024;
 
 /// Downloads, a few at a time, the content of the newest emails of the Inbox
 /// and the board columns, so they open instantly (and offline). Keeps the
-/// local copy under the size chosen in the settings.
-async fn prefetch_bodies(app: AppHandle, current: Arc<AtomicU64>, generation: u64, folders: Vec<String>) {
+/// local copy under the size chosen in the settings. It uses a connection of
+/// its own, so the clicks never wait behind a slow download.
+async fn prefetch_bodies(
+    app: AppHandle,
+    current: Arc<AtomicU64>,
+    generation: u64,
+    account: Account,
+    password: String,
+    folders: Vec<String>,
+) {
     tokio::time::sleep(Duration::from_secs(8)).await;
+    let mut session: Option<Session> = None;
     loop {
         if current.load(Ordering::SeqCst) != generation {
-            return;
+            break;
         }
         let settings = Settings::load().unwrap_or_default();
         let state = app.state::<AppState>();
@@ -514,11 +530,16 @@ async fn prefetch_bodies(app: AppHandle, current: Arc<AtomicU64>, generation: u6
                 }
             }
             for (folder, uids) in by_folder {
-                let res: Result<_, String> = {
-                    let mut inner = state.inner.lock().await;
-                    with_retry!(inner, |s, _caps| imap::fetch_raws(s, &folder, &uids, PREFETCH_MAX_SIZE))
+                let mut s = match session.take() {
+                    Some(s) => s,
+                    None => match imap::connect(&account, &password).await {
+                        Ok(s) => s,
+                        Err(_) => break, // offline or slow: try again later
+                    },
                 };
-                let Ok(list) = res else { break }; // offline or slow: try again later
+                let fetch = imap::fetch_raws(&mut s, &folder, &uids, PREFETCH_MAX_SIZE);
+                let Ok(Ok(list)) = tokio::time::timeout(OPERATION_TIMEOUT, fetch).await else { break };
+                session = Some(s);
                 for (uid, raw, size) in list {
                     match raw {
                         Some(raw) => state.with_store(|st| st.put_raw(&folder, uid, &raw)),
@@ -530,7 +551,16 @@ async fn prefetch_bodies(app: AppHandle, current: Arc<AtomicU64>, generation: u6
             state.with_store(|st| st.evict(u64::from(settings.cache_max_mb) * 1024 * 1024));
         }
         // Quick rounds while there is something to download, then rest.
+        if downloaded == 0 {
+            // Nothing to do for a while: free the connection.
+            if let Some(mut s) = session.take() {
+                s.logout().await.ok();
+            }
+        }
         tokio::time::sleep(Duration::from_secs(if downloaded > 0 { 2 } else { 120 })).await;
+    }
+    if let Some(mut s) = session {
+        s.logout().await.ok();
     }
 }
 

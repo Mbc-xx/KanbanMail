@@ -262,6 +262,9 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   user-select: none;
 }
 .card:hover { border-color: var(--accent); }
+/* A thin edge a little darker than the theme's borders, so cards stand apart. */
+:root { --card-edge: color-mix(in srgb, var(--border) 65%, var(--text) 35%); }
+.card { border-color: color-mix(in srgb, var(--border) 50%, var(--card-edge) 50%); box-shadow: 0 1px 1px rgb(0 0 0 / 0.06); }
 .card.dragging { opacity: 0.4; }
 .card.busy { opacity: 0.6; pointer-events: none; }
 .card.pinned { background: var(--pinned-bg); border-color: var(--pin); }
@@ -737,7 +740,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .reader-pane .placeholder .icon { width: 40px; height: 40px; opacity: 0.4; display: block; margin: 0 auto 8px; }
 .reader.in-pane { width: 100%; height: 100%; border-radius: 10px; }
 
-.cards.rows { gap: 2px; padding: 4px 6px 12px; }
+.cards.rows { gap: 4px; padding: 4px 6px 12px; }
 .cards.rows .card {
   display: grid;
   grid-template-columns: minmax(90px, 32%) 1fr auto auto;
@@ -745,9 +748,8 @@ body.resizing { cursor: col-resize; user-select: none; }
   gap: 10px;
   padding: 7px 10px 7px 12px;
   border-radius: 6px;
-  border-color: transparent;
 }
-.cards.rows .card:hover { border-color: var(--border); }
+.cards.rows .card:hover { border-color: var(--card-edge); }
 .cards.rows .card.selected { border-color: var(--accent); background: var(--drop); }
 .cards.rows .row-from { overflow: hidden; white-space: nowrap; min-width: 0; }
 .cards.rows .row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
