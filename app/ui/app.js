@@ -753,8 +753,10 @@ function columnEl(folder) {
 async function loadColumn(folder) {
   if (folder === SEARCH_KEY) return runSearch();
   if (folder === ALL_KEY) return loadAllMail();
-  // What this Mac already knows is shown at once, then refreshed from the server.
-  if (!state.cards[folder]?.length) {
+  // What is already known (in memory or on this Mac) is shown at once, then
+  // refreshed from the server.
+  if (state.cards[folder]?.length) renderCards(folder);
+  else {
     try {
       const cached = await invoke("cached_column", { folder, limit: state.limits[folder] || state.defaultLimit });
       if (cached.length && !state.cards[folder]?.length) {
@@ -1579,7 +1581,8 @@ function scheduleFolderCounts() {
 // ---------- All Mail ----------
 
 async function loadAllMail() {
-  // The newest emails known on this Mac first, then the server's list.
+  // What is already known first (in memory, else on this Mac), then the server's list.
+  if (state.cards[ALL_KEY]?.length) renderCards(ALL_KEY);
   const local = await invoke("cached_all_mail").catch(() => []);
   const localCards = local
     .filter((x) => !["trash", "junk", "drafts"].includes(folderKind(x.folder)))
