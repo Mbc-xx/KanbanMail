@@ -726,6 +726,10 @@ struct SettingsView {
     cache_max_mb: u32,
     #[serde(default = "default_yes")]
     prefetch: bool,
+    #[serde(default = "default_yes")]
+    compact_actions: bool,
+    #[serde(default = "default_yes")]
+    ask_conversation: bool,
 }
 
 fn default_cache_mb() -> u32 {
@@ -769,6 +773,8 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         waiting_days: settings.waiting_days,
         cache_max_mb: settings.cache_max_mb,
         prefetch: settings.prefetch,
+        compact_actions: settings.compact_actions,
+        ask_conversation: settings.ask_conversation,
     })
 }
 
@@ -810,6 +816,8 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         waiting_days: settings.waiting_days.min(365),
         cache_max_mb: settings.cache_max_mb.clamp(100, 20_000),
         prefetch: settings.prefetch,
+        compact_actions: settings.compact_actions,
+        ask_conversation: settings.ask_conversation,
     }
         .save()
         .map_err(err)

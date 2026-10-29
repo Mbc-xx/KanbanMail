@@ -105,8 +105,8 @@
         <h2 id="reader-subject"></h2>
         <button id="reader-close" class="icon-btn" title="Close (Esc)"><svg class="icon"><use href="#i-close"/></svg></button>
       </header>
-      <!-- Actions on every email of the conversation -->
-      <div class="conv-bar">
+      <!-- Actions on every email of the conversation (shown when it has more than one) -->
+      <div id="conv-bar" class="conv-bar" hidden>
         <span id="conv-label" class="conv-label"></span>
         <button type="button" id="conv-pin" class="conv-btn"><svg class="icon"><use href="#i-pin"/></svg></button>
         <button type="button" id="conv-seen" class="conv-btn"><svg class="icon"><use href="#i-envelope-open"/></svg></button>
@@ -132,13 +132,18 @@
             <dt>To</dt><dd id="reader-to"></dd>
             <dt id="reader-cc-label">Cc</dt><dd id="reader-cc"></dd>
           </dl>
+          <!-- Actions on this email only -->
           <div class="reader-actions">
-            <button id="reader-reply"><svg class="icon"><use href="#i-reply"/></svg><span>Reply</span></button>
-            <button id="reader-reply-all"><svg class="icon"><use href="#i-reply-all"/></svg><span>Reply all</span></button>
-            <button id="reader-forward"><svg class="icon"><use href="#i-forward"/></svg><span>Forward</span></button>
+            <button id="reader-reply" title="Reply"><svg class="icon"><use href="#i-reply"/></svg><span>Reply</span></button>
+            <button id="reader-reply-all" title="Reply all"><svg class="icon"><use href="#i-reply-all"/></svg><span>Reply all</span></button>
+            <button id="reader-forward" title="Forward"><svg class="icon"><use href="#i-forward"/></svg><span>Forward</span></button>
+            <span class="action-gap"></span>
+            <button id="reader-pin"></button>
             <button id="reader-seen"></button>
-            <button id="reader-trash" title="Move to trash"><svg class="icon"><use href="#i-trash"/></svg><span>Delete</span></button>
+            <button id="reader-archive" title="Archive this email"><svg class="icon"><use href="#i-archive"/></svg><span>Archive</span></button>
+            <button id="reader-trash" title="Delete this email (move to trash)"><svg class="icon"><use href="#i-trash"/></svg><span>Delete</span></button>
             <button id="reader-spam" title="Move to Junk"><svg class="icon"><use href="#i-junk"/></svg><span>Spam</span></button>
+            <button id="reader-move" title="Move this email to a folder…"><svg class="icon"><use href="#i-folder"/></svg><span>Move</span></button>
             <span id="reader-seen-hint" class="muted"></span>
           </div>
           <div class="reader-sender">
@@ -375,6 +380,7 @@
               </select>
             </label>
           </div>
+          <label class="toggle"><input id="set-compact" type="checkbox"> Compact email actions (icons only, the name appears when you point at them)</label>
         </section>
 
         <section class="tab-panel" data-panel="rules" role="tabpanel" hidden>
@@ -446,6 +452,7 @@
               <option value="30">30 seconds</option>
             </select>
           </label>
+          <label class="toggle"><input id="set-ask-conv" type="checkbox"> In a conversation, ask whether to archive, delete or move only the open email or all of them</label>
           <label>Notifications for new Inbox emails
             <select id="set-notify">
               <option value="important">Only important emails</option>

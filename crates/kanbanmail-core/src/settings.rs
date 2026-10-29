@@ -79,6 +79,13 @@ pub struct Settings {
     /// Download recent emails in the background so they open instantly.
     #[serde(default = "default_true")]
     pub prefetch: bool,
+    /// The actions of an open email as icons only (the name in the tooltip).
+    #[serde(default = "default_true")]
+    pub compact_actions: bool,
+    /// Archive, delete, spam and move on a conversation of several emails ask
+    /// whether to act on the open email only or on the whole conversation.
+    #[serde(default = "default_true")]
+    pub ask_conversation: bool,
 }
 
 fn default_cache_mb() -> u32 {
@@ -179,6 +186,8 @@ impl Default for Settings {
             waiting_days: default_waiting_days(),
             cache_max_mb: default_cache_mb(),
             prefetch: true,
+            compact_actions: true,
+            ask_conversation: true,
         }
     }
 }

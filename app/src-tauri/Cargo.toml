@@ -8,7 +8,7 @@ license.workspace = true
 anyhow = "1.0.104"
 base64 = "0.23.1"
 directories = "6.0.0"
-kanbanmail-core = { version = "1.2.1", path = "../../crates/kanbanmail-core" }
+kanbanmail-core = { version = "1.3.0", path = "../../crates/kanbanmail-core" }
 rfd = "0.17"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

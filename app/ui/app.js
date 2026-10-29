@@ -58,7 +58,7 @@ function toast(message, kind = "error", action = null, seconds = null) {
     });
     el.append(b);
   }
-  el.className = "toast" + (kind === "info" ? " info" : "");
+  el.className = "toast" + (kind.startsWith("info") ? " " + kind : "");
   el.hidden = false;
   clearTimeout(toastTimer);
   const ms = seconds ? seconds * 1000 : action ? (state.undoSeconds || 8) * 1000 : kind === "info" ? 2500 : 7000;
@@ -243,7 +243,9 @@ async function emptyFolder(kind) {
 function offerUndo(message, moves) {
   const undoable = moves.filter((m) => m.message_id && m.now && m.back && m.now !== m.back);
   if (!undoable.length || state.undoSeconds === 0) return toast(message, "info");
-  toast(message, "info", {
+  // Moving several emails at once is easier to regret: the Undo stays longer.
+  const seconds = undoable.length > 1 ? Math.max(state.undoSeconds || 8, 15) : null;
+  toast(message, undoable.length > 1 ? "info wide" : "info", {
     label: "Undo",
     run: async () => {
       let failed = 0;
@@ -259,7 +261,7 @@ function offerUndo(message, moves) {
       await Promise.all(visibleColumns().map((c) => loadColumn(c.folder)));
       scheduleFolderCounts();
     },
-  });
+  }, seconds);
 }
 
 // ---------- appearance ----------
@@ -273,6 +275,7 @@ function applyAppearance(a) {
   root.style.zoom = String((a.zoom || 100) / 100);
   root.dataset.previewBoard = String(a.preview_board ?? 2);
   root.dataset.previewList = String(a.preview_list ?? 1);
+  root.dataset.compactActions = String(a.compact_actions ?? true);
   local.set("appearance", JSON.stringify(a));
 }
 try {
@@ -287,6 +290,7 @@ function appearanceFromForm() {
     zoom: parseInt($("set-zoom").value, 10),
     preview_board: parseInt($("set-preview-board").value, 10),
     preview_list: parseInt($("set-preview-list").value, 10),
+    compact_actions: $("set-compact").checked,
   };
 }
 
@@ -528,7 +532,8 @@ function applySettingsState(settings) {
   state.notify = settings.notify || "important";
   state.undoSeconds = settings.undo_seconds ?? 8;
   state.undoSendSeconds = settings.undo_send_seconds ?? 10;
-  state.appearance = { theme: settings.theme, zoom: settings.zoom, preview_board: settings.preview_board, preview_list: settings.preview_list };
+  state.appearance = { theme: settings.theme, zoom: settings.zoom, preview_board: settings.preview_board, preview_list: settings.preview_list, compact_actions: settings.compact_actions };
+  state.askConversation = settings.ask_conversation ?? true;
   applyAppearance(state.appearance);
   state.waitingSetting = settings.waiting_folder || "";
   state.waitingDays = settings.waiting_days ?? 3;
@@ -1348,7 +1353,7 @@ async function afterBulkChange() {
 }
 
 /// Moves a whole conversation to another folder.
-async function moveMany(members, to, { quiet = false } = {}) {
+async function moveMany(members, to, { quiet = false, conversation = false } = {}) {
   dropFromLists(members);
   let failed = 0;
   const moves = [];
@@ -1363,13 +1368,19 @@ async function moveMany(members, to, { quiet = false } = {}) {
   }
   if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
   else if (moves.some((m) => !m.now)) toast(`No connection: ${members.length} emails will be moved to ${folderLabel(to)} when the server can be reached`, "info");
-  else if (!quiet) offerUndo(`${members.length} emails moved to ${folderLabel(to)}`, moves);
+  else if (!quiet) offerUndo(`${countEmails(members.length, conversation)} moved to ${folderLabel(to)}`, moves);
   await afterBulkChange();
   return moves;
 }
 
+/// "1 email", "3 emails", or "all 3 emails of the conversation".
+function countEmails(n, conversation = false) {
+  if (conversation && n > 1) return `All ${n} emails of the conversation`;
+  return `${n} email${n === 1 ? "" : "s"}`;
+}
+
 /// Archives or deletes a whole conversation.
-async function fileMany(members, kind) {
+async function fileMany(members, kind, { conversation = false } = {}) {
   dropFromLists(members);
   let target = "";
   let failed = 0;
@@ -1386,7 +1397,7 @@ async function fileMany(members, kind) {
   }
   if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
   else if (moves.some((m) => !m.now)) toast(`No connection: ${members.length} email${members.length === 1 ? "" : "s"} will be moved to ${kind} when the server can be reached`, "info");
-  else offerUndo(`${members.length} email${members.length === 1 ? "" : "s"} moved to ${folderLabel(target || kind)}`, moves);
+  else offerUndo(`${countEmails(members.length, conversation)} moved to ${folderLabel(target || kind)}`, moves);
   await afterBulkChange();
 }
 
@@ -1885,7 +1896,13 @@ function stopSeenTimer() {
 
 function updateSeenButton() {
   const seen = readerCard.card.seen;
-  $("reader-seen").replaceChildren(icon(seen ? "envelope" : "envelope-open"), el("span", "", seen ? "Mark as unread" : "Mark as read"));
+  const label = seen ? "Mark as unread" : "Mark as read";
+  $("reader-seen").replaceChildren(icon(seen ? "envelope" : "envelope-open"), el("span", "", label));
+  $("reader-seen").title = label;
+  const pinned = !!readerCard.card.flagged;
+  $("reader-pin").replaceChildren(icon("pin"), el("span", "", pinned ? "Unpin" : "Pin"));
+  $("reader-pin").title = pinned ? "Unpin this email" : "Pin this email";
+  $("reader-pin").classList.toggle("active", pinned);
 }
 
 function formatSize(bytes) {
@@ -1991,7 +2008,7 @@ async function fileCard(folder, card, kind) {
   renderCards(folder);
   try {
     const target = await invoke("file_card", { folder, uid: card.uid, kind });
-    if (target) offerUndo(`Moved to ${folderLabel(target)}`, [{ message_id: card.message_id, now: target, back: folder }]);
+    if (target) offerUndo(`1 email moved to ${folderLabel(target)}`, [{ message_id: card.message_id, now: target, back: folder }]);
     else toast(`No connection: it will be moved to ${kind} when the server can be reached`, "info");
   } catch (e) {
     toast(({ trash: "Delete", junk: "Spam", archive: "Archive" }[kind] || "Move") + " failed: " + e);
@@ -2018,6 +2035,34 @@ $("reader-trash").addEventListener("click", () => {
 $("reader-seen").addEventListener("click", () => {
   const { folder, card } = readerCard;
   setSeen(folder, card, !card.seen);
+});
+
+$("reader-archive").addEventListener("click", () => {
+  const { folder, card } = readerCard;
+  closeReader();
+  fileCard(folder, card, "archive");
+});
+
+$("reader-pin").addEventListener("click", async () => {
+  const { folder, card } = readerCard;
+  card.flagged = !card.flagged;
+  updateSeenButton();
+  updateConvBar();
+  try {
+    await invoke("set_pin", { folder, uid: card.uid, pinned: card.flagged });
+  } catch (e) {
+    toast("Pin not changed: " + e);
+  }
+  await loadColumn(folder);
+});
+
+$("reader-move").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  showFolderMenu($("reader-move"), (to) => {
+    const one = readerCard;
+    closeReader();
+    moveMany([one], to);
+  });
 });
 
 /// The reader is a single element: inside the popup on the board, inside the
@@ -2075,6 +2120,7 @@ async function openReader(folder, card, opts = {}) {
   updateSeenButton();
   $("reader-reply").disabled = $("reader-reply-all").disabled = true;
   $("reader-trash").hidden = folderKind(folder) === "trash";
+  $("reader-archive").hidden = folderKind(folder) === "archive";
   const inJunk = folderKind(folder) === "junk";
   $("reader-spam").querySelector("span").textContent = inJunk ? "Not spam" : "Spam";
   $("reader-spam").title = inJunk ? "Move back to the Inbox" : "Move to Junk";
@@ -2231,7 +2277,13 @@ function convMovable() {
 function updateConvBar() {
   const members = convMembers();
   const n = members.length;
-  $("conv-label").textContent = n > 1 ? `Conversation · ${n} emails` : "This email";
+  // A single email has its own actions: the bar is only for whole conversations.
+  $("conv-bar").hidden = n < 2;
+  $("conv-label").textContent = `Whole conversation · ${n} emails`;
+  for (const b of document.querySelectorAll("#conv-bar .conv-btn")) {
+    const badge = b.querySelector(".conv-n") || b.appendChild(el("span", "conv-n"));
+    badge.textContent = String(n);
+  }
   const what = n > 1 ? `all ${n} emails of the conversation` : "this email";
   const pinned = members.some((m) => m.card.flagged);
   $("conv-pin").classList.toggle("active", pinned);
@@ -2267,52 +2319,123 @@ $("conv-seen").addEventListener("click", async () => {
   fillThread();
 });
 
-for (const [id, kind] of [["conv-archive", "archive"], ["conv-trash", "trash"]]) {
-  $(id).addEventListener("click", () => {
-    const members = convMovable();
+/// The emails a conversation button acts on: all of them, or (when the
+/// settings ask so) the choice of the open email only.
+async function convTargets(button, verb) {
+  const all = convMovable();
+  if (!state.askConversation || all.length < 2) return all;
+  const total = convMembers().length;
+  const allText = all.length === total ? `all ${total} emails of the conversation` : `the ${all.length} received emails of the conversation (your sent ones stay)`;
+  const choice = await chooseScope(button, verb, allText);
+  if (choice === "one") return [readerCard];
+  return choice === "all" ? all : null;
+}
+
+for (const [id, kind, verb] of [["conv-archive", "archive", "Archive"], ["conv-trash", "trash", "Delete"]]) {
+  $(id).addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    const members = await convTargets($(id), verb);
+    if (!members) return;
     closeReader();
-    fileMany(members, kind);
+    fileMany(members, kind, { conversation: members.length > 1 });
   });
 }
 
-$("conv-spam").addEventListener("click", () => {
-  const members = convMovable();
+$("conv-spam").addEventListener("click", async (ev) => {
+  ev.stopPropagation();
   const inJunk = folderKind(readerCard.folder) === "junk";
+  const members = await convTargets($("conv-spam"), inJunk ? "Not spam" : "Spam");
+  if (!members) return;
   closeReader();
   if (inJunk) moveMany(members, "INBOX");
-  else fileMany(members, "junk");
+  else fileMany(members, "junk", { conversation: members.length > 1 });
 });
 
 function closeConvMenu() {
   document.querySelector(".conv-menu")?.remove();
 }
 
-$("conv-move").addEventListener("click", (ev) => {
-  ev.stopPropagation();
-  if (document.querySelector(".conv-menu")) return closeConvMenu();
+/// A small menu under `anchor`, filled by `fill(menu)`.
+function popMenu(anchor, fill) {
+  closeConvMenu();
   const menu = el("div", "conv-menu");
-  const here = readerCard?.folder;
-  for (const f of state.folders || []) {
-    if (f.selectable === false || f.name === here || folderKind(f.name) === "drafts") continue;
-    const b = el("button");
-    b.type = "button";
-    b.style.paddingLeft = 10 + (f.depth || 0) * 14 + "px";
-    b.append(icon("folder"), el("span", "", folderLabel(f.name)));
-    b.addEventListener("click", () => {
-      const members = convMovable();
-      closeConvMenu();
-      closeReader();
-      moveMany(members, f.name);
-    });
-    menu.append(b);
-  }
+  fill(menu);
   document.body.append(menu);
-  const r = $("conv-move").getBoundingClientRect();
+  const r = anchor.getBoundingClientRect();
   menu.style.top = r.bottom + 6 + "px";
   menu.style.left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8)) + "px";
+  return menu;
+}
+
+function menuButton(iconName, text, run) {
+  const b = el("button");
+  b.type = "button";
+  b.append(icon(iconName), el("span", "", text));
+  b.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    run();
+  });
+  return b;
+}
+
+/// Asks whether to act on the open email only or on the whole conversation.
+/// Resolves to "one", "all" or null (menu closed).
+function chooseScope(anchor, verb, allText) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      closeConvMenu();
+      resolve(v);
+    };
+    const menu = popMenu(anchor, (m) => {
+      m.classList.add("scope-menu");
+      m.append(
+        menuButton("envelope", `${verb}: only this email`, () => finish("one")),
+        menuButton("reply-all", `${verb}: ${allText}`, () => finish("all")),
+        el("div", "menu-hint muted", "You can stop this question in Settings → Reading."),
+      );
+    });
+    new MutationObserver((_, obs) => {
+      if (!menu.isConnected) {
+        obs.disconnect();
+        finish(null);
+      }
+    }).observe(document.body, { childList: true });
+  });
+}
+
+/// The folders an email can be moved to, as a menu under `anchor`.
+function showFolderMenu(anchor, pick) {
+  if (document.querySelector(".conv-menu.folders")) return closeConvMenu();
+  const here = readerCard?.folder;
+  popMenu(anchor, (menu) => {
+    menu.classList.add("folders");
+    for (const f of state.folders || []) {
+      if (f.selectable === false || f.name === here || folderKind(f.name) === "drafts") continue;
+      const b = menuButton("folder", folderLabel(f.name), () => {
+        closeConvMenu();
+        pick(f.name);
+      });
+      b.style.paddingLeft = 10 + (f.depth || 0) * 14 + "px";
+      menu.append(b);
+    }
+  });
+}
+
+$("conv-move").addEventListener("click", async (ev) => {
+  ev.stopPropagation();
+  if (document.querySelector(".conv-menu")) return closeConvMenu();
+  const members = await convTargets($("conv-move"), "Move");
+  if (!members) return;
+  showFolderMenu($("conv-move"), (to) => {
+    closeReader();
+    moveMany(members, to, { conversation: members.length > 1 });
+  });
 });
 document.addEventListener("mousedown", (ev) => {
-  if (!ev.target.closest?.(".conv-menu, #conv-move")) closeConvMenu();
+  if (!ev.target.closest?.(".conv-menu, #conv-move, #reader-move")) closeConvMenu();
 });
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && document.querySelector(".conv-menu")) {
@@ -2367,7 +2490,31 @@ function fillThread() {
       ev.stopPropagation();
       openReader(e.folder, e.card, { thread: entries, then: "reply" });
     });
-    r.append(avatar(e.card.from || "?"), el("span", "t-from", e.card.from), el("span", "t-preview", e.card.preview), el("span", "t-date", formatDate(e.card.date)), reply);
+    // Actions on this email only, shown when pointing at the row.
+    const tools = el("span", "t-tools");
+    const tool = (iconName, title, run) => {
+      const b = el("button", "t-reply");
+      b.title = title;
+      b.append(icon(iconName));
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        run();
+      });
+      tools.append(b);
+    };
+    tool(e.card.seen ? "envelope" : "envelope-open", e.card.seen ? "Mark this email as unread" : "Mark this email as read", async () => {
+      await setSeen(e.folder, e.card, !e.card.seen);
+      fillThread();
+    });
+    const drop = (kind) => {
+      readerThread = (readerThread || []).filter((x) => x !== e);
+      renderThread({ anchor: true });
+      fileMany([e], kind);
+    };
+    const kind = folderKind(e.folder);
+    if (kind !== "archive" && kind !== "sent") tool("archive", "Archive this email", () => drop("archive"));
+    if (kind !== "trash") tool("trash", "Delete this email (move to trash)", () => drop("trash"));
+    r.append(avatar(e.card.from || "?"), el("span", "t-from", e.card.from), el("span", "t-preview", e.card.preview), el("span", "t-date", formatDate(e.card.date)), tools, reply);
     r.addEventListener("click", () => openReader(e.folder, e.card, { thread: entries }));
     return r;
   };
@@ -3193,6 +3340,8 @@ $("open-settings").addEventListener("click", async () => {
     $("set-zoom").value = String(s.zoom || 100);
     $("set-preview-board").value = String(s.preview_board ?? 2);
     $("set-preview-list").value = String(s.preview_list ?? 1);
+    $("set-compact").checked = s.compact_actions ?? true;
+    $("set-ask-conv").checked = s.ask_conversation ?? true;
     renderWaitingChoices(s.waiting_folder || "");
     $("set-waiting-days").value = String(s.waiting_days ?? 3);
     $("set-cache-mb").value = String(s.cache_max_mb ?? 1024);
@@ -3223,7 +3372,7 @@ $("open-settings").addEventListener("click", async () => {
 
 $("set-never").addEventListener("change", (ev) => ($("set-seconds").disabled = ev.target.checked));
 // Theme and size preview while choosing; Cancel restores the saved ones.
-for (const id of ["set-theme", "set-zoom", "set-preview-board", "set-preview-list"]) {
+for (const id of ["set-theme", "set-zoom", "set-preview-board", "set-preview-list", "set-compact"]) {
   $(id).addEventListener("change", () => applyAppearance(appearanceFromForm()));
 }
 function closeSettingsWithoutSaving() {
@@ -3263,6 +3412,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
         waiting_days: parseInt($("set-waiting-days").value, 10),
         cache_max_mb: parseInt($("set-cache-mb").value, 10),
         prefetch: $("set-prefetch").checked,
+        ask_conversation: $("set-ask-conv").checked,
       },
     });
     const saved = await invoke("get_settings");

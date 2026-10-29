@@ -113,10 +113,21 @@ Written in Rust with [Tauri](https://tauri.app).
   compact rows above and below it, in one scrolling column with the open
   email shown in full inside its own box. The open email stays in place when
   the earlier rows arrive; scroll up (or click "↑ N earlier") to see them.
-  Click a row to open that email, or its reply button to answer it directly.
-  A bar under the subject acts on the whole conversation: pin, read/unread,
-  archive, delete, spam and move to a folder (your own sent emails are left in
-  Sent when moving). Quoted earlier messages inside an email
+  Click a row to open that email, or its reply button to answer it directly;
+  pointing at a row shows read/unread, archive and delete for that email only
+  (handy for an out-of-office reply in the middle of a thread).
+  The open email has its own actions: reply, reply all, forward, pin,
+  read/unread, archive, delete, spam and move to a folder. With "Compact email
+  actions" (Settings → Appearance, on by default) they are icons only, with the
+  name in the tooltip.
+  When the conversation has more than one email, a separate, highlighted bar
+  under the subject ("Whole conversation · N emails", with the number on each
+  icon) acts on all of them: pin, read/unread, archive, delete, spam and move to
+  a folder (your own sent emails are left in Sent when moving). Archive, delete,
+  spam and move first ask whether to act on the open email only or on the
+  whole conversation; the question can be turned off in Settings → Reading.
+  Moving several emails shows how many were moved, and its Undo stays at
+  least 15 seconds. Quoted earlier messages inside an email
   are hidden behind "Show quoted text".
 - Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
   In narrow columns, archive/delete appear on hover.
@@ -217,12 +228,14 @@ From the settings button on the board, grouped in tabs:
 - **Writing**: signature editor, "Always Bcc", undo send delay, address book
   suggestions.
 - **Columns**: the board columns and the waiting column.
-- **Reading**: undo time, notifications, seconds before an opened email is
-  marked as read, grouping by conversation, remote images.
+- **Reading**: undo time, the question "only this email or the whole
+  conversation", notifications, seconds before an opened email is marked as
+  read, grouping by conversation, remote images.
 - **Important**: colleagues of your domain, "always" and "never important" lists.
 - **Folders**: which folders the sidebar shows, their order and colors.
 - **Rules**: automatic rules for new Inbox emails.
-- **Appearance**: theme, interface size and preview lines, previewed while you
+- **Appearance**: theme, interface size, preview lines and compact email
+  actions, previewed while you
   choose.
 
 They are stored in `account.toml` and `settings.toml` in the configuration folder
