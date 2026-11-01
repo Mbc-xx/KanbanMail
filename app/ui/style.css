@@ -420,6 +420,12 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 .conv-menu button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; text-align: left; padding: 6px 10px; border-radius: 5px; color: var(--text); }
 .conv-menu button:hover { background: var(--drop); }
 .conv-menu .icon { width: 14px; height: 14px; color: var(--muted); }
+.conv-menu .menu-sep { border-top: 1px solid var(--border); margin: 4px 2px; }
+.conv-menu .menu-head { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); padding: 4px 10px 2px; }
+.card-menu { min-width: 230px; }
+.scope-toggle { display: flex; gap: 2px; margin: 2px 2px 4px; padding: 2px; border-radius: 7px; background: var(--card); border: 1px solid var(--border); }
+.conv-menu .scope-toggle button { flex: 1; justify-content: center; padding: 4px 8px; font-size: 12px; color: var(--muted); }
+.conv-menu .scope-toggle button.active { background: var(--accent); color: var(--accent-text); }
 .conv-menu .menu-hint { font-size: 11px; padding: 4px 10px 2px; border-top: 1px solid var(--border); margin-top: 4px; }
 .reader-meta {
   display: grid;

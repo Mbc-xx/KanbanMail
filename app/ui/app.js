@@ -141,12 +141,21 @@ function markAllRead(folder) {
 }
 
 for (const b of document.querySelectorAll("#selection-bar [data-sel]")) {
-  b.addEventListener("click", () => {
+  b.addEventListener("click", (ev) => {
     const members = [...state.selection.values()];
     const action = b.dataset.sel;
+    // "Move…" keeps the selection until a folder is chosen.
+    if (action === "move") {
+      ev.stopPropagation();
+      return showFolderMenu(b, (to) => {
+        clearSelection();
+        moveMany(members, to);
+      });
+    }
     clearSelection();
     if (action === "clear" || !members.length) return;
     if (action === "read" || action === "unread") return markMany(members, action === "read");
+    if (action === "pin") return pinMany(members, !members.every((m) => m.card.flagged), b);
     fileMany(members, action);
   });
 }
@@ -478,6 +487,15 @@ function cacheClear() {
   } catch (_) {}
 }
 
+/// The board (not a folder) with the sidebar and filter as the user left them.
+function restoreBoardView() {
+  $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
+  state.onlyImportant = local.get("onlyImportant") === "1";
+  $("only-important").checked = state.onlyImportant;
+  state.view = null;
+  renderColumns();
+}
+
 /// Shows the board from the last session right away; fresh data replaces it
 /// a moment later. Returns true if there was something to show.
 function showCachedBoard() {
@@ -487,11 +505,7 @@ function showCachedBoard() {
   if (settings) applySettingsState(settings);
   state.columns = columns;
   state.folders = cacheGet("folders") || [];
-  $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
-  state.onlyImportant = local.get("onlyImportant") === "1";
-  $("only-important").checked = state.onlyImportant;
-  state.view = null;
-  renderColumns();
+  restoreBoardView();
   renderFolders();
   // The cards come from the copy on this Mac (older versions kept them here too).
   try {
@@ -569,11 +583,7 @@ async function openBoard({ fromCache = false, retry = false } = {}) {
       state.queued = n;
       setSyncStatus();
     }).catch(() => {});
-    $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
-    state.onlyImportant = local.get("onlyImportant") === "1";
-    $("only-important").checked = state.onlyImportant;
-    state.view = null;
-    renderColumns();
+    restoreBoardView();
     show("board-screen");
     loadFolders();
     loadKnownSenders();
@@ -1292,6 +1302,7 @@ function renderCard(folder, card, group = null, { child = false } = {}) {
   }
 
   if (members.every((m) => state.selection.has(selKey(m.folder, m.card)))) c.classList.add("multi-selected");
+  c.menuInfo = { folder, card, members }; // for the right-click menu
   c.addEventListener("click", (ev) => {
     // ⌘/Ctrl-click toggles the selection, Shift-click selects a range.
     if (ev.metaKey || ev.ctrlKey) return toggleSelection(members, c);
@@ -1314,6 +1325,113 @@ function renderCard(folder, card, group = null, { child = false } = {}) {
     state.pendingReload.clear();
   });
   return c;
+}
+
+// ---------- right-click menu on cards ----------
+
+// One listener for every card: the menu is built only when it opens.
+document.addEventListener("contextmenu", (ev) => {
+  const c = ev.target.closest?.(".card");
+  if (!c?.menuInfo) return;
+  ev.preventDefault();
+  openCardMenu(c, ev.clientX, ev.clientY);
+});
+
+/// The actions of a card (an email or a conversation), or of every selected
+/// card when it is part of a multiple selection.
+function openCardMenu(c, x, y) {
+  const { folder, card, members } = c.menuInfo;
+  const inSelection = members.every((m) => state.selection.has(selKey(m.folder, m.card)));
+  if (state.selection.size && !inSelection) clearSelection();
+  const batch = inSelection && state.selection.size > members.length ? [...state.selection.values()] : null;
+  let scope = "all"; // on a conversation card: "one" = only the email shown
+  const targets = () => batch || (scope === "one" ? [{ folder, card }] : members);
+  const run = (fn) => () => {
+    const list = targets();
+    closeConvMenu();
+    if (batch) clearSelection();
+    fn(list);
+  };
+
+  const fill = (menu) => {
+    menu.replaceChildren();
+    const list = targets();
+    const n = list.length;
+    const count = n > 1 ? ` (${n})` : "";
+    if (batch) menu.append(el("div", "menu-head", `${n} selected emails`));
+    else if (members.length > 1) {
+      const toggle = el("div", "scope-toggle");
+      for (const [value, text] of [["one", "This email"], ["all", `Conversation (${members.length})`]]) {
+        const b = el("button", value === scope ? "active" : "", text);
+        b.type = "button";
+        b.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          scope = value;
+          fill(menu);
+        });
+        toggle.append(b);
+      }
+      menu.append(toggle);
+    }
+    const sep = () => menu.append(el("div", "menu-sep"));
+    const kinds = new Set(list.map((m) => folderKind(m.folder)));
+    if (!batch) {
+      if (folderKind(folder) === "drafts") menu.append(menuButton("compose", "Edit draft", run(() => openDraft(folder, card))));
+      else
+        menu.append(
+          menuButton("reply", "Reply", run(() => openReader(folder, card, { then: "reply" }))),
+          menuButton("reply-all", "Reply all", run(() => openReader(folder, card, { then: "reply-all" }))),
+          menuButton("forward", "Forward", run(() => openReader(folder, card, { then: "forward" }))),
+        );
+      sep();
+    }
+    const unread = list.some((m) => !m.card.seen);
+    const pinned = list.some((m) => m.card.flagged);
+    menu.append(
+      menuButton(unread ? "envelope-open" : "envelope", (unread ? "Mark as read" : "Mark as unread") + count, run((l) => markMany(l, unread))),
+      menuButton("pin", (pinned ? "Unpin" : "Pin") + count, run((l) => pinMany(l, !pinned, c))),
+    );
+    sep();
+    if (!(kinds.size === 1 && kinds.has("archive"))) menu.append(menuButton("archive", "Archive" + count, run((l) => fileMany(l, "archive", { conversation: !batch }))));
+    if (!(kinds.size === 1 && kinds.has("trash"))) menu.append(menuButton("trash", "Delete" + count, run((l) => fileMany(l, "trash", { conversation: !batch }))));
+    menu.append(
+      kinds.size === 1 && kinds.has("junk")
+        ? menuButton("inbox", "Not spam" + count, run((l) => moveMany(l, "INBOX")))
+        : menuButton("junk", "Spam" + count, run((l) => fileMany(l, "junk", { conversation: !batch }))),
+      menuButton("folder", "Move to…" + count, () => fillFolders(menu)),
+    );
+    sep();
+    if (batch) menu.append(menuButton("close", "Clear the selection", run(() => clearSelection())));
+    else {
+      const selected = members.every((m) => state.selection.has(selKey(m.folder, m.card)));
+      menu.append(menuButton("check", selected ? "Deselect" : "Select (⌘-click)", run(() => toggleSelection(members, c))));
+      if (card.from_address) {
+        const who = shortName(card.from) || card.from_address;
+        sep();
+        menu.append(
+          menuButton("star", `Always important: ${who}`, run(() => setSenderRule("allow", card, "address"))),
+          menuButton("star-off", `Never important: ${who}`, run(() => setSenderRule("block", card, "address"))),
+          menuButton("search", `Emails from ${who}`, run(() => startSearch(card.from_address))),
+          menuButton("rule", `New rule for ${card.from_address}…`, run(async () => (await openSettings()) && (showSettingsTab("rules"), addRule(card.from_address)))),
+        );
+      }
+    }
+  };
+
+  // "Move to…": the folders in place of the actions, with a way back.
+  const fillFolders = (menu) => {
+    const list = targets();
+    const here = new Set(list.map((m) => m.folder));
+    menu.replaceChildren(menuButton("back", "Back", () => fill(menu)), el("div", "menu-sep"));
+    for (const f of state.folders || []) {
+      if (f.selectable === false || folderKind(f.name) === "drafts" || (here.size === 1 && here.has(f.name))) continue;
+      const b = menuButton("folder", folderLabel(f.name), run((l) => moveMany(l, f.name, { conversation: !batch })));
+      b.style.paddingLeft = 10 + (f.depth || 0) * 14 + "px";
+      menu.append(b);
+    }
+  };
+
+  popMenuAt(x, y, fill).classList.add("card-menu");
 }
 
 function setupDropTarget(column) {
@@ -1409,6 +1527,7 @@ async function pinMany(members, pinned, cardEl) {
     }
   }
   await afterBulkChange();
+  cardEl.classList.remove("busy");
 }
 
 async function moveCard(from, uid, to) {
@@ -1510,11 +1629,10 @@ function updateSenderPanel() {
   $("rule-allow").disabled = $("rule-block").disabled = $("rule-scope").disabled = disabled;
 }
 
-async function setSenderRule(kind) {
-  const card = readerCard?.card;
+async function setSenderRule(kind, card = readerCard?.card, scope = $("rule-scope").value) {
   if (!card?.from_address) return;
   const current = senderRule(card.from_address);
-  const pattern = $("rule-scope").value === "domain" ? domainOf(card.from_address) : card.from_address.toLowerCase();
+  const pattern = scope === "domain" ? domainOf(card.from_address) : card.from_address.toLowerCase();
   // Clicking the active rule again removes it.
   const rule = current && current.rule === kind && current.pattern === pattern ? "none" : kind;
   try {
@@ -2010,7 +2128,6 @@ $("reader-pin").addEventListener("click", async () => {
   updateSeenButton();
   updateConvBar();
   await pinMany([one], one.card.flagged, $("reader-pin"));
-  $("reader-pin").classList.remove("busy");
 });
 
 $("reader-move").addEventListener("click", (ev) => {
@@ -2115,7 +2232,7 @@ async function openReader(folder, card, opts = {}) {
     renderAttachments(folder, card.uid, msg.attachments || []);
     renderInvite(msg.invite);
     renderReaderBody();
-    if (opts.then === "reply") replyTo(false);
+    ({ reply: () => replyTo(false), "reply-all": () => replyTo(true), forward }[opts.then])?.();
     if (!opts.thread) loadThread(folder, card, msg);
   } catch (e) {
     $("reader-body").replaceChildren(
@@ -2263,7 +2380,6 @@ $("conv-pin").addEventListener("click", async () => {
   for (const m of members) m.card.flagged = pinned;
   updateConvBar();
   await pinMany(members, pinned, $("conv-pin"));
-  $("conv-pin").classList.remove("busy");
 });
 
 $("conv-seen").addEventListener("click", async () => {
@@ -2314,13 +2430,19 @@ function closeConvMenu() {
 
 /// A small menu under `anchor`, filled by `fill(menu)`.
 function popMenu(anchor, fill) {
+  const r = anchor.getBoundingClientRect();
+  return popMenuAt(r.right, r.bottom + 6, fill, true);
+}
+
+/// A small menu at (x, y) (its right edge there with `alignRight`), kept on screen.
+function popMenuAt(x, y, fill, alignRight = false) {
   closeConvMenu();
   const menu = el("div", "conv-menu");
   fill(menu);
   document.body.append(menu);
-  const r = anchor.getBoundingClientRect();
-  menu.style.top = r.bottom + 6 + "px";
-  menu.style.left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8)) + "px";
+  const left = alignRight ? x - menu.offsetWidth : x;
+  menu.style.left = Math.max(8, Math.min(left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+  menu.style.top = Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8)) + "px";
   return menu;
 }
 
@@ -2392,7 +2514,7 @@ $("conv-move").addEventListener("click", async (ev) => {
   });
 });
 document.addEventListener("mousedown", (ev) => {
-  if (!ev.target.closest?.(".conv-menu, #conv-move, #reader-move")) closeConvMenu();
+  if (!ev.target.closest?.(".conv-menu, #conv-move, #reader-move, [data-sel='move']")) closeConvMenu();
 });
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && document.querySelector(".conv-menu")) {
@@ -3277,7 +3399,9 @@ function showSettingsTab(name) {
 }
 for (const t of document.querySelectorAll(".tabs .tab")) t.addEventListener("click", () => showSettingsTab(t.dataset.tab));
 
-$("open-settings").addEventListener("click", async () => {
+$("open-settings").addEventListener("click", () => openSettings());
+
+async function openSettings() {
   try {
     const s = await invoke("get_settings");
     showSettingsTab("account");
@@ -3322,10 +3446,12 @@ $("open-settings").addEventListener("click", async () => {
     $("set-seconds").value = Math.max(0, s.mark_read_after_seconds < 0 ? 3 : s.mark_read_after_seconds);
     $("set-seconds").disabled = s.mark_read_after_seconds < 0;
     $("settings").hidden = false;
+    return true;
   } catch (e) {
     toast(String(e));
+    return false;
   }
-});
+}
 
 $("set-never").addEventListener("change", (ev) => ($("set-seconds").disabled = ev.target.checked));
 // Theme and size preview while choosing; Cancel restores the saved ones.
@@ -3566,12 +3692,14 @@ function renderRulePrefs() {
   });
 }
 
-$("add-rule").addEventListener("click", () => {
+/// A new rule row in the settings ("from" contains `text`), ready to be completed.
+function addRule(text = "") {
   const firstFolder = orderedFolders(true).find((f) => f.selectable && f.kind !== "inbox")?.name || "";
-  rulesDraft.push({ field: "from", contains: "", folder: firstFolder });
+  rulesDraft.push({ field: "from", contains: text, folder: firstFolder });
   renderRulePrefs();
-  $("rule-prefs").lastElementChild?.querySelector("input")?.focus();
-});
+  $("rule-prefs").lastElementChild?.querySelector(text ? "select:last-of-type" : "input")?.focus();
+}
+$("add-rule").addEventListener("click", () => addRule());
 
 $("run-rules").addEventListener("click", async () => {
   state.rules = rulesDraft.filter((r) => r.contains.trim() && r.folder.trim());

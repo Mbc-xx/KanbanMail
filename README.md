@@ -50,8 +50,9 @@ Written in Rust with [Tauri](https://tauri.app).
   remove; type a new folder name to create it).
 - "Load more" at the bottom of a column or folder for older emails.
 - macOS notifications for new Inbox emails: only important ones, all, or off.
-- Multiple selection: ⌘/Ctrl-click or Shift-click cards, then Archive, Delete,
-  Spam, Read or Unread from the bar at the bottom, or drag them together.
+- Multiple selection: ⌘/Ctrl-click or Shift-click cards (or "Select" in the
+  right-click menu), then Archive, Delete, Spam, Read, Unread, Pin or Move… from
+  the bar at the bottom or the right-click menu, or drag them together.
   Every column has a "Mark all as read" button.
 - Automatic rules: "when From / To / Subject contains … move to …", applied to
   new Inbox emails (first match wins), or to the whole Inbox on demand. Rules
@@ -131,6 +132,13 @@ Written in Rust with [Tauri](https://tauri.app).
   are hidden behind "Show quoted text".
 - Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
   In narrow columns, archive/delete appear on hover.
+- Right-click menu on every card, on the board and in folder lists: reply,
+  reply all, forward, read/unread, pin, archive, delete, spam, move to a folder,
+  select, and for the sender: always / never important, all emails from them
+  and a new rule. On a conversation, a switch at the top chooses "This email"
+  or the whole conversation, and every action shows how many emails it
+  touches. Right-clicking a card of a multiple selection acts on all the
+  selected emails.
 - Resizable columns: drag the right edge (minimum 160 px); double-click the edge
   to return to automatic width.
 - Unread emails stand out: a dot and the subject in the theme color, bold
