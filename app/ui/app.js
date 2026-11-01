@@ -493,10 +493,10 @@ function showCachedBoard() {
   state.view = null;
   renderColumns();
   renderFolders();
-  for (const c of columns) {
-    state.cards[c.folder] = cacheGet("cards:" + c.folder) || [];
-    renderCards(c.folder);
-  }
+  // The cards come from the copy on this Mac (older versions kept them here too).
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith(cacheKey("cards:"))) localStorage.removeItem(k);
+  } catch (_) {}
   setSyncStatus("Updating…");
   show("board-screen");
   fillFromLocalCopy(columns.map((c) => c.folder));
@@ -666,29 +666,38 @@ function showPanePlaceholder() {
   pane.replaceChildren(ph);
 }
 
+/// Follows a drag started on `handle`: `onMove(dx)` while moving, `onEnd()` when released.
+function trackDrag(handle, ev, onMove, onEnd) {
+  handle.setPointerCapture(ev.pointerId);
+  handle.classList.add("active");
+  document.body.classList.add("resizing");
+  const startX = ev.clientX;
+  const move = (e) => onMove(e.clientX - startX);
+  const up = () => {
+    for (const [type, fn] of [["pointermove", move], ["pointerup", up], ["pointercancel", up]]) handle.removeEventListener(type, fn);
+    handle.classList.remove("active");
+    document.body.classList.remove("resizing");
+    onEnd();
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+  handle.addEventListener("pointercancel", up);
+}
+
 function setupSplitHandle(split, handle) {
   handle.addEventListener("pointerdown", (ev) => {
     ev.preventDefault();
-    handle.setPointerCapture(ev.pointerId);
-    handle.classList.add("active");
-    document.body.classList.add("resizing");
     const list = split.querySelector(".column");
-    const startX = ev.clientX;
     const startW = list.getBoundingClientRect().width;
-    const move = (e) => {
-      const max = split.getBoundingClientRect().width - 340;
-      const w = Math.round(Math.min(max, Math.max(280, startW + e.clientX - startX)));
-      split.style.setProperty("--list-width", w + "px");
-    };
-    const up = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.classList.remove("active");
-      document.body.classList.remove("resizing");
-      local.set("listwidth", String(Math.round(list.getBoundingClientRect().width)));
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up, { once: true });
-    handle.addEventListener("pointercancel", up, { once: true });
+    trackDrag(
+      handle,
+      ev,
+      (dx) => {
+        const max = split.getBoundingClientRect().width - 340;
+        split.style.setProperty("--list-width", Math.round(Math.min(max, Math.max(280, startW + dx))) + "px");
+      },
+      () => local.set("listwidth", String(Math.round(list.getBoundingClientRect().width))),
+    );
   });
 }
 
@@ -728,26 +737,17 @@ function setupResizer(column) {
       return;
     }
     lastDown = ev.timeStamp;
-    handle.setPointerCapture(ev.pointerId);
-    handle.classList.add("active");
-    document.body.classList.add("resizing");
-    const startX = ev.clientX;
     const startW = column.getBoundingClientRect().width;
     let moved = false;
-    const move = (e) => {
-      moved = true;
-      const w = Math.round(Math.min(COL_MAX, Math.max(COL_MIN, startW + e.clientX - startX)));
-      applyColumnWidth(column, w);
-    };
-    const up = () => {
-      handle.removeEventListener("pointermove", move);
-      handle.classList.remove("active");
-      document.body.classList.remove("resizing");
-      if (moved) local.set(key, String(Math.round(column.getBoundingClientRect().width)));
-    };
-    handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", up, { once: true });
-    handle.addEventListener("pointercancel", up, { once: true });
+    trackDrag(
+      handle,
+      ev,
+      (dx) => {
+        moved = true;
+        applyColumnWidth(column, Math.round(Math.min(COL_MAX, Math.max(COL_MIN, startW + dx))));
+      },
+      () => moved && local.set(key, String(Math.round(column.getBoundingClientRect().width))),
+    );
   });
 }
 
@@ -760,8 +760,9 @@ async function loadColumn(folder) {
   if (folder === ALL_KEY) return loadAllMail();
   // What is already known (in memory or on this Mac) is shown at once, then
   // refreshed from the server.
-  if (state.cards[folder]?.length) renderCards(folder);
-  else {
+  if (state.cards[folder]?.length) {
+    if (!columnEl(folder)?.querySelector(".card")) renderCards(folder); // just switched view
+  } else {
     try {
       const cached = await invoke("cached_column", { folder, limit: state.limits[folder] || state.defaultLimit });
       if (cached.length && !state.cards[folder]?.length) {
@@ -771,10 +772,15 @@ async function loadColumn(folder) {
     } catch (_) {}
   }
   try {
-    state.cards[folder] = await invoke("load_column", { folder, limit: state.limits[folder] || null });
+    const cards = await invoke("load_column", { folder, limit: state.limits[folder] || null });
     state.fresh.add(folder);
-    renderCards(folder);
-    if (state.columns.some((c) => c.folder === folder)) cacheSet("cards:" + folder, state.cards[folder].slice(0, 200));
+    // Nothing changed (the usual case on a refresh): keep the list on screen,
+    // and the card objects its buttons act on.
+    const same = columnEl(folder)?.querySelector(".card") && JSON.stringify(cards) === JSON.stringify(state.cards[folder]);
+    if (!same) {
+      state.cards[folder] = cards;
+      renderCards(folder);
+    }
     if (folder.toUpperCase() === "INBOX") {
       afterInboxLoaded(state.cards[folder]);
       updateBadge();
@@ -1231,12 +1237,10 @@ function renderCard(folder, card, group = null, { child = false } = {}) {
   };
   const kind = folderKind(folder);
   const what = group ? "conversation" : "email";
-  if (kind !== "archive") action("archive-btn", "archive", `Archive ${what}`, () => (group ? fileMany(members, "archive") : fileCard(folder, card, "archive")));
-  if (kind !== "trash") action("trash-btn", "trash", `Delete ${what} (move to trash)`, () => (group ? fileMany(members, "trash") : fileCard(folder, card, "trash")));
+  if (kind !== "archive") action("archive-btn", "archive", `Archive ${what}`, () => fileMany(members, "archive"));
+  if (kind !== "trash") action("trash-btn", "trash", `Delete ${what} (move to trash)`, () => fileMany(members, "trash"));
   const pinned = members.some((m) => m.card.flagged);
-  action("pin-btn", "pin", pinned ? "Unpin" : "Pin (keep at the top of the column)", () =>
-    group ? pinMany(members, !pinned, c) : togglePin(folder, card, c),
-  );
+  action("pin-btn", "pin", pinned ? "Unpin" : "Pin (keep at the top of the column)", () => pinMany(members, !pinned, c));
   if (state.view) {
     // Compact row for the folder view.
     const main = el("div", "row-main");
@@ -1352,53 +1356,47 @@ async function afterBulkChange() {
   scheduleFolderCounts();
 }
 
-/// Moves a whole conversation to another folder.
-async function moveMany(members, to, { quiet = false, conversation = false } = {}) {
-  dropFromLists(members);
-  let failed = 0;
-  const moves = [];
-  for (const m of members) {
-    try {
-      const now = await invoke("move_card", { from: m.folder, uid: m.card.uid, to });
-      moves.push({ message_id: m.card.message_id, now: now ? to : "", back: m.folder });
-    } catch (e) {
-      failed++;
-      console.error(e);
-    }
-  }
-  if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
-  else if (moves.some((m) => !m.now)) toast(`No connection: ${members.length} emails will be moved to ${folderLabel(to)} when the server can be reached`, "info");
-  else if (!quiet) offerUndo(`${countEmails(members.length, conversation)} moved to ${folderLabel(to)}`, moves);
-  await afterBulkChange();
-  return moves;
-}
-
-/// "1 email", "3 emails", or "all 3 emails of the conversation".
+/// "1 email", "3 emails", or "All 3 emails of the conversation".
 function countEmails(n, conversation = false) {
   if (conversation && n > 1) return `All ${n} emails of the conversation`;
   return `${n} email${n === 1 ? "" : "s"}`;
 }
 
-/// Archives or deletes a whole conversation.
-async function fileMany(members, kind, { conversation = false } = {}) {
+/// Moves emails to a folder (`to`) or to the archive, trash or junk (`kind`),
+/// then offers Undo. Returns [{ message_id, now, back }].
+async function moveEmails(members, { to = "", kind = "", quiet = false, conversation = false } = {}) {
   dropFromLists(members);
-  let target = "";
-  let failed = 0;
   const moves = [];
+  let failed = 0;
+  let error = "";
   for (const m of members) {
-    if (folderKind(m.folder) === kind) continue; // already there
+    if (kind && folderKind(m.folder) === kind) continue; // already there
     try {
-      target = await invoke("file_card", { folder: m.folder, uid: m.card.uid, kind });
-      moves.push({ message_id: m.card.message_id, now: target, back: m.folder });
+      const now = kind
+        ? await invoke("file_card", { folder: m.folder, uid: m.card.uid, kind })
+        : (await invoke("move_card", { from: m.folder, uid: m.card.uid, to })) ? to : "";
+      moves.push({ message_id: m.card.message_id, now, back: m.folder });
     } catch (e) {
       failed++;
+      error = String(e);
       console.error(e);
     }
   }
-  if (failed) toast(`${failed} of ${members.length} emails could not be moved`);
-  else if (moves.some((m) => !m.now)) toast(`No connection: ${members.length} email${members.length === 1 ? "" : "s"} will be moved to ${kind} when the server can be reached`, "info");
-  else offerUndo(`${countEmails(members.length, conversation)} moved to ${folderLabel(target || kind)}`, moves);
+  const what = countEmails(members.length, conversation);
+  const where = folderLabel(moves.find((m) => m.now)?.now || to || kind);
+  if (failed) toast(`${failed} of ${members.length} emails could not be moved: ${error}`);
+  else if (moves.some((m) => !m.now)) toast(`No connection: ${what.toLowerCase()} will be moved to ${where} when the server can be reached`, "info");
+  else if (!quiet) offerUndo(`${what} moved to ${where}`, moves);
   await afterBulkChange();
+  return moves;
+}
+
+function moveMany(members, to, opts = {}) {
+  return moveEmails(members, { ...opts, to });
+}
+
+function fileMany(members, kind, opts = {}) {
+  return moveEmails(members, { ...opts, kind });
 }
 
 async function pinMany(members, pinned, cardEl) {
@@ -1407,7 +1405,7 @@ async function pinMany(members, pinned, cardEl) {
     try {
       await invoke("set_pin", { folder: m.folder, uid: m.card.uid, pinned });
     } catch (e) {
-      console.error(e);
+      toast("Pin not changed: " + e);
     }
   }
   await afterBulkChange();
@@ -1445,18 +1443,6 @@ async function moveCard(from, uid, to) {
   await Promise.all([from, to].filter((f) => columnEl(f)).map(loadColumn));
   if (state.view?.search) runSearch();
   scheduleFolderCounts();
-}
-
-async function togglePin(folder, card, cardEl) {
-  const pinned = !card.flagged;
-  cardEl.classList.add("busy");
-  try {
-    await invoke("set_pin", { folder, uid: card.uid, pinned });
-  } catch (e) {
-    toast("Pin not changed: " + e);
-  }
-  await loadColumn(folder);
-  if (state.view?.search) runSearch();
 }
 
 $("only-important").addEventListener("change", (ev) => {
@@ -1998,62 +1984,33 @@ function folderKind(folder) {
   return state.folders.find((f) => f.name === folder)?.kind || "";
 }
 
-/// Moves the email to the trash (kind "trash") or the archive ("archive").
-async function fileCard(folder, card, kind) {
-  state.cards[folder] = (state.cards[folder] || []).filter((c) => c.uid !== card.uid);
-  for (const key of MULTI_KEYS) {
-    state.cards[key] = (state.cards[key] || []).filter((c) => !(c.uid === card.uid && c.__folder === folder));
-    renderCards(key);
-  }
-  renderCards(folder);
-  try {
-    const target = await invoke("file_card", { folder, uid: card.uid, kind });
-    if (target) offerUndo(`1 email moved to ${folderLabel(target)}`, [{ message_id: card.message_id, now: target, back: folder }]);
-    else toast(`No connection: it will be moved to ${kind} when the server can be reached`, "info");
-  } catch (e) {
-    toast(({ trash: "Delete", junk: "Spam", archive: "Archive" }[kind] || "Move") + " failed: " + e);
-  }
-  await Promise.all(
-    state.columns.concat(visibleColumns()).map((c) => c.folder).filter((f, i, a) => a.indexOf(f) === i && columnEl(f)).map(loadColumn),
-  );
-  scheduleFolderCounts();
-}
-
 $("reader-spam").addEventListener("click", () => {
-  const { folder, card } = readerCard;
+  const one = readerCard;
   closeReader();
-  if (folderKind(folder) === "junk") moveMany([{ folder, card }], "INBOX");
-  else fileCard(folder, card, "junk");
+  if (folderKind(one.folder) === "junk") moveMany([one], "INBOX");
+  else fileMany([one], "junk");
 });
 
-$("reader-trash").addEventListener("click", () => {
-  const { folder, card } = readerCard;
-  closeReader();
-  fileCard(folder, card, "trash");
-});
+for (const kind of ["trash", "archive"]) {
+  $("reader-" + kind).addEventListener("click", () => {
+    const one = readerCard;
+    closeReader();
+    fileMany([one], kind);
+  });
+}
 
 $("reader-seen").addEventListener("click", () => {
   const { folder, card } = readerCard;
   setSeen(folder, card, !card.seen);
 });
 
-$("reader-archive").addEventListener("click", () => {
-  const { folder, card } = readerCard;
-  closeReader();
-  fileCard(folder, card, "archive");
-});
-
 $("reader-pin").addEventListener("click", async () => {
-  const { folder, card } = readerCard;
-  card.flagged = !card.flagged;
+  const one = readerCard;
+  one.card.flagged = !one.card.flagged;
   updateSeenButton();
   updateConvBar();
-  try {
-    await invoke("set_pin", { folder, uid: card.uid, pinned: card.flagged });
-  } catch (e) {
-    toast("Pin not changed: " + e);
-  }
-  await loadColumn(folder);
+  await pinMany([one], one.card.flagged, $("reader-pin"));
+  $("reader-pin").classList.remove("busy");
 });
 
 $("reader-move").addEventListener("click", (ev) => {

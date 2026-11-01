@@ -383,7 +383,7 @@ impl Store {
             let rows = stmt.query_map(params![f, limit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
             all.extend(rows.filter_map(|r| r.ok()));
         }
-        all.sort_by(|a, b| b.2.cmp(&a.2));
+        all.sort_by_key(|a| std::cmp::Reverse(a.2));
         all.truncate(limit as usize);
         out.extend(all.into_iter().map(|(f, u, _)| (f, u)));
         Ok(out)

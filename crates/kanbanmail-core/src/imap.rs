@@ -753,7 +753,7 @@ pub async fn search(
         .collect();
     let criteria = format!("CHARSET UTF-8 {}", per_word.join(" "));
     let mut out = search_folders(session, folders, &criteria, None, limit).await?;
-    out.sort_by(|a, b| b.card.date.cmp(&a.card.date));
+    out.sort_by_key(|a| std::cmp::Reverse(a.card.date));
     Ok(out)
 }
 
@@ -850,7 +850,7 @@ pub async fn load_all_mail(
             });
         }
     }
-    rows.sort_by(|a, b| b.date.cmp(&a.date));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.date));
     rows.truncate(total as usize);
 
     // Download what is missing, folder by folder.

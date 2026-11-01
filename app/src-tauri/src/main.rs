@@ -353,7 +353,7 @@ enum QueuedOp {
     File { folder: String, uid: u32, kind: String },
     Pin { folder: String, uid: u32, pinned: bool },
     Seen { folder: String, uids: Vec<u32>, seen: bool },
-    Send { draft: Draft, reply: Option<ReplyTarget> },
+    Send { draft: Box<Draft>, reply: Option<ReplyTarget> },
 }
 
 impl QueuedOp {
@@ -382,7 +382,7 @@ impl QueuedOp {
 /// Does it on the server. Returns the destination folder for File.
 async fn run_op(state: &AppState, op: &QueuedOp) -> CmdResult<Option<String>> {
     if let QueuedOp::Send { draft, reply } = op {
-        return send_now(state, draft.clone(), reply.clone()).await.map(|_| None);
+        return send_now(state, (**draft).clone(), reply.clone()).await.map(|_| None);
     }
     let mut inner = state.inner.lock().await;
     match op {
@@ -690,91 +690,27 @@ async fn set_seen(folder: String, uid: u32, seen: bool, app: AppHandle, state: S
     Ok(())
 }
 
+/// The settings dialog: the account's name and sending server, plus every app setting.
 #[derive(Serialize, Deserialize)]
 struct SettingsView {
     email: String,
     display_name: String,
     smtp_server: String,
     smtp_port: u16,
-    mark_read_after_seconds: i32,
-    signature: String,
-    default_bcc: String,
-    use_system_contacts: bool,
-    signature_html: String,
-    load_remote_images: bool,
-    important_allow: Vec<String>,
-    important_block: Vec<String>,
-    important_same_domain: bool,
-    group_threads: bool,
-    folders: Vec<kanbanmail_core::settings::FolderPref>,
-    rules: Vec<kanbanmail_core::settings::Rule>,
-    notify: String,
-    theme: String,
-    zoom: u32,
-    undo_seconds: u32,
-    #[serde(default)]
-    undo_send_seconds: u32,
-    #[serde(default)]
-    preview_board: u32,
-    #[serde(default)]
-    preview_list: u32,
-    #[serde(default)]
-    waiting_folder: String,
-    #[serde(default)]
-    waiting_days: u32,
-    #[serde(default = "default_cache_mb")]
-    cache_max_mb: u32,
-    #[serde(default = "default_yes")]
-    prefetch: bool,
-    #[serde(default = "default_yes")]
-    compact_actions: bool,
-    #[serde(default = "default_yes")]
-    ask_conversation: bool,
-}
-
-fn default_cache_mb() -> u32 {
-    1024
-}
-
-fn default_yes() -> bool {
-    true
+    #[serde(flatten)]
+    settings: Settings,
 }
 
 #[tauri::command]
 async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
     let inner = state.inner.lock().await;
     let acc = inner.account.as_ref().ok_or("no account configured")?;
-    let settings = Settings::load().map_err(err)?;
     Ok(SettingsView {
         email: acc.email.clone(),
         display_name: acc.display_name.clone().unwrap_or_default(),
         smtp_server: acc.smtp_host().to_string(),
         smtp_port: acc.smtp_port,
-        mark_read_after_seconds: settings.mark_read_after_seconds,
-        signature: settings.signature,
-        default_bcc: settings.default_bcc,
-        use_system_contacts: settings.use_system_contacts,
-        signature_html: settings.signature_html,
-        load_remote_images: settings.load_remote_images,
-        important_allow: settings.important_allow,
-        important_block: settings.important_block,
-        important_same_domain: settings.important_same_domain,
-        group_threads: settings.group_threads,
-        folders: settings.folders,
-        rules: settings.rules,
-        notify: settings.notify,
-        theme: settings.theme,
-        zoom: settings.zoom,
-        undo_seconds: settings.undo_seconds,
-        undo_send_seconds: settings.undo_send_seconds,
-        preview_board: settings.preview_board,
-        preview_list: settings.preview_list,
-        waiting_folder: settings.waiting_folder,
-        waiting_days: settings.waiting_days,
-        cache_max_mb: settings.cache_max_mb,
-        prefetch: settings.prefetch,
-        compact_actions: settings.compact_actions,
-        ask_conversation: settings.ask_conversation,
+        settings: Settings::load().map_err(err)?,
     })
 }
 
@@ -788,39 +724,27 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
     acc.smtp_server = (!smtp.is_empty() && smtp != acc.server).then(|| smtp.to_string());
     acc.smtp_port = settings.smtp_port;
     acc.save().map_err(err)?;
+    let s = settings.settings;
     Settings {
-        mark_read_after_seconds: settings.mark_read_after_seconds.max(-1),
-        signature: settings.signature.trim_end().to_string(),
-        default_bcc: settings.default_bcc.trim().to_string(),
-        use_system_contacts: settings.use_system_contacts,
-        signature_html: kanbanmail_core::message::sanitize_signature(&settings.signature_html),
-        load_remote_images: settings.load_remote_images,
-        important_allow: kanbanmail_core::settings::normalize_rules(&settings.important_allow),
-        important_block: kanbanmail_core::settings::normalize_rules(&settings.important_block),
-        important_same_domain: settings.important_same_domain,
-        group_threads: settings.group_threads,
-        folders: settings.folders,
-        rules: settings
-            .rules
-            .into_iter()
-            .filter(|r| !r.contains.trim().is_empty() && !r.folder.is_empty())
-            .collect(),
-        notify: settings.notify,
-        theme: settings.theme,
-        zoom: settings.zoom.clamp(80, 150),
-        undo_seconds: settings.undo_seconds.min(60),
-        undo_send_seconds: settings.undo_send_seconds.min(60),
-        preview_board: settings.preview_board.min(2),
-        preview_list: settings.preview_list.min(2),
-        waiting_folder: settings.waiting_folder.trim().to_string(),
-        waiting_days: settings.waiting_days.min(365),
-        cache_max_mb: settings.cache_max_mb.clamp(100, 20_000),
-        prefetch: settings.prefetch,
-        compact_actions: settings.compact_actions,
-        ask_conversation: settings.ask_conversation,
+        mark_read_after_seconds: s.mark_read_after_seconds.max(-1),
+        signature: s.signature.trim_end().to_string(),
+        default_bcc: s.default_bcc.trim().to_string(),
+        signature_html: kanbanmail_core::message::sanitize_signature(&s.signature_html),
+        important_allow: kanbanmail_core::settings::normalize_rules(&s.important_allow),
+        important_block: kanbanmail_core::settings::normalize_rules(&s.important_block),
+        rules: s.rules.into_iter().filter(|r| !r.contains.trim().is_empty() && !r.folder.is_empty()).collect(),
+        zoom: s.zoom.clamp(80, 150),
+        undo_seconds: s.undo_seconds.min(60),
+        undo_send_seconds: s.undo_send_seconds.min(60),
+        preview_board: s.preview_board.min(2),
+        preview_list: s.preview_list.min(2),
+        waiting_folder: s.waiting_folder.trim().to_string(),
+        waiting_days: s.waiting_days.min(365),
+        cache_max_mb: s.cache_max_mb.clamp(100, 20_000),
+        ..s
     }
-        .save()
-        .map_err(err)
+    .save()
+    .map_err(err)
 }
 
 /// The email being replied to, so it can be marked as answered.
@@ -842,7 +766,7 @@ struct SendResult {
 async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, app: AppHandle, state: State<'_, AppState>) -> CmdResult<SendResult> {
     match send_now(&state, draft.clone(), reply.clone()).await {
         Err(e) if is_offline(&e) => {
-            queue_op(&app, &state, &QueuedOp::Send { draft, reply })?;
+            queue_op(&app, &state, &QueuedOp::Send { draft: Box::new(draft), reply })?;
             Ok(SendResult {
                 saved_to: None,
                 warning: Some("No connection: the email will be sent as soon as the server can be reached.".into()),
@@ -1522,4 +1446,24 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while starting KanbanMail");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_view_reads_the_dialog() {
+        let json = r#"{"email":"a@example.com","display_name":"A","smtp_server":"smtp.example.com","smtp_port":465,
+            "theme":"dark","zoom":110,"compact_actions":false,"undo_seconds":15,"rules":[]}"#;
+        let view: SettingsView = serde_json::from_str(json).unwrap();
+        assert_eq!(view.smtp_port, 465);
+        assert_eq!(view.settings.theme, "dark");
+        assert_eq!(view.settings.zoom, 110);
+        assert!(!view.settings.compact_actions);
+        assert!(view.settings.ask_conversation, "missing fields keep their default");
+        let back = serde_json::to_value(&view).unwrap();
+        assert_eq!(back["email"], "a@example.com");
+        assert_eq!(back["undo_seconds"], 15);
+    }
 }
