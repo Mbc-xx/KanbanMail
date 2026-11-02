@@ -884,8 +884,8 @@ fn local_thread(message_id: Option<String>, references: Vec<String>, state: Stat
 /// Searches the local copy: sender, recipients, subject and the text of the
 /// emails downloaded so far. Instant and offline; newest first.
 #[tauri::command]
-fn search_local(text: String, state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
-    state.with_store(|st| st.search(&text, 200)).unwrap_or_default()
+fn search_local(query: imap::SearchQuery, state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
+    state.with_store(|st| st.search(&query, 200)).unwrap_or_default()
 }
 
 /// Sets the "Important only" rule for a sender (an address or `@domain`):
@@ -925,20 +925,21 @@ async fn known_senders(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     Ok(known?.into_iter().collect())
 }
 
-/// Searches sender, recipients and subject (and with `in_body` the text too).
+/// Searches the server: plain words in the sender, recipients and subject (and
+/// with `in_body` the text too), the other parts of the query in their field.
 /// `scope` "main" = Inbox, Sent, Archive and the given folders (fast);
 /// "rest" = every other folder except Trash, Junk and Drafts. Newest first.
 /// Uses its own connection so a slow text search does not block the board; if
 /// the server refuses one more connection, falls back to the main one.
 #[tauri::command]
 async fn search_emails(
-    text: String,
+    query: imap::SearchQuery,
     in_body: bool,
     folders: Vec<String>,
     scope: String,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<imap::ThreadEntry>> {
-    async fn run(s: &mut Session, text: &str, in_body: bool, extra: &[String], scope: &str) -> anyhow::Result<Vec<imap::ThreadEntry>> {
+    async fn run(s: &mut Session, query: &imap::SearchQuery, in_body: bool, extra: &[String], scope: &str) -> anyhow::Result<Vec<imap::ThreadEntry>> {
         let mut main = vec!["INBOX".to_string()];
         for kind in ["sent", "archive"] {
             if let Some(f) = imap::find_special_folder(s, kind).await? {
@@ -955,7 +956,7 @@ async fn search_emails(
         } else {
             main
         };
-        imap::search(s, text, in_body, &folders, 100).await
+        imap::search(s, query, in_body, &folders, 100).await
     }
 
     let (account, password) = {
@@ -964,14 +965,14 @@ async fn search_emails(
     };
     let found = match imap::connect(&account, &password).await {
         Ok(mut session) => {
-            let result = run(&mut session, &text, in_body, &folders, &scope).await;
+            let result = run(&mut session, &query, in_body, &folders, &scope).await;
             session.logout().await.ok();
             result.map_err(err)
         }
         Err(e) => {
             eprintln!("search connection refused, using the main one: {e:#}");
             let mut inner = state.inner.lock().await;
-            with_retry!(inner, |s, _caps| run(s, &text, in_body, &folders, &scope))
+            with_retry!(inner, |s, _caps| run(s, &query, in_body, &folders, &scope))
         }
     }?;
     state.with_store(|st| st.add_cards(&found));

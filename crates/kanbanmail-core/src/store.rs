@@ -5,7 +5,7 @@
 //! The server stays the reference: everything here is a cache that can be
 //! deleted at any time (it is rebuilt as folders are opened again).
 
-use crate::imap::ThreadEntry;
+use crate::imap::{SearchQuery, ThreadEntry};
 use crate::message::Card;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -436,24 +436,32 @@ impl Store {
 
     // ---------- search and conversations ----------
 
-    /// Emails whose sender, recipients, subject or text contain every word
-    /// (accents and case ignored, words may be the start of longer ones).
-    pub fn search(&self, text: &str, limit: u32) -> Result<Vec<ThreadEntry>> {
-        let words: Vec<String> = text
-            .split_whitespace()
-            .map(|w| w.chars().filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_')).collect::<String>())
-            .filter(|w| !w.is_empty())
-            .map(|w| format!("\"{}\"*", w.replace('"', "")))
-            .collect();
-        if words.is_empty() {
+    /// Emails matching the query: plain words in the sender, recipients, subject
+    /// or text, the other words in their field, within the days asked (accents and
+    /// case ignored, words may be the start of longer ones).
+    pub fn search(&self, q: &SearchQuery, limit: u32) -> Result<Vec<ThreadEntry>> {
+        // Full-text terms, `column : "word"*` for the words of one field.
+        let mut terms = Vec::new();
+        for (column, values) in [("", &q.words), ("sender : ", &q.from), ("recipients : ", &q.to), ("subject : ", &q.subject)] {
+            for word in values.iter().flat_map(|v| v.split_whitespace()) {
+                let word: String = word.chars().filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_')).collect();
+                if !word.is_empty() {
+                    terms.push(format!("{column}\"{word}\"*"));
+                }
+            }
+        }
+        let since = q.since.as_deref().and_then(day_start);
+        let before = q.before.as_deref().and_then(day_start);
+        if terms.is_empty() && since.is_none() && before.is_none() {
             return Ok(Vec::new());
         }
-        let query = words.join(" ");
-        let mut stmt = self.conn.prepare_cached(
-            "SELECT c.folder, c.card FROM search s JOIN cards c ON c.id = s.rowid
-             WHERE search MATCH ?1 ORDER BY c.date DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![query, limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let words = if terms.is_empty() { "?1 = ''" } else { "c.id IN (SELECT rowid FROM search WHERE search MATCH ?1)" };
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT c.folder, c.card FROM cards c WHERE {words} AND c.date >= ?2 AND c.date < ?3 ORDER BY c.date DESC LIMIT ?4"
+        ))?;
+        let rows = stmt.query_map(params![terms.join(" "), since.unwrap_or(i64::MIN), before.unwrap_or(i64::MAX), limit], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         Ok(rows
             .filter_map(|r| r.ok())
             .filter_map(|(folder, json)| serde_json::from_str(&json).ok().map(|card| ThreadEntry { folder, card }))
@@ -597,6 +605,18 @@ fn upsert_card(tx: &rusqlite::Transaction<'_>, folder: &str, uidvalidity: Option
     Ok(())
 }
 
+/// Seconds since 1970 at the start of a "YYYY-MM-DD" day (UTC).
+fn day_start(day: &str) -> Option<i64> {
+    let (y, m, d) = crate::imap::ymd(day)?;
+    // Days from the civil date (H. Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m as i64 + 9) % 12) + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146_097 + doe - 719_468) * 86_400)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,7 +694,7 @@ mod tests {
         let raw = "From: Anna <anna@example.com>\r\nSubject: Riunione\r\nMessage-ID: <r@x>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nCi vediamo lunedì per il preventivo.\r\n";
         s.put_raw("INBOX", 1, raw.as_bytes()).unwrap();
         fn hit(s: &Store, q: &str) -> Vec<u32> {
-            s.search(q, 10).unwrap().iter().map(|e| e.card.uid).collect()
+            s.search(&SearchQuery::words(q), 10).unwrap().iter().map(|e| e.card.uid).collect()
         }
         assert_eq!(hit(&s, "lunedi"), vec![1], "accents ignored");
         assert_eq!(hit(&s, "preven"), vec![1], "start of a word");
@@ -686,6 +706,20 @@ mod tests {
         s.save_cards("INBOX", Some(1), &[card(1, "Anna Bianchi", "Riunione", "r@x", &[], 10), card(2, "Luca", "Pranzo", "p@x", &[], 20)], false)
             .unwrap();
         assert_eq!(hit(&s, "preventivo"), vec![1]);
+    }
+
+    #[test]
+    fn search_by_field_and_days() {
+        let mut s = Store::in_memory().unwrap();
+        let day = 86_400;
+        s.save_cards("INBOX", Some(1), &[card(1, "Anna Bianchi", "Luca news", "a@x", &[], day), card(2, "Luca", "Anna news", "b@x", &[], 3 * day)], false)
+            .unwrap();
+        let hit = |q: SearchQuery| s.search(&q, 10).unwrap().iter().map(|e| e.card.uid).collect::<Vec<_>>();
+        assert_eq!(hit(SearchQuery { from: vec!["anna".into()], ..Default::default() }), vec![1]);
+        assert_eq!(hit(SearchQuery { subject: vec!["anna".into()], ..Default::default() }), vec![2]);
+        assert_eq!(hit(SearchQuery { since: Some("1970-01-03".into()), ..Default::default() }), vec![2]);
+        assert_eq!(hit(SearchQuery { words: vec!["news".into()], before: Some("1970-01-03".into()), ..Default::default() }), vec![1]);
+        assert_eq!(day_start("2026-11-02"), Some(1_793_577_600));
     }
 
     #[test]
@@ -722,6 +756,6 @@ mod tests {
         assert!(c.seen && c.flagged);
         s.remove("INBOX", &[1]).unwrap();
         assert!(s.cards("INBOX", 1).unwrap().is_empty());
-        assert!(s.search("plan", 10).unwrap().is_empty());
+        assert!(s.search(&SearchQuery::words("plan"), 10).unwrap().is_empty());
     }
 }

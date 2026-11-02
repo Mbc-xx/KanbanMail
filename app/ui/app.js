@@ -174,7 +174,7 @@ for (const b of document.querySelectorAll("#selection-bar [data-sel]")) {
 }
 
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && state.selection.size && $("reader").hidden && $("composer").hidden && $("settings").hidden) clearSelection();
+  if (ev.key === "Escape" && state.selection.size && $("reader").hidden && ($("composer").hidden || composerMinimized()) && $("settings").hidden) clearSelection();
 });
 
 // ---------- calendar invitations ----------
@@ -354,7 +354,7 @@ function setSyncStatus(text) {
   const waiting = state.queued ? `${state.queued} change${state.queued === 1 ? "" : "s"} waiting for the connection` : "";
   const full = [level === "busy" ? "Updating…" : syncText, waiting].filter(Boolean).join(" · ");
   $("sync").dataset.level = level;
-  $("sync").title = full;
+  $("sync").title = [state.email, full].filter(Boolean).join(" · ");
   $("sync-status").textContent = level === "off" ? full : waiting;
 }
 
@@ -388,7 +388,6 @@ async function start() {
     const status = await invoke("get_status");
     if (status.configured) {
       state.email = status.email;
-      $("account-email").textContent = status.email;
       const fromCache = showCachedBoard();
       await openBoard({ fromCache });
     } else {
@@ -427,7 +426,6 @@ $("login-form").addEventListener("submit", async (ev) => {
     });
     $("login-password").value = "";
     state.email = $("login-email").value.trim();
-    $("account-email").textContent = state.email;
     await openBoard();
   } catch (e) {
     showLoginError(String(e));
@@ -582,7 +580,6 @@ async function openBoard({ fromCache = false, retry = false } = {}) {
     state.columns = info.columns;
     state.defaultLimit = info.limit || 200;
     cacheSet("board", info.columns);
-    $("config-path").textContent = info.config_path;
     $("settings-config-path").textContent = info.config_path;
     try {
       const settings = await invoke("get_settings");
@@ -974,7 +971,7 @@ function renderCards(folder) {
       container.append(el("div", "empty muted", state.view.searchDone ? "No emails found" : "Searching…"));
       return;
     }
-    const filtered = all.length && (state.onlyUnread || state.onlyImportant || state.filterWords.length);
+    const filtered = all.length && (state.onlyUnread || state.onlyImportant || state.filter);
     container.append(el("div", "empty muted", filtered ? "No loaded email matches" : "No emails"));
     const text = $("search").value.trim();
     if (text) {
@@ -1248,12 +1245,66 @@ function fold(text) {
   return (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
-/// The search box filters the loaded cards as you type: every word must appear
-/// in the sender, address, subject or preview.
+/// What the search box asks for: plain words plus from:, to:, subject:, after:,
+/// before: and date: (a day 2026-10-05 or 5/10/2026, a month 2026-10, a year 2026;
+/// both ends included). Quotes keep words together: from:"Rachel Green".
+/// Days are sent as "YYYY-MM-DD", `before` being the first day left out.
+function parseQuery(text) {
+  const q = { words: [], from: [], to: [], subject: [], since: null, before: null };
+  for (const m of text.matchAll(/(\w+):(?:"([^"]*)"|(\S+))|"([^"]*)"|(\S+)/g)) {
+    const key = m[1]?.toLowerCase();
+    const value = (m[2] ?? m[3] ?? "").trim();
+    const days = ["after", "before", "date"].includes(key) && dayRange(value);
+    const word = (m[4] ?? m[5] ?? m[0]).trim();
+    if (["from", "to", "subject"].includes(key) && value) q[key].push(value);
+    else if (days) {
+      if (key !== "before") q.since = days[0];
+      if (key !== "after") q.before = days[1];
+    } else if (word) q.words.push(word);
+  }
+  return q;
+}
+
+/// A day, month or year as [first day, first day after], both "YYYY-MM-DD".
+function dayRange(text) {
+  let m;
+  let [y, mo, d] = [0, 0, 0];
+  if ((m = text.match(/^(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?$/))) [y, mo, d] = [+m[1], +(m[2] || 0), +(m[3] || 0)];
+  else if ((m = text.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4}|\d{2})$/))) [d, mo, y] = [+m[1], +m[2], +m[3] < 100 ? 2000 + +m[3] : +m[3]];
+  else if ((m = text.match(/^(\d{1,2})[/.](\d{4})$/))) [mo, y] = [+m[1], +m[2]];
+  else return null;
+  if (mo > 12 || d > 31) return null;
+  const start = new Date(y, (mo || 1) - 1, d || 1);
+  const end = d ? new Date(y, mo - 1, d + 1) : mo ? new Date(y, mo, 1) : new Date(y + 1, 0, 1);
+  const pad = (n) => String(n).padStart(2, "0");
+  return [start, end].map((t) => `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`);
+}
+
+/// The search box filters the loaded cards as you type (accents and case ignored).
+function boardFilter(text) {
+  const q = parseQuery(text);
+  if (!q.since && !q.before && ![q.words, q.from, q.to, q.subject].some((l) => l.length)) return null;
+  const f = (list) => list.map(fold);
+  const time = (day) => day && new Date(day + "T00:00").getTime() / 1000;
+  return { words: f(q.words), from: f(q.from), to: f(q.to), subject: f(q.subject), since: time(q.since), before: time(q.before) };
+}
+
 function matchesFilter(card) {
-  if (!state.filterWords.length || state.view?.search) return true;
-  const hay = fold([card.from, card.from_address, card.subject, card.preview].join(" "));
-  return state.filterWords.every((w) => hay.includes(w));
+  const q = state.filter;
+  if (!q || state.view?.search) return true;
+  const has = (text, words) => {
+    const t = fold(text);
+    return words.every((w) => t.includes(w));
+  };
+  const sender = card.from + " " + card.from_address;
+  return (
+    has([sender, card.subject, card.preview].join(" "), q.words) &&
+    has(sender, q.from) &&
+    has(card.to, q.to) &&
+    has(card.subject, q.subject) &&
+    (!q.since || card.date >= q.since) &&
+    (!q.before || card.date < q.before)
+  );
 }
 
 /// One email, or a whole conversation when `group` is given (shown through its newest email).
@@ -1873,7 +1924,7 @@ function setupFolderDrop(item, folder) {
 const SEARCH_KEY = "__search__";
 const ALL_KEY = "__all__";
 const MULTI_KEYS = [SEARCH_KEY, ALL_KEY]; // lists with emails from several folders
-state.filterWords = [];
+state.filter = null; // the search box as a filter of the loaded cards
 let searchSeq = 0; // ignores results of searches that were replaced by a newer one
 
 function folderLabel(folder) {
@@ -1915,7 +1966,8 @@ async function runSearch() {
   view.searchDone = false;
   const folders = state.columns.map((c) => c.folder);
   if (view.from && !folders.includes(view.from)) folders.push(view.from);
-  const args = { text: view.search, inBody: !!view.inBody, folders };
+  const query = parseQuery(view.search);
+  const args = { query, inBody: !!view.inBody, folders };
   // Results found on this Mac come first (instant, also offline); the server
   // results are merged in as they arrive and win for the same email.
   let entries = [];
@@ -1932,7 +1984,7 @@ async function runSearch() {
   };
   let local = [];
   try {
-    local = (await invoke("search_local", { text: view.search })).filter((e) => !["trash", "junk", "drafts"].includes(folderKind(e.folder)));
+    local = (await invoke("search_local", { query })).filter((e) => !["trash", "junk", "drafts"].includes(folderKind(e.folder)));
   } catch (_) {}
   if (!alive()) return;
   merge(local);
@@ -1972,7 +2024,7 @@ function startSearch(text) {
 }
 
 $("search").addEventListener("input", () => {
-  state.filterWords = fold($("search").value).split(/\s+/).filter(Boolean);
+  state.filter = boardFilter($("search").value);
   if (!state.view?.search) for (const c of visibleColumns()) renderCards(c.folder);
 });
 
@@ -1983,7 +2035,7 @@ $("search").addEventListener("keydown", (ev) => {
   } else if (ev.key === "Escape") {
     ev.stopPropagation();
     $("search").value = "";
-    state.filterWords = [];
+    state.filter = null;
     if (state.view?.search) showBoard();
     else for (const c of visibleColumns()) renderCards(c.folder);
     $("search").blur();
@@ -2791,7 +2843,7 @@ $("reader").addEventListener("click", (ev) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   if (!$("dialog").hidden) closeDialog(null);
-  else if (!$("composer").hidden) closeComposer();
+  else if (!$("composer").hidden && !composerMinimized()) closeComposer();
   else if (!$("settings").hidden) closeSettingsWithoutSaving();
   else if (!$("reader").hidden) closeReader();
 });
@@ -2897,6 +2949,11 @@ async function saveDraft() {
 }
 
 async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [] } = {}) {
+  if (!$("composer").hidden) {
+    // One email at a time: the one being written (maybe minimized) comes back.
+    minimizeComposer(false);
+    return toast("Finish or close the email you are writing first.", "info");
+  }
   compose.attachments = attachments;
   const fmt = local.get("composeFormat");
   compose.markdown = fmt === "markdown";
@@ -2904,6 +2961,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   setPreview(false);
   renderComposeAttachments();
   renderFormat();
+  compose.title = title;
   $("compose-title").textContent = title;
   setRecipients("compose-to", to);
   setRecipients("compose-cc", cc);
@@ -2920,7 +2978,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   $("compose-drop").hidden = true;
   compose.messageId = messageId;
   $("composer").hidden = false;
-  const bodyEl = compose.rich ? $("compose-rich") : $("compose-body");
+  const bodyEl = composeEditor();
   if (to && compose.rich) {
     bodyEl.focus();
   } else if (to) {
@@ -2945,7 +3003,23 @@ function hideComposer() {
   clearInterval(compose.timer);
   compose.timer = null;
   hideSuggestions();
+  minimizeComposer(false);
   $("composer").hidden = true;
+}
+
+/// The editor in use: rich (visual) or plain text.
+const composeEditor = () => (compose.rich ? $("compose-rich") : $("compose-body"));
+
+/// Minimized, the email being written becomes a bar at the bottom right: the board and
+/// other emails stay usable meanwhile, a click on the bar brings it back.
+const composerMinimized = () => $("composer").classList.contains("minimized");
+function minimizeComposer(on) {
+  $("composer").classList.toggle("minimized", on);
+  $("compose-minimize").querySelector("use").setAttribute("href", on ? "#i-expand" : "#i-minimize");
+  $("compose-minimize").title = on ? "Open the email again" : "Minimize: keep writing later, read other emails meanwhile";
+  $("compose-title").textContent = (on && $("compose-subject").value.trim()) || compose.title;
+  if (on) hideSuggestions();
+  else if (!$("composer").hidden) composeEditor().focus();
 }
 
 /// Close: unchanged emails just close; otherwise the text is kept in Drafts.
@@ -3174,7 +3248,7 @@ async function setFormat(fmt) {
   local.set("composeFormat", fmt);
   if (fmt !== "markdown") await setPreview(false);
   renderFormat();
-  (compose.rich ? $("compose-rich") : $("compose-body")).focus();
+  composeEditor().focus();
 }
 
 /// Plain text to editor HTML. The signature block becomes the rich signature
@@ -3377,6 +3451,10 @@ $("reader-reply").addEventListener("click", () => replyTo(false));
 $("reader-reply-all").addEventListener("click", () => replyTo(true));
 $("compose").addEventListener("click", () => openComposer({ body: signatureBlock() }));
 $("compose-close").addEventListener("click", () => closeComposer());
+$("compose-minimize").addEventListener("click", () => minimizeComposer(!composerMinimized()));
+$("compose-form").querySelector(".reader-head").addEventListener("click", (ev) => {
+  if (composerMinimized() && !ev.target.closest("button")) minimizeComposer(false);
+});
 $("compose-cancel").addEventListener("click", () => closeComposer());
 $("compose-discard").addEventListener("click", () => discardComposer());
 

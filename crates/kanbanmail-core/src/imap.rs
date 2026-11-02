@@ -727,31 +727,78 @@ pub async fn searchable_folders(session: &mut Session) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Searches emails whose sender, recipients or subject contain `text` (and, with
-/// `in_body`, the text of the email too, which is much slower without a server
-/// index). Newest first, at most `limit` per folder.
+/// What the search box asks for: words to find anywhere, plus words that must be
+/// in the sender, the recipients or the subject, and a range of days
+/// ("YYYY-MM-DD": `since` is the first day included, `before` the first left out).
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(default)]
+pub struct SearchQuery {
+    pub words: Vec<String>,
+    pub from: Vec<String>,
+    pub to: Vec<String>,
+    pub subject: Vec<String>,
+    pub since: Option<String>,
+    pub before: Option<String>,
+}
+
+impl SearchQuery {
+    /// Plain words only.
+    pub fn words(text: &str) -> Self {
+        SearchQuery { words: text.split_whitespace().map(String::from).collect(), ..Default::default() }
+    }
+}
+
+/// "2026-10-05" as (2026, 10, 5).
+pub(crate) fn ymd(day: &str) -> Option<(i64, u32, u32)> {
+    let mut parts = day.split('-');
+    let (y, m, d) = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+    ((1..=12).contains(&m) && (1..=31).contains(&d)).then_some((y, m, d))
+}
+
+/// "2026-10-05" as IMAP writes it: "5-Oct-2026".
+fn imap_date(day: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let (y, m, d) = ymd(day)?;
+    Some(format!("{d}-{}-{y}", MONTHS[m as usize - 1]))
+}
+
+/// The IMAP SEARCH criteria for a query (every part must match), None if empty.
+fn search_criteria(q: &SearchQuery, in_body: bool) -> Option<String> {
+    // A plain word may be in the sender, the recipients or the subject (or the text).
+    let mut keys: Vec<String> = q
+        .words
+        .iter()
+        .map(|w| {
+            let w = imap_quote(w);
+            let mut any = vec![format!("FROM {w}"), format!("TO {w}"), format!("CC {w}"), format!("SUBJECT {w}")];
+            if in_body {
+                any.push(format!("BODY {w}"));
+            }
+            format!("({})", or_chain(&any))
+        })
+        .collect();
+    keys.extend(q.from.iter().map(|v| format!("FROM {}", imap_quote(v))));
+    keys.extend(q.to.iter().map(|v| {
+        let v = imap_quote(v);
+        format!("(OR TO {v} CC {v})")
+    }));
+    keys.extend(q.subject.iter().map(|v| format!("SUBJECT {}", imap_quote(v))));
+    keys.extend(q.since.as_deref().and_then(imap_date).map(|d| format!("SINCE {d}")));
+    keys.extend(q.before.as_deref().and_then(imap_date).map(|d| format!("BEFORE {d}")));
+    (!keys.is_empty()).then(|| format!("CHARSET UTF-8 {}", keys.join(" ")))
+}
+
+/// Searches emails matching the query; plain words are looked for in the sender,
+/// recipients and subject (and, with `in_body`, the text of the email too, which
+/// is much slower without a server index). Newest first, at most `limit` per folder.
 pub async fn search(
     session: &mut Session,
-    text: &str,
+    query: &SearchQuery,
     in_body: bool,
     folders: &[String],
     limit: usize,
 ) -> Result<Vec<ThreadEntry>> {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    anyhow::ensure!(!words.is_empty(), "empty search");
-    // Every word must match somewhere (AND of ORs).
-    let per_word: Vec<String> = words
-        .iter()
-        .map(|w| {
-            let q = imap_quote(w);
-            let mut keys = vec![format!("FROM {q}"), format!("TO {q}"), format!("CC {q}"), format!("SUBJECT {q}")];
-            if in_body {
-                keys.push(format!("BODY {q}"));
-            }
-            format!("({})", or_chain(&keys))
-        })
-        .collect();
-    let criteria = format!("CHARSET UTF-8 {}", per_word.join(" "));
+    let criteria = search_criteria(query, in_body).context("empty search")?;
     let mut out = search_folders(session, folders, &criteria, None, limit).await?;
     out.sort_by_key(|a| std::cmp::Reverse(a.card.date));
     Ok(out)
@@ -940,5 +987,23 @@ mod tests {
         assert_eq!(imap_quote(r#"say "hi" \ bye"#), r#""say \"hi\" \\ bye""#);
         assert_eq!(or_chain(&["A".into(), "B".into(), "C".into()]), "OR A OR B C");
         assert_eq!(or_chain(&["A".into()]), "A");
+    }
+
+    #[test]
+    fn search_criteria_from_a_query() {
+        let q = SearchQuery {
+            words: vec!["plan".into()],
+            from: vec!["Rachel Green".into()],
+            to: vec!["tom".into()],
+            since: Some("2026-10-01".into()),
+            before: Some("2026-11-01".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            search_criteria(&q, false).unwrap(),
+            r#"CHARSET UTF-8 (OR FROM "plan" OR TO "plan" OR CC "plan" SUBJECT "plan") FROM "Rachel Green" (OR TO "tom" CC "tom") SINCE 1-Oct-2026 BEFORE 1-Nov-2026"#
+        );
+        assert!(search_criteria(&SearchQuery::default(), true).is_none());
+        assert_eq!(imap_date("2026-13-01"), None);
     }
 }

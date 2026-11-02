@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
             }
         }
         let started = std::time::Instant::now();
-        let found = imap::search(&mut session, &text, false, &folders, 100).await?;
+        let found = imap::search(&mut session, &imap::SearchQuery::words(&text), false, &folders, 100).await?;
         println!("\n\"{text}\" in {} folders: {} results in {:?}", folders.len(), found.len(), started.elapsed());
         for e in found.iter().take(5) {
             println!("  [{}] {} | {}", e.folder, e.card.from, e.card.subject);

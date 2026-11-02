@@ -12,6 +12,12 @@ Written in Rust with [Tauri](https://tauri.app).
 
 ![Writing an email: recipients as draggable chips](docs/screenshot-compose.png)
 
+![Search with operators: subject:re after:2026-10-01 across every folder](docs/screenshot-search.png)
+
+![Sidebar collapsed to an icon rail, with the important and unread counts](docs/screenshot-rail.png)
+
+![An email being written, minimized to a bar while you read another one](docs/screenshot-minimized.png)
+
 <sub>Screenshots taken with fictional demo data.</sub>
 
 ## Features
@@ -32,7 +38,12 @@ Written in Rust with [Tauri](https://tauri.app).
   (case- and accent-insensitive). Enter searches the server in sender,
   recipients and subject, in two steps: first Inbox, Sent, Archive, the board
   columns and the open folder, then every other folder (Trash, Junk and Drafts
-  excluded); every word must match. Results open in a list with a reading
+  excluded); every word must match. Besides plain words the box understands
+  `from:`, `to:` (To and Cc), `subject:`, `after:`, `before:` and `date:`
+  (a day as `2026-10-05` or `5/10/2026`, a month `2026-10` or a year `2026`;
+  both ends included), and quotes keep words together:
+  `from:"Rachel Green" after:2026-10-01 invoice`. They work in the as-you-type
+  filter, on this Mac and on the server. Results open in a list with a reading
   pane, showing the folder of each email; "Unread only" and "Important only"
   do not hide search results. "Also search in the text" adds the
   email body, which is much slower on servers without a full-text index.
@@ -168,6 +179,10 @@ Written in Rust with [Tauri](https://tauri.app).
   its address, click to select it (⌘-click for more), drag the selection
   between To, Cc and Bcc, and remove it with × or Backspace.
 - ⌘↩ (Ctrl+Enter) sends the email from any field of the composer.
+- Minimize the composer (the line button next to ×): it becomes a bar at the
+  bottom right while you read other emails or copy from them; click the bar to
+  keep writing. One email is written at a time: starting another brings the
+  minimized one back.
 - Undo send: after "Send" the email waits a few seconds (10 by default, set in
   Settings → Writing, or off) with an "Undo" button that brings it back to the
   composer. While it waits it is kept in Drafts, so quitting the app does not

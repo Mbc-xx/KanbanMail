@@ -38,6 +38,8 @@
     <symbol id="i-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/><path d="M12 14v7"/></symbol>
     <symbol id="i-reply" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7l-5 5 5 5"/><path d="M4 12h10a6 6 0 0 1 6 6v1"/></symbol>
     <symbol id="i-reply-all" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7l-5 5 5 5M7 7l-5 5 5 5"/><path d="M7 12h7a6 6 0 0 1 6 6v1"/></symbol>
+    <symbol id="i-minimize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 17h12"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.8-7.8"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
@@ -75,7 +77,7 @@
       <div class="spacer"></div>
       <div class="search-box">
         <svg class="icon"><use href="#i-search"/></svg>
-        <input id="search" type="search" placeholder="Search · Enter = all folders" autocomplete="off" spellcheck="false" aria-label="Search emails">
+        <input id="search" type="search" placeholder="Search · from: to: subject: after: before: date: · Enter = all folders" title="Words filter the lists as you type; Enter searches every folder.&#10;from:anna  to:tom  subject:invoice  from:&quot;Rachel Green&quot;&#10;after:2026-10-01  before:31/10/2026  date:2026-10 (a day, a month or a year; both ends included)" autocomplete="off" spellcheck="false" aria-label="Search emails">
       </div>
       <button id="refresh" class="icon-btn" title="Refresh all columns and reset their widths"><svg class="icon"><use href="#i-refresh"/></svg></button>
       <button id="open-settings" class="icon-btn" title="Settings"><svg class="icon"><use href="#i-settings"/></svg></button>
@@ -94,7 +96,6 @@
       </aside>
       <main id="board" class="board"></main>
     </div>
-    <footer class="footer muted"><span id="account-email"></span> · columns are configured in <code id="config-path"></code> (restart the app after editing).</footer>
   </section>
 
   <!-- Initial loading -->
@@ -196,6 +197,7 @@
     <form id="compose-form" class="reader composer">
       <header class="reader-head">
         <h2 id="compose-title">New email</h2>
+        <button type="button" id="compose-minimize" class="icon-btn" title="Minimize: keep writing later, read other emails meanwhile"><svg class="icon"><use href="#i-minimize"/></svg></button>
         <button type="button" id="compose-close" class="icon-btn" title="Close"><svg class="icon"><use href="#i-close"/></svg></button>
       </header>
       <div class="compose-fields">

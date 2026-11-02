@@ -207,6 +207,8 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 }
 .topbar > * { flex-shrink: 0; white-space: nowrap; }
 .topbar .sync { flex-shrink: 1; min-width: 0; }
+/* Lined up with the sidebar buttons, also when it is a rail of icons */
+#toggle-sidebar { width: 40px; margin-left: -10px; justify-content: center; }
 
 /* Connection light: green connected, yellow reading the server, red offline */
 .sync { display: flex; align-items: center; gap: 8px; cursor: default; }
@@ -215,7 +217,6 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 .sync[data-level="off"] .sync-light { background: #ef4444; }
 #sync-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .spacer { flex: 1; }
-.footer { padding: 6px 16px; font-size: 12px; border-top: 1px solid var(--border); }
 
 /* Board */
 .board {
@@ -377,6 +378,13 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 }
 .reader-head { display: flex; align-items: flex-start; gap: 12px; padding: 16px 16px 4px; }
 .reader-head h2 { margin: 0; flex: 1; font-size: 18px; }
+
+/* Minimized composer: a bar at the bottom right, the rest of the app stays usable */
+#composer.minimized { inset: auto 16px 0 auto; padding: 0; background: none; z-index: 25; }
+#composer.minimized .composer { width: 320px; height: auto; border-radius: 10px 10px 0 0; box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.3); }
+#composer.minimized .composer > :not(.reader-head) { display: none; }
+#composer.minimized .reader-head { padding: 8px 8px 8px 14px; align-items: center; cursor: pointer; }
+#composer.minimized .reader-head h2 { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The bar acting on the whole conversation looks different from the actions of one email. */
 .conv-bar {
   display: flex; align-items: center; gap: 6px;
@@ -863,7 +871,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .t-tools .icon { width: 15px; height: 15px; }
 .thread-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 4px 8px 2px; }
 
-.search-box { position: relative; display: flex; align-items: center; flex: 0 1 300px; min-width: 140px; }
+.search-box { position: relative; display: flex; align-items: center; flex: 0 1 560px; min-width: 160px; }
 .search-box .icon { position: absolute; left: 9px; color: var(--muted); pointer-events: none; }
 .search-box input {
   width: 100%;
