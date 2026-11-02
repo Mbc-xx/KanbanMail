@@ -3176,10 +3176,38 @@ $("rich-link-url").addEventListener("keydown", (ev) => {
     $("rich-link-add").click();
   }
 });
+// Pasted text keeps bold, lists and links but not its colors and fonts: text copied from a
+// dark window would otherwise arrive white on the white editor. The paste itself is left to
+// the system (it also converts RTF from Word, Pages or Notes); the nodes it adds are cleaned.
+function cleanPasted(root) {
+  if (root.nodeType !== 1) return;
+  for (const n of [root, ...root.querySelectorAll("*")]) {
+    if (/^(STYLE|SCRIPT|META|LINK|TITLE|IFRAME|OBJECT)$/.test(n.tagName)) { n.remove(); continue; }
+    for (const a of [...n.attributes]) {
+      if (/^on|^(color|bgcolor|face|class)$/i.test(a.name)) n.removeAttribute(a.name);
+    }
+    if (/^\s*javascript:/i.test(n.getAttribute("href") || "")) n.removeAttribute("href");
+    for (const p of ["color", "background", "background-color", "caret-color", "-webkit-text-fill-color", "font-family"]) n.style?.removeProperty(p);
+    if (!n.getAttribute("style")) n.removeAttribute("style");
+  }
+}
+
+function pasteClean(ev) {
+  const editor = ev.currentTarget;
+  const added = [];
+  const watch = new MutationObserver((records) => records.forEach((r) => added.push(...r.addedNodes)));
+  watch.observe(editor, { childList: true, subtree: true });
+  setTimeout(() => {
+    watch.takeRecords().forEach((r) => added.push(...r.addedNodes));
+    watch.disconnect();
+    added.filter((n) => editor.contains(n)).forEach(cleanPasted);
+  });
+}
+
 // Pasted images go into the email as embedded images.
 $("compose-rich").addEventListener("paste", async (ev) => {
   const files = [...(ev.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
-  if (!files.length) return;
+  if (!files.length) return pasteClean(ev);
   ev.preventDefault();
   for (const f of files) {
     const data = await readFile(f);
@@ -3852,6 +3880,7 @@ function restoreSelection() {
 sigEditor.addEventListener("keyup", rememberSelection);
 sigEditor.addEventListener("mouseup", rememberSelection);
 sigEditor.addEventListener("input", rememberSelection);
+sigEditor.addEventListener("paste", pasteClean);
 
 for (const b of document.querySelectorAll(".sig-toolbar [data-cmd]")) {
   b.addEventListener("mousedown", (ev) => ev.preventDefault()); // keep the selection in the editor
