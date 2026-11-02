@@ -224,7 +224,6 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   position: relative;
   flex: 1 1 240px;
   min-width: 160px;
-  max-width: 380px;
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -713,8 +712,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .nav-item.active .icon { color: var(--accent); }
 .nav-item .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item .badge { font-size: 11px; color: var(--accent); font-weight: 600; }
-.column.wide { max-width: none; flex: 1 1 auto; }
-.column.sized { max-width: none; }
+.column.wide { flex: 1 1 auto; }
 .col-resizer {
   position: absolute;
   top: 0;
@@ -762,7 +760,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 
 /* Folder view: compact list on the left, reading pane on the right */
 .folder-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
-.folder-split .column { flex: 0 0 var(--list-width, 460px); max-width: none; min-width: 280px; }
+.folder-split .column { flex: 0 0 var(--list-width, 460px); min-width: 280px; }
 .split-handle { flex: 0 0 8px; cursor: col-resize; position: relative; touch-action: none; }
 .split-handle::after { content: ""; position: absolute; top: 12px; bottom: 12px; left: 3px; width: 2px; border-radius: 1px; }
 .split-handle:hover::after, .split-handle.active::after { background: var(--accent); }
