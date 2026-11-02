@@ -205,9 +205,15 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; font-size: 16px; }
 .topbar > * { flex-shrink: 0; white-space: nowrap; }
-.topbar #sync-status { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.topbar .sync { flex-shrink: 1; min-width: 0; }
+
+/* Connection light: green connected, yellow reading the server, red offline */
+.sync { display: flex; align-items: center; gap: 8px; cursor: default; }
+.sync-light { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #22c55e; transition: background 0.3s; }
+.sync[data-level="busy"] .sync-light { background: #eab308; }
+.sync[data-level="off"] .sync-light { background: #ef4444; }
+#sync-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .spacer { flex: 1; }
 .footer { padding: 6px 16px; font-size: 12px; border-top: 1px solid var(--border); }
 
@@ -222,7 +228,7 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 }
 .column {
   position: relative;
-  flex: 1 1 240px;
+  flex: 1 1 0px;
   min-width: 160px;
   display: flex;
   flex-direction: column;
@@ -691,7 +697,22 @@ button:disabled { opacity: 0.6; cursor: default; }
   flex-direction: column;
   gap: 1px;
 }
-.sidebar.collapsed { display: none; }
+.compose-btn { justify-content: center; margin-bottom: 8px; }
+.filters { display: flex; gap: 6px; margin-bottom: 8px; }
+.filter-btn { flex: 1; justify-content: center; gap: 5px; padding: 5px 6px; background: transparent; color: var(--muted); }
+.filter-btn[aria-pressed="true"] { background: var(--drop); border-color: var(--accent); color: var(--accent); }
+.filter-count { font-size: 11px; font-weight: 600; }
+.filter-count:empty { display: none; }
+
+/* Collapsed: a rail of icons */
+.sidebar.collapsed { width: 52px; padding: 10px 6px; overflow-x: hidden; }
+.sidebar.collapsed .label { display: none; }
+.sidebar.collapsed .nav-title { height: 0; padding: 0; margin: 6px 4px; border-top: 1px solid var(--border); font-size: 0; }
+.sidebar.collapsed .filters { flex-direction: column; gap: 4px; }
+.sidebar.collapsed .filter-btn { flex-direction: column; gap: 1px; padding: 5px 0; }
+.sidebar.collapsed .compose-btn { padding: 6px 0; }
+.sidebar.collapsed .nav-item { position: relative; justify-content: center; padding: 6px 0 !important; }
+.sidebar.collapsed .nav-item .badge { position: absolute; top: 0; right: 0; font-size: 9px; }
 .nav-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 8px 4px; }
 .nav-item {
   display: flex;

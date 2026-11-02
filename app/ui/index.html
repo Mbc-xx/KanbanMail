@@ -70,24 +70,25 @@
   <!-- Board -->
   <section id="board-screen" class="screen" hidden>
     <header class="topbar">
-      <button id="toggle-sidebar" class="icon-btn" title="Show/hide folders (Ctrl/⌘+B)"><svg class="icon"><use href="#i-sidebar"/></svg></button>
-      <div class="brand">KanbanMail</div>
-      <div id="sync-status" class="muted"></div>
+      <button id="toggle-sidebar" class="icon-btn" title="Expand/collapse the sidebar (Ctrl/⌘+B)"><svg class="icon"><use href="#i-sidebar"/></svg></button>
+      <div id="sync" class="sync" data-level="busy"><span class="sync-light"></span><span id="sync-status" class="muted"></span></div>
       <div class="spacer"></div>
       <div class="search-box">
         <svg class="icon"><use href="#i-search"/></svg>
         <input id="search" type="search" placeholder="Search · Enter = all folders" autocomplete="off" spellcheck="false" aria-label="Search emails">
       </div>
-      <label class="toggle" title="Only emails from people you know; notifications and newsletters are hidden"><input id="only-important" type="checkbox"> Important only</label>
-      <label class="toggle"><input id="only-unread" type="checkbox"> Unread only</label>
-      <button id="compose" class="primary" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span>New email</span></button>
-      <button id="refresh" class="icon-btn" title="Refresh all columns"><svg class="icon"><use href="#i-refresh"/></svg></button>
+      <button id="refresh" class="icon-btn" title="Refresh all columns and reset their widths"><svg class="icon"><use href="#i-refresh"/></svg></button>
       <button id="open-settings" class="icon-btn" title="Settings"><svg class="icon"><use href="#i-settings"/></svg></button>
     </header>
     <div class="body-row">
       <aside id="sidebar" class="sidebar">
-        <button id="nav-board" class="nav-item active"><svg class="icon"><use href="#i-board"/></svg><span class="label">Board</span></button>
-        <button id="nav-all" class="nav-item"><svg class="icon"><use href="#i-allmail"/></svg><span class="label">All Mail</span></button>
+        <button id="compose" class="primary compose-btn" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span class="label">New email</span></button>
+        <div class="filters">
+          <button id="only-important" class="filter-btn" aria-pressed="false" title="Important only: emails from people you know; notifications and newsletters are hidden"><svg class="icon"><use href="#i-star"/></svg><span id="count-important" class="filter-count"></span></button>
+          <button id="only-unread" class="filter-btn" aria-pressed="false" title="Unread only"><svg class="icon"><use href="#i-envelope"/></svg><span id="count-unread" class="filter-count"></span></button>
+        </div>
+        <button id="nav-board" class="nav-item active" title="Board"><svg class="icon"><use href="#i-board"/></svg><span class="label">Board</span></button>
+        <button id="nav-all" class="nav-item" title="All Mail"><svg class="icon"><use href="#i-allmail"/></svg><span class="label">All Mail</span></button>
         <div class="nav-title muted">Folders</div>
         <nav id="folder-list"></nav>
       </aside>

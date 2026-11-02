@@ -70,7 +70,10 @@ Written in Rust with [Tauri](https://tauri.app).
 - Works without a connection: the board and the downloaded emails stay
   readable and searchable; moving, archiving, deleting, pinning, read/unread
   and sending are kept in a queue and done, in order, as soon as the server can
-  be reached again (the status line shows how many changes are waiting).
+  be reached again (next to the connection light, the top bar shows how many
+  changes are waiting).
+- Connection light in the top bar: green when connected, yellow while the
+  server is being read, red when offline; hover it for the details.
 - Instant start: the board, the folders and All Mail are shown right away from
   the copy on this Mac, while the connection to the server is made in the
   background; new emails and changes then appear without reloading the lists.
@@ -89,8 +92,10 @@ Written in Rust with [Tauri](https://tauri.app).
 - Attachments listed in the reader with their size; click one to save it to
   your Downloads folder (it is then shown in Finder). Cards with attachments
   show a paperclip.
-- Sidebar with every folder (Trash, Sent, Junk, subfolders…) and unread counts;
-  hide it with the sidebar button or Ctrl/⌘+B. Click a folder to open it as a
+- Sidebar with "New email", the "Important only" and "Unread only" filters (as
+  icons with their counts) and every folder (Trash, Sent, Junk, subfolders…)
+  with unread counts. Collapse it to a narrow rail of icons with the sidebar
+  button or Ctrl/⌘+B. Click a folder to open it as a
   compact list with a reading pane on the right (drag the divider to resize);
   drop a card on a sidebar folder to move it there. On the board, emails open
   in a popup.
@@ -139,8 +144,9 @@ Written in Rust with [Tauri](https://tauri.app).
   or the whole conversation, and every action shows how many emails it
   touches. Right-clicking a card of a multiple selection acts on all the
   selected emails.
-- Resizable columns: drag the right edge (minimum 160 px); double-click the edge
-  to return to automatic width.
+- Resizable columns: drag the right edge (minimum 160 px). Columns always fill
+  the window and keep their proportions when it is resized; double-click an
+  edge for the average width, or press Refresh to make them all equal again.
 - Unread emails stand out: a dot and the subject in the theme color, bold
   sender; unread count per column and an
   "Unread only" filter. The number of unread Inbox emails is shown as a badge
@@ -368,7 +374,9 @@ Multiple accounts, snoozing, keyboard shortcuts, printing.
 ## Icons
 
 The interface uses a small set of original line icons drawn as inline SVG
-(`app/ui/index.html`), so no icon font or external file is loaded.
+(`app/ui/index.html`), so no icon font or external file is loaded. The app icon
+is drawn in `app/icon.svg`; `npx tauri icon icon.svg` (in `app/`) makes every
+size from it.
 
 ## License
 

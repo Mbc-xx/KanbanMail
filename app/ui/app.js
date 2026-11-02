@@ -1,8 +1,21 @@
 // KanbanMail user interface. Talks to the Rust backend through `invoke`.
-const { invoke } = window.__TAURI__.core;
+const { invoke: tauriInvoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 const $ = (id) => document.getElementById(id);
+
+// Calls that read the server turn the connection light yellow while they run.
+const SERVER_READS = new Set(["open_board", "load_column", "list_folders", "load_all_mail", "search_emails", "flush_queue"]);
+let serverBusy = 0;
+function invoke(cmd, args) {
+  if (!SERVER_READS.has(cmd)) return tauriInvoke(cmd, args);
+  serverBusy++;
+  setSyncStatus();
+  return tauriInvoke(cmd, args).finally(() => {
+    serverBusy--;
+    setSyncStatus();
+  });
+}
 
 const state = {
   columns: [], // [{ name, folder }]
@@ -333,11 +346,16 @@ function el(tag, className, text) {
 }
 
 let syncText = "";
-/// The status line: connection state, plus the changes waiting to be sent.
+/// The connection light: green when connected, yellow while the server is being read,
+/// red when offline. The text shows only when something needs attention.
 function setSyncStatus(text) {
   if (text !== undefined) syncText = text;
-  const waiting = state.queued ? ` · ${state.queued} change${state.queued === 1 ? "" : "s"} waiting for the connection` : "";
-  $("sync-status").textContent = syncText + waiting;
+  const level = state.offline || /not connected/i.test(syncText) ? "off" : serverBusy || /updating/i.test(syncText) ? "busy" : "on";
+  const waiting = state.queued ? `${state.queued} change${state.queued === 1 ? "" : "s"} waiting for the connection` : "";
+  const full = [level === "busy" ? "Updating…" : syncText, waiting].filter(Boolean).join(" · ");
+  $("sync").dataset.level = level;
+  $("sync").title = full;
+  $("sync-status").textContent = level === "off" ? full : waiting;
 }
 
 /// The error means the server could not be reached (not that it refused).
@@ -491,7 +509,7 @@ function cacheClear() {
 function restoreBoardView() {
   $("sidebar").classList.toggle("collapsed", local.get("sidebar") === "hidden");
   state.onlyImportant = local.get("onlyImportant") === "1";
-  $("only-important").checked = state.onlyImportant;
+  $("only-important").setAttribute("aria-pressed", state.onlyImportant);
   state.view = null;
   renderColumns();
 }
@@ -713,27 +731,46 @@ function setupSplitHandle(split, handle) {
 
 // ---------- column width ----------
 
+// Board columns share the window by weight: dragging an edge changes the proportions,
+// resizing the window keeps them. Refresh goes back to equal widths.
 const COL_MIN = 160;
-const COL_MAX = 900;
+const WEIGHTS_KEY = "colweights";
 
-function applyColumnWidth(column, width) {
-  if (width) {
-    column.style.flex = `0 0 ${width}px`;
-    column.classList.add("sized");
-  } else {
-    column.style.flex = "";
-    column.classList.remove("sized");
-  }
+function savedWeights() {
+  try { return JSON.parse(local.get(WEIGHTS_KEY) || "{}"); } catch (_) { return {}; }
 }
 
-/// Handle on the right edge: drag to resize, double-click to go back to automatic width.
+function applyWeight(column, weight) {
+  column.style.flex = weight > 0 ? `${weight} 1 0px` : "";
+}
+
+function boardColumns() {
+  return [...$("board").querySelectorAll(":scope > .column")];
+}
+
+/// The proportions on screen, saved with an average of 1 (a new column gets 1).
+function saveWeights() {
+  const cols = boardColumns();
+  const widths = cols.map((c) => c.getBoundingClientRect().width);
+  const mean = widths.reduce((a, b) => a + b, 0) / widths.length;
+  const weights = {};
+  cols.forEach((c, i) => (weights[c.dataset.folder] = +(widths[i] / mean).toFixed(3)));
+  local.set(WEIGHTS_KEY, JSON.stringify(weights));
+}
+
+function resetColumnWidths() {
+  local.set(WEIGHTS_KEY, "");
+  if (!state.view) boardColumns().forEach((c) => applyWeight(c, 0));
+}
+
+/// Handle on the right edge: drag to resize, double-click to go back to the average width.
 function setupResizer(column) {
-  const key = "colwidth:" + column.dataset.folder;
-  const saved = parseInt(local.get(key), 10);
-  if (saved >= COL_MIN) applyColumnWidth(column, saved);
+  const folder = column.dataset.folder;
+  applyWeight(column, savedWeights()[folder]);
+  try { localStorage.removeItem("colwidth:" + folder); } catch (_) {} // fixed widths of older versions
 
   const handle = el("div", "col-resizer");
-  handle.title = "Drag to resize · double-click for automatic width";
+  handle.title = "Drag to resize · double-click for the average width";
   column.append(handle);
 
   let lastDown = 0;
@@ -742,21 +779,30 @@ function setupResizer(column) {
     // Double-click detected by hand: preventDefault can suppress "dblclick".
     if (ev.timeStamp - lastDown < 350) {
       lastDown = 0;
-      applyColumnWidth(column, 0);
-      try { localStorage.removeItem(key); } catch (_) {}
+      const weights = savedWeights();
+      delete weights[folder];
+      local.set(WEIGHTS_KEY, JSON.stringify(weights));
+      applyWeight(column, 0);
       return;
     }
     lastDown = ev.timeStamp;
-    const startW = column.getBoundingClientRect().width;
+    // This column follows the pointer; the others share the rest in their proportions.
+    const cols = boardColumns();
+    const i = cols.indexOf(column);
+    const widths = cols.map((c) => c.getBoundingClientRect().width);
+    const total = widths.reduce((a, b) => a + b, 0);
+    const others = total - widths[i];
+    if (!others) return;
     let moved = false;
     trackDrag(
       handle,
       ev,
       (dx) => {
         moved = true;
-        applyColumnWidth(column, Math.round(Math.min(COL_MAX, Math.max(COL_MIN, startW + dx))));
+        const w = Math.max(COL_MIN, Math.min(total - (cols.length - 1) * COL_MIN, widths[i] + dx));
+        cols.forEach((c, j) => applyWeight(c, j === i ? w : (widths[j] * (total - w)) / others));
       },
-      () => moved && local.set(key, String(Math.round(column.getBoundingClientRect().width))),
+      () => moved && saveWeights(),
     );
   });
 }
@@ -907,6 +953,7 @@ function renderCards(folder) {
   if (folder !== waiting) scheduleWaitingRender();
   const column = columnEl(folder);
   if (!column) return;
+  updateFilterCounts();
   const all = state.cards[folder] || [];
   state.waitingCtx = folder === waiting ? waitingContext(all) : null;
   const unread = all.filter((c) => !c.seen).length;
@@ -1564,9 +1611,10 @@ async function moveCard(from, uid, to) {
   scheduleFolderCounts();
 }
 
-$("only-important").addEventListener("change", (ev) => {
-  state.onlyImportant = ev.target.checked;
-  local.set("onlyImportant", ev.target.checked ? "1" : "");
+$("only-important").addEventListener("click", (ev) => {
+  state.onlyImportant = !state.onlyImportant;
+  ev.currentTarget.setAttribute("aria-pressed", state.onlyImportant);
+  local.set("onlyImportant", state.onlyImportant ? "1" : "");
   updateBadge();
   for (const c of visibleColumns()) renderCards(c.folder);
 });
@@ -1649,12 +1697,31 @@ async function setSenderRule(kind, card = readerCard?.card, scope = $("rule-scop
 $("rule-allow").addEventListener("click", () => setSenderRule("allow"));
 $("rule-block").addEventListener("click", () => setSenderRule("block"));
 
-$("only-unread").addEventListener("change", (ev) => {
-  state.onlyUnread = ev.target.checked;
+$("only-unread").addEventListener("click", (ev) => {
+  state.onlyUnread = !state.onlyUnread;
+  ev.currentTarget.setAttribute("aria-pressed", state.onlyUnread);
   for (const c of visibleColumns()) renderCards(c.folder);
 });
 
+/// The numbers on the filter buttons: unread emails, and the important ones among them,
+/// in the lists on screen.
+function updateFilterCounts() {
+  if (state.view?.search) return;
+  let unread = 0;
+  let important = 0;
+  for (const c of visibleColumns()) {
+    for (const card of state.cards[c.folder] || []) {
+      if (card.seen) continue;
+      unread++;
+      if (importance(card).important) important++;
+    }
+  }
+  $("count-unread").textContent = unread || "";
+  $("count-important").textContent = important || "";
+}
+
 $("refresh").addEventListener("click", () => {
+  resetColumnWidths();
   for (const c of visibleColumns()) loadColumn(c.folder);
   loadFolders();
 });
