@@ -212,6 +212,7 @@ async fn test_drafts(session: &mut imap::Session, account: &Account) -> Result<(
         markdown: false,
         attachments: vec![],
         html: None,
+        from: None,
     };
     let folder = imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
     draft.body = "second version".into();

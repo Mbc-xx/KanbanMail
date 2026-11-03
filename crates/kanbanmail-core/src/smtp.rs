@@ -36,6 +36,9 @@ pub struct Draft {
     /// saves and the final send, so older draft versions can be found and removed.
     #[serde(default)]
     pub message_id: Option<String>,
+    /// Address of the extra sender it leaves from; empty = the main account.
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 /// A file attached to an outgoing email, as sent by the UI.
@@ -455,6 +458,7 @@ mod tests {
             markdown: false,
             attachments: vec![],
             html: None,
+            from: None,
         };
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("From: \"Mario Rossi\" <me@example.com>"), "{raw}");
@@ -474,7 +478,7 @@ mod tests {
     #[test]
     fn draft_allows_missing_and_unfinished_recipients() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None };
+        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None, from: None };
         let raw = String::from_utf8(build_draft(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("To: a@example.com"), "{raw}");
         let empty = Draft { to: String::new(), ..draft };
@@ -485,7 +489,7 @@ mod tests {
     #[test]
     fn rejects_bad_address() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None };
+        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None, from: None };
         assert!(build(&acc, &draft, None).is_err());
     }
 
@@ -508,6 +512,7 @@ mod tests {
             markdown: false,
             attachments: vec![],
             html: None,
+            from: None,
         };
         let raw = String::from_utf8(build(&acc, &draft, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/alternative"), "{raw}");
@@ -538,6 +543,7 @@ mod tests {
             to: "a@example.com".into(), cc: String::new(), bcc: String::new(), subject: "Hi".into(),
             body: "Hello there".into(), in_reply_to: None, references: vec![], message_id: None, markdown: false,
             attachments: vec![], html: Some("<p>Hello <b>there</b></p><img src=\"data:image/png;base64,iVBORw0KGgo=\"><script>x</script>".into()),
+            from: None,
         };
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/related") && raw.contains("<b>there</b>") && !raw.contains("<script"), "{raw}");
@@ -569,6 +575,7 @@ mod tests {
             markdown: true,
             attachments: vec![OutgoingAttachment { name: "notes.txt".into(), mime: "text/plain".into(), data: "aGVsbG8=".into() }],
             html: None,
+            from: None,
         };
         let html = markdown_to_html(&draft.body);
         assert!(html.contains("<strong>team</strong>") && html.contains("<br") && html.contains("<li>one</li>"), "{html}");

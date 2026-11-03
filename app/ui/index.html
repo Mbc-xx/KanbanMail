@@ -238,6 +238,7 @@
       <div id="compose-drop" class="compose-drop" hidden><div><svg class="icon"><use href="#i-paperclip"/></svg><span>Drop files to attach them</span></div></div>
       <footer class="compose-foot">
         <span class="muted" id="compose-from"></span>
+        <select id="compose-sender" class="compose-sender" title="The mailbox this email is sent from" aria-label="From" hidden></select>
         <span class="muted small" id="compose-status"></span>
         <span class="spacer"></span>
         <button type="button" id="compose-discard" class="danger" title="Delete this draft"><svg class="icon"><use href="#i-trash"/></svg><span>Discard</span></button>
@@ -256,6 +257,7 @@
           <button type="button" role="tab" data-tab="account" class="tab active">Account</button>
           <button type="button" role="tab" data-tab="columns" class="tab">Columns</button>
           <button type="button" role="tab" data-tab="writing" class="tab">Writing</button>
+          <button type="button" role="tab" data-tab="signatures" class="tab">Signatures</button>
           <button type="button" role="tab" data-tab="reading" class="tab">Reading</button>
           <button type="button" role="tab" data-tab="important" class="tab">Important</button>
           <button type="button" role="tab" data-tab="folders" class="tab">Folders</button>
@@ -280,6 +282,12 @@
                 <option value="587">587 (STARTTLS)</option>
               </select>
             </label>
+          </div>
+          <div class="field">
+            <span class="field-label">Extra senders</span>
+            <p class="muted small">Other mailboxes you can send from, chosen with From when you write an email. Only for sending: their emails are not read here, and the copy of what you send goes to this account's Sent folder. Passwords are kept in the keychain.</p>
+            <div id="sender-prefs" class="sender-prefs"></div>
+            <div><button type="button" id="add-sender">+ Add sender</button></div>
           </div>
           <div class="field">
             <span class="field-label">Export and import</span>
@@ -399,8 +407,31 @@
         </section>
 
         <section class="tab-panel" data-panel="writing" role="tabpanel" hidden>
+          <label>Always Bcc (optional)
+            <input id="set-bcc" type="text" placeholder="archive@example.com, me@example.com" autocomplete="off">
+          </label>
+          <p class="muted small">Added in blind copy to every new email and reply. You can still change it in each email.</p>
+          <label>Undo send
+            <select id="set-undo-send">
+              <option value="0">Off (send at once)</option>
+              <option value="5">5 seconds</option>
+              <option value="10">10 seconds</option>
+              <option value="20">20 seconds</option>
+              <option value="30">30 seconds</option>
+            </select>
+          </label>
+          <p class="muted small">After "Send" the email waits this long with an "Undo" button, which brings it back to the composer. If the app is closed in the meantime, the email stays in Drafts.</p>
+          <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
+          <div class="contacts-status">
+            <span id="contacts-status" class="muted small"></span>
+            <button type="button" id="contacts-privacy" hidden>Open Privacy &amp; Security</button>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="signatures" role="tabpanel" hidden>
+          <p class="muted small">One signature for each mailbox, added to new emails and replies. Changing From in an email swaps it. An extra sender without a signature of its own uses the main one.</p>
           <div class="field">
-            <span class="field-label">Signature</span>
+            <div id="sig-mailboxes" class="sig-mailboxes" aria-label="Mailbox"></div>
             <div class="sig-toolbar">
               <button type="button" class="icon-btn" data-cmd="bold" title="Bold"><b>B</b></button>
               <button type="button" class="icon-btn" data-cmd="italic" title="Italic"><i>I</i></button>
@@ -420,25 +451,6 @@
             <p id="sig-remote-warning" class="sig-warning small" hidden>This signature has an image linked from the internet (usually because it was pasted from another email app). Many recipients will see a grey box instead of it. Remove it and add the image again with the image button: it will then travel inside your emails.</p>
             <input id="sig-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
             <p class="muted small">Write it here or paste one from another email client. Formatting and images are sent as HTML; plain-text clients get the text version.</p>
-          </div>
-          <label>Always Bcc (optional)
-            <input id="set-bcc" type="text" placeholder="archive@example.com, me@example.com" autocomplete="off">
-          </label>
-          <p class="muted small">Added in blind copy to every new email and reply. You can still change it in each email.</p>
-          <label>Undo send
-            <select id="set-undo-send">
-              <option value="0">Off (send at once)</option>
-              <option value="5">5 seconds</option>
-              <option value="10">10 seconds</option>
-              <option value="20">20 seconds</option>
-              <option value="30">30 seconds</option>
-            </select>
-          </label>
-          <p class="muted small">After "Send" the email waits this long with an "Undo" button, which brings it back to the composer. If the app is closed in the meantime, the email stays in Drafts.</p>
-          <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
-          <div class="contacts-status">
-            <span id="contacts-status" class="muted small"></span>
-            <button type="button" id="contacts-privacy" hidden>Open Privacy &amp; Security</button>
           </div>
         </section>
 

@@ -86,6 +86,55 @@ pub struct Settings {
     /// whether to act on the open email only or on the whole conversation.
     #[serde(default = "default_true")]
     pub ask_conversation: bool,
+    /// Other mailboxes used only to send from (chosen in the composer). Their
+    /// passwords are in the keychain, under their own address.
+    #[serde(default)]
+    pub senders: Vec<Sender>,
+}
+
+/// A send-only mailbox: its own address, name, SMTP server and signature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sender {
+    pub email: String,
+    #[serde(default)]
+    pub display_name: String,
+    pub smtp_server: String,
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
+    /// Signature text; empty = the main one.
+    #[serde(default)]
+    pub signature: String,
+    /// Rich version of the signature, like [`Settings::signature_html`].
+    #[serde(default)]
+    pub signature_html: String,
+}
+
+/// The rich signature to send, when it has formatting.
+fn rich_signature(text: &str, html: &str) -> Option<crate::smtp::HtmlSignature> {
+    (!html.trim().is_empty()).then(|| crate::smtp::HtmlSignature { text: text.to_string(), html: html.to_string() })
+}
+
+fn default_smtp_port() -> u16 {
+    465
+}
+
+impl Sender {
+    /// The sender as an account for building and sending emails (SMTP only).
+    pub fn account(&self) -> crate::account::Account {
+        let name = self.display_name.trim();
+        crate::account::Account {
+            server: self.smtp_server.clone(),
+            port: 993,
+            email: self.email.clone(),
+            display_name: (!name.is_empty()).then(|| name.to_string()),
+            smtp_server: Some(self.smtp_server.clone()),
+            smtp_port: self.smtp_port,
+        }
+    }
+
+    pub fn html_signature(&self) -> Option<crate::smtp::HtmlSignature> {
+        rich_signature(&self.signature, &self.signature_html)
+    }
 }
 
 fn default_cache_mb() -> u32 {
@@ -188,16 +237,41 @@ impl Default for Settings {
             prefetch: true,
             compact_actions: true,
             ask_conversation: true,
+            senders: Vec::new(),
         }
     }
 }
 
 impl Settings {
+    /// The extra sender with this address (`None` for the main account or an unknown one).
+    pub fn sender(&self, email: Option<&str>) -> Option<&Sender> {
+        let email = email?.trim();
+        self.senders.iter().find(|s| s.email.eq_ignore_ascii_case(email))
+    }
+
+    /// Senders cleaned for saving: trimmed, with an address and a server, without
+    /// duplicates or the main account itself.
+    pub fn normalize_senders(senders: Vec<Sender>, main_email: &str) -> Vec<Sender> {
+        let mut out: Vec<Sender> = Vec::new();
+        for s in senders {
+            let s = Sender {
+                email: s.email.trim().to_string(),
+                display_name: s.display_name.trim().to_string(),
+                smtp_server: s.smtp_server.trim().to_string(),
+                smtp_port: s.smtp_port,
+                signature: s.signature.trim_end().to_string(),
+                signature_html: crate::message::sanitize_signature(&s.signature_html),
+            };
+            let dup = s.email.eq_ignore_ascii_case(main_email) || out.iter().any(|o| o.email.eq_ignore_ascii_case(&s.email));
+            if s.email.contains('@') && !s.smtp_server.is_empty() && !dup {
+                out.push(s);
+            }
+        }
+        out
+    }
+
     pub fn html_signature(&self) -> Option<crate::smtp::HtmlSignature> {
-        (!self.signature_html.trim().is_empty()).then(|| crate::smtp::HtmlSignature {
-            text: self.signature.clone(),
-            html: self.signature_html.clone(),
-        })
+        rich_signature(&self.signature, &self.signature_html)
     }
 
     pub fn load() -> Result<Settings> {
@@ -214,5 +288,40 @@ impl Settings {
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("settings.toml"), toml::to_string_pretty(self)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sender(email: &str, server: &str) -> Sender {
+        Sender { email: email.into(), display_name: " Desk ".into(), smtp_server: server.into(), smtp_port: 587, signature: String::new(), signature_html: String::new() }
+    }
+
+    #[test]
+    fn senders_are_cleaned_and_found() {
+        let senders = Settings::normalize_senders(
+            vec![
+                sender(" desk@example.org ", " smtp.example.org "),
+                sender("DESK@example.org", "smtp.example.org"),
+                sender("me@example.com", "smtp.example.com"),
+                sender("no-server@example.org", ""),
+                sender("not-an-address", "smtp.example.org"),
+            ],
+            "Me@Example.com",
+        );
+        assert_eq!(senders.len(), 1);
+        let settings = Settings { senders, ..Settings::default() };
+        let found = settings.sender(Some("Desk@Example.org")).unwrap();
+        assert_eq!(found.email, "desk@example.org");
+        let account = found.account();
+        assert_eq!((account.smtp_host(), account.smtp_port), ("smtp.example.org", 587));
+        assert_eq!(account.display_name.as_deref(), Some("Desk"));
+        assert!(settings.sender(Some("me@example.com")).is_none());
+        assert!(settings.sender(None).is_none());
+        // Saved and read back with the other settings.
+        let text = toml::to_string_pretty(&settings).unwrap();
+        assert_eq!(toml::from_str::<Settings>(&text).unwrap().senders.len(), 1);
     }
 }

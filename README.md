@@ -12,6 +12,10 @@ Written in Rust with [Tauri](https://tauri.app).
 
 ![Writing an email: recipients as draggable chips](docs/screenshot-compose.png)
 
+![Sending from an extra mailbox, chosen with From](docs/screenshot-sender.png)
+
+![One rich signature for each mailbox](docs/screenshot-signatures.png)
+
 ![Search with operators: subject:re after:2026-10-01 across every folder](docs/screenshot-search.png)
 
 ![Sidebar collapsed to an icon rail, with the important and unread counts](docs/screenshot-rail.png)
@@ -204,12 +208,20 @@ Written in Rust with [Tauri](https://tauri.app).
 - Cc and Bcc fields; an optional "Always Bcc" address list is added to every
   new email and reply. Bcc recipients receive the email without being visible
   to the others, and stay recorded in your copy in the Sent folder.
-- Signature added to new emails and replies, with a rich editor in the
-  settings (bold, italic, underline, links, images, or paste one from another
+- Signatures added to new emails and replies, one per mailbox, with a rich
+  editor in Settings → Signatures (bold, italic, underline, links, images, or paste one from another
   email client; the HTML source can be edited too). When the signature has
   formatting, the email is sent as plain text + HTML, with signature images
   embedded as inline attachments. Editing the signature text inside an email
   sends that email as plain text only.
+- Extra senders: other mailboxes you only send from (Settings → Account), each
+  with its own address, name, SMTP server and signature (Settings →
+  Signatures; without one, the main signature is used). "Test" checks the
+  login. Their passwords go to the keychain under their own
+  address. When you write an email, From picks the mailbox and swaps the
+  signature; a reply to an email sent to one of them starts from it. Their
+  emails are not read here, and the copy of what you send from them is saved
+  to this account's Sent folder.
 - Drafts: while writing, the email is saved to the Drafts folder every 15
   seconds (only when it changed). Closing the composer keeps the draft;
   "Discard" deletes it; sending removes it. Click a card in Drafts to keep
@@ -252,11 +264,11 @@ npx tauri build
 
 From the settings button on the board, grouped in tabs:
 
-- **Account**: sender name, SMTP server and port, export and import of the
-  settings, the copy on this Mac (space it may use, background download,
+- **Account**: sender name, SMTP server and port, extra send-only mailboxes,
+  export and import of the settings, the copy on this Mac (space it may use, background download,
   clearing it), board columns file, disconnecting the account.
-- **Writing**: signature editor, "Always Bcc", undo send delay, address book
-  suggestions.
+- **Writing**: "Always Bcc", undo send delay, address book suggestions.
+- **Signatures**: one rich signature for each mailbox.
 - **Columns**: the board columns and the waiting column.
 - **Reading**: undo time, the question "only this email or the whole
   conversation", notifications, seconds before an opened email is marked as

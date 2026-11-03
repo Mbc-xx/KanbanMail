@@ -9,7 +9,7 @@ use kanbanmail_core::{
     imap::{self, FolderCache, ServerCaps, Session},
     message::{Card, MessageView},
     secret,
-    settings::Settings,
+    settings::{Sender, Settings},
     smtp::{self, Draft},
     store::Store,
 };
@@ -697,6 +697,9 @@ struct SettingsView {
     display_name: String,
     smtp_server: String,
     smtp_port: u16,
+    /// New passwords typed for extra senders, by address (saved to the keychain).
+    #[serde(default, skip_serializing)]
+    sender_passwords: HashMap<String, String>,
     #[serde(flatten)]
     settings: Settings,
 }
@@ -710,6 +713,7 @@ async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
         display_name: acc.display_name.clone().unwrap_or_default(),
         smtp_server: acc.smtp_host().to_string(),
         smtp_port: acc.smtp_port,
+        sender_passwords: HashMap::new(),
         settings: Settings::load().map_err(err)?,
     })
 }
@@ -725,7 +729,20 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
     acc.smtp_port = settings.smtp_port;
     acc.save().map_err(err)?;
     let s = settings.settings;
+    // Extra senders: new passwords go to the keychain, removed senders lose theirs.
+    let senders = Settings::normalize_senders(s.senders, &acc.email);
+    for (email, password) in &settings.sender_passwords {
+        if !password.is_empty() && senders.iter().any(|x| x.email.eq_ignore_ascii_case(email.trim())) {
+            secret::set_password(email.trim(), password).map_err(err)?;
+        }
+    }
+    for old in Settings::load().map(|o| o.senders).unwrap_or_default() {
+        if !senders.iter().any(|x| x.email.eq_ignore_ascii_case(&old.email)) {
+            secret::delete_password(&old.email).ok();
+        }
+    }
     Settings {
+        senders,
         mark_read_after_seconds: s.mark_read_after_seconds.max(-1),
         signature: s.signature.trim_end().to_string(),
         default_bcc: s.default_bcc.trim().to_string(),
@@ -779,20 +796,43 @@ async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, app: AppHandle, sta
 /// Longest wait for the mail server to accept an email (attachments on a slow line).
 const SEND_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Who an email leaves from, with its rich signature: the main account, or the
+/// extra sender picked in the composer (the main signature when it has none).
+fn outgoing<'a>(main: &Account, settings: &'a Settings, from: Option<&str>) -> (Account, Option<&'a Sender>, Option<smtp::HtmlSignature>) {
+    match settings.sender(from) {
+        Some(s) if !s.signature.trim().is_empty() => (s.account(), Some(s), s.html_signature()),
+        Some(s) => (s.account(), Some(s), settings.html_signature()),
+        None => (main.clone(), None, settings.html_signature()),
+    }
+}
+
 async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) -> CmdResult<SendResult> {
-    let (account, password) = {
+    let (main, main_password) = {
         let inner = state.inner.lock().await;
         (
             inner.account.clone().ok_or("no account configured")?,
             inner.password.clone().unwrap_or_default(),
         )
     };
-    // A fixed Message-ID, so the sent email and its copy in Sent are the same email.
+    let settings = Settings::load().map_err(err)?;
+    let (account, sender, signature) = outgoing(&main, &settings, draft.from.as_deref());
+    if let Some(from) = draft.from.as_deref().map(str::trim).filter(|f| sender.is_none() && !f.is_empty() && !f.eq_ignore_ascii_case(&main.email)) {
+        return Err(format!("{from} is no longer among the senders in Settings"));
+    }
+    let password = match sender {
+        Some(s) => secret::get_password(&s.email)
+            .map_err(err)?
+            .ok_or_else(|| format!("no password saved for {}: add it in Settings → Account", s.email))?,
+        None => main_password,
+    };
+    // A fixed Message-ID, so the sent email and its copy in Sent are the same
+    // email. It is on the sender's domain: drafts got one on the main account's.
     let mut draft = draft;
-    if draft.message_id.as_deref().is_none_or(str::is_empty) {
+    let draft_id = draft.message_id.clone().filter(|id| !id.is_empty());
+    let domain = account.email.rsplit('@').next().unwrap_or_default().to_lowercase();
+    if !draft_id.as_deref().is_some_and(|id| id.to_lowercase().ends_with(&format!("@{domain}>"))) {
         draft.message_id = Some(smtp::new_message_id(&account.email));
     }
-    let signature = Settings::load().map_err(err)?.html_signature();
     let message = smtp::build(&account, &draft, signature.as_ref()).map_err(err)?;
     tokio::time::timeout(SEND_TIMEOUT, smtp::send(&account, &password, &message))
         .await
@@ -812,7 +852,7 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
     if let Some(r) = reply {
         let _ = with_retry!(inner, |s, _caps| imap::set_answered(s, &r.folder, r.uid));
     }
-    if let Some(id) = draft.message_id.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(id) = draft_id.as_deref() {
         if let Err(e) = with_retry!(inner, |s, caps| imap::delete_draft(s, caps, id)) {
             eprintln!("could not remove the draft after sending: {e}");
         }
@@ -821,6 +861,29 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
         Ok(folder) => SendResult { saved_to: Some(folder), warning: None },
         Err(e) => SendResult { saved_to: None, warning: Some(format!("Email sent, but the copy was not saved: {e}")) },
     })
+}
+
+/// Logs in to an extra sender's SMTP server without sending anything. An empty
+/// password means the one saved in the keychain, for a sender already saved
+/// (never another account's password sent to a server just typed).
+#[tauri::command]
+async fn test_sender(sender: Sender, password: String) -> CmdResult<()> {
+    let password = if password.is_empty() {
+        let settings = Settings::load().map_err(err)?;
+        let known = settings.sender(Some(&sender.email)).filter(|x| x.smtp_server == sender.smtp_server.trim());
+        match known {
+            Some(x) => secret::get_password(&x.email).map_err(err)?,
+            None => None,
+        }
+        .ok_or("type the password first")?
+    } else {
+        password
+    };
+    let account = Settings::normalize_senders(vec![sender], "")
+        .pop()
+        .ok_or("fill in the address and the SMTP server first")?
+        .account();
+    smtp::test_login(&account, &password).await.map_err(err)
 }
 
 /// A fresh Message-ID for a new email, used for its drafts and the final send.
@@ -837,8 +900,9 @@ async fn new_message_id(state: State<'_, AppState>) -> CmdResult<String> {
 async fn save_draft(draft: Draft, state: State<'_, AppState>) -> CmdResult<String> {
     let id = draft.message_id.clone().filter(|s| !s.is_empty()).ok_or("draft without Message-ID")?;
     let mut inner = state.inner.lock().await;
-    let account = inner.account.clone().ok_or("no account configured")?;
-    let signature = Settings::load().map_err(err)?.html_signature();
+    let main = inner.account.clone().ok_or("no account configured")?;
+    let settings = Settings::load().map_err(err)?;
+    let (account, _, signature) = outgoing(&main, &settings, draft.from.as_deref());
     let raw = smtp::build_draft(&account, &draft, signature.as_ref()).map_err(err)?.formatted();
     with_retry!(inner, |s, caps| imap::save_draft(s, caps, &raw, &id))
 }
@@ -1408,6 +1472,7 @@ fn main() {
             set_seen,
             get_settings,
             save_settings,
+            test_sender,
             send_mail,
             list_folders,
             file_card,

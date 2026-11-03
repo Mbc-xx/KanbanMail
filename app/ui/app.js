@@ -27,6 +27,8 @@ const state = {
   markReadAfter: 3, // seconds; -1 = never
   signature: "",
   signatureHtml: "",
+  senders: [], // extra mailboxes used only to send from
+  displayName: "", // sender name of the main account
   defaultBcc: "", // addresses added in Bcc of every new email and reply
   loadRemoteImages: false, // load remote images in every email without asking
   onlyUnread: false,
@@ -551,6 +553,8 @@ function applySettingsState(settings) {
   state.markReadAfter = settings.mark_read_after_seconds;
   state.signature = settings.signature;
   state.signatureHtml = settings.signature_html;
+  state.senders = settings.senders || [];
+  state.displayName = settings.display_name || "";
   state.defaultBcc = settings.default_bcc;
   state.loadRemoteImages = settings.load_remote_images;
   state.allow = settings.important_allow;
@@ -2899,6 +2903,7 @@ const compose = {
   attachments: [], // [{ name, mime, size, data (base64) }]
   markdown: false,
   previewing: false,
+  from: "", // extra sender's address; "" = the main account
 };
 
 const MAX_ATTACH_BYTES = 25 * 1024 * 1024; // most mail servers refuse larger emails
@@ -2906,7 +2911,7 @@ const MAX_ATTACH_BYTES = 25 * 1024 * 1024; // most mail servers refuse larger em
 function composeSnapshot() {
   return RCPT_FIELDS.map(recipientValue)
     .concat(["compose-subject", "compose-body"].map((id) => $(id).value))
-    .concat(compose.rich ? $("compose-rich").innerHTML : compose.markdown ? "md" : "plain", compose.attachments.map((a) => a.name + ":" + a.size).join("|"))
+    .concat(compose.rich ? $("compose-rich").innerHTML : compose.markdown ? "md" : "plain", compose.attachments.map((a) => a.name + ":" + a.size).join("|"), compose.from)
     .join("\u0000");
 }
 
@@ -2921,6 +2926,7 @@ function composeDraft() {
     in_reply_to: compose.context?.in_reply_to ?? null,
     references: compose.context?.references ?? [],
     message_id: compose.messageId,
+    from: compose.from || null,
     markdown: !compose.rich && compose.markdown,
     attachments: compose.attachments.map(({ name, mime, data }) => ({ name, mime, data })),
   };
@@ -2953,13 +2959,14 @@ async function saveDraft() {
   return compose.saving;
 }
 
-async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [] } = {}) {
+async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [], from = "" } = {}) {
   if (!$("composer").hidden) {
     // One email at a time: the one being written (maybe minimized) comes back.
     minimizeComposer(false);
     return toast("Finish or close the email you are writing first.", "info");
   }
   compose.attachments = attachments;
+  compose.from = senderNamed(from)?.email || "";
   const fmt = local.get("composeFormat");
   compose.markdown = fmt === "markdown";
   compose.rich = fmt === "rich";
@@ -2974,7 +2981,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   $("compose-subject").value = subject;
   $("compose-body").value = body;
   if (compose.rich) $("compose-rich").innerHTML = textToRichHtml(body);
-  $("compose-from").textContent = "From: " + state.email;
+  renderComposeSender();
   setComposeStatus("");
   compose.reply = reply;
   compose.context = context;
@@ -3079,6 +3086,7 @@ async function openDraft(folder, card) {
       body: msg.text || "",
       context: msg.in_reply_to ? { in_reply_to: msg.in_reply_to, references: msg.references.filter((r) => r !== msg.in_reply_to) } : null,
       messageId: msg.message_id,
+      from: msg.reply_address,
       fromDraft: true,
       title: "Draft",
     });
@@ -3256,14 +3264,16 @@ async function setFormat(fmt) {
   composeEditor().focus();
 }
 
+const textToHtml = (t) => escapeHtml(t).replace(/\n/g, "<br>");
+
 /// Plain text to editor HTML. The signature block becomes the rich signature
-/// when there is one.
+/// when there is one, in a block found again when the sender changes.
 function textToRichHtml(text) {
-  const conv = (t) => escapeHtml(t).replace(/\n/g, "<br>");
-  const marker = state.signature ? "-- \n" + state.signature : null;
+  const sig = signatureFor(compose.from);
+  const marker = sig ? "-- \n" + sig : null;
   const pos = marker ? text.indexOf(marker) : -1;
-  if (pos < 0 || !state.signatureHtml) return conv(text);
-  return conv(text.slice(0, pos)) + `<div>-- <br>${state.signatureHtml}</div>` + conv(text.slice(pos + marker.length));
+  if (pos < 0) return textToHtml(text);
+  return textToHtml(text.slice(0, pos)) + `<div data-signature>-- <br>${signatureHtml(compose.from)}</div>` + textToHtml(text.slice(pos + marker.length));
 }
 
 /// The plain-text version of the visual editor.
@@ -3396,9 +3406,11 @@ async function forward() {
     msg.cc ? `Cc: ${msg.cc}` : null,
   ].filter(Boolean);
   const subject = /^(fwd?|i|inoltra):/i.test(msg.subject.trim()) ? msg.subject : "Fwd: " + msg.subject;
+  const from = senderAmong(msg.all_recipients);
   await openComposer({
     subject,
-    body: signatureBlock() + "\n\n" + header.join("\n") + "\n\n" + (msg.text || ""),
+    from,
+    body: signatureBlock(from) + "\n\n" + header.join("\n") + "\n\n" + (msg.text || ""),
     title: "Forward",
   });
   $("compose-to").focus();
@@ -3411,9 +3423,53 @@ async function forward() {
 }
 $("reader-forward").addEventListener("click", forward);
 
+// ---------- extra senders ----------
+
+/// The extra sender with this address, if any.
+function senderNamed(email) {
+  const key = (email || "").trim().toLowerCase();
+  return key ? state.senders.find((s) => s.email.toLowerCase() === key) : undefined;
+}
+/// The extra sender an email was addressed to (to reply from it), or "".
+const senderAmong = (addresses = []) => state.senders.find((s) => addresses.some((a) => a.toLowerCase() === s.email.toLowerCase()))?.email.toLowerCase() || "";
+/// The signature text of a sender: its own, or the main one.
+const signatureFor = (from) => senderNamed(from)?.signature || state.signature;
+/// The signature as editor HTML: the main one may be rich.
+function signatureHtml(from) {
+  const own = senderNamed(from);
+  if (own?.signature) return own.signature_html || textToHtml(own.signature);
+  return state.signatureHtml || textToHtml(state.signature);
+}
+
+/// "From": plain text with only the main account, a menu with extra senders.
+function renderComposeSender() {
+  const select = $("compose-sender");
+  select.hidden = !state.senders.length;
+  $("compose-from").textContent = state.senders.length ? "From" : "From: " + state.email;
+  if (!state.senders.length) return;
+  const label = (name, email) => (name ? `${name} <${email}>` : email);
+  select.replaceChildren(new Option(label(state.displayName, state.email), ""), ...state.senders.map((s) => new Option(label(s.display_name, s.email), s.email)));
+  select.value = compose.from;
+}
+
+/// Changing the sender swaps the signature in the text, if it is still there.
+$("compose-sender").addEventListener("change", (ev) => {
+  const [before, after] = [signatureFor(compose.from), signatureFor(ev.target.value)];
+  compose.from = ev.target.value;
+  if (compose.rich) {
+    const block = $("compose-rich").querySelector("[data-signature]");
+    if (block && after) block.innerHTML = "-- <br>" + signatureHtml(compose.from);
+    else block?.remove();
+    return;
+  }
+  const body = $("compose-body");
+  if (before) body.value = body.value.replace("-- \n" + before, () => (after ? "-- \n" + after : ""));
+});
+
 /// Signature in the standard format: "-- " on a line of its own, then the text.
-function signatureBlock() {
-  return state.signature ? `\n\n-- \n${state.signature}` : "";
+function signatureBlock(from = "") {
+  const sig = signatureFor(from);
+  return sig ? `\n\n-- \n${sig}` : "";
 }
 
 function quote(msg) {
@@ -3428,9 +3484,10 @@ function replyTo(all) {
   if (!msg) return;
   const me = state.email.toLowerCase();
   const to = msg.reply_address;
+  const from = senderAmong(msg.all_recipients);
   let cc = "";
   if (all) {
-    const seen = new Set([me, to.toLowerCase()]);
+    const seen = new Set([me, from, to.toLowerCase()]);
     cc = msg.all_recipients
       .filter((a) => {
         const k = a.toLowerCase();
@@ -3445,7 +3502,8 @@ function replyTo(all) {
     to,
     cc,
     subject,
-    body: signatureBlock() + quote(msg),
+    body: signatureBlock(from) + quote(msg),
+    from,
     reply: { folder: readerCard.folder, uid: readerCard.card.uid },
     context: { in_reply_to: msg.message_id, references: msg.references },
     title: all ? "Reply all" : "Reply",
@@ -3574,6 +3632,7 @@ function showSettingsTab(name) {
     t.setAttribute("aria-selected", t.dataset.tab === name ? "true" : "false");
   }
   for (const p of document.querySelectorAll(".tab-panel")) p.hidden = p.dataset.panel !== name;
+  if (name === "signatures") renderSignatureOwners(); // addresses typed in Account
 }
 for (const t of document.querySelectorAll(".tabs .tab")) t.addEventListener("click", () => showSettingsTab(t.dataset.tab));
 
@@ -3588,7 +3647,7 @@ async function openSettings() {
     $("set-name").value = s.display_name;
     $("set-smtp").value = s.smtp_server;
     $("set-port").value = String(s.smtp_port);
-    loadSignatureEditor(s.signature, s.signature_html);
+    mainSignature = { signature: s.signature, signature_html: s.signature_html };
     $("set-contacts").checked = s.use_system_contacts;
     wasUsingContacts = s.use_system_contacts;
     showContactsStatus();
@@ -3611,6 +3670,10 @@ async function openSettings() {
     $("set-undo").value = String(s.undo_seconds ?? 8);
     $("set-undo-send").value = String(s.undo_send_seconds ?? 10);
     rulesDraft = (s.rules || []).map((r) => ({ ...r }));
+    // A sender is only saved with its password, so the saved ones have one in the keychain.
+    sendersDraft = (s.senders || []).map((x) => ({ ...x, password: "", saved: true }));
+    renderSenderPrefs();
+    editSignatureOf(mainSignature, false);
     columnsDraft = state.columns.map((c) => ({ name: c.name, folder: c.folder }));
     columnsChanged = false;
     renderFolderNames();
@@ -3645,7 +3708,12 @@ $("settings-cancel").addEventListener("click", closeSettingsWithoutSaving);
 $("settings-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const seconds = $("set-never").checked ? -1 : Math.max(0, parseInt($("set-seconds").value, 10) || 0);
-  const sig = readSignatureEditor();
+  editSignatureOf(null); // keeps the signature being edited
+  const noPassword = sendersDraft.find((x) => x.email.trim() && !x.password && !x.saved);
+  if (noPassword) {
+    showSettingsTab("account");
+    return toast(`Type the password of ${noPassword.email.trim()}.`);
+  }
   try {
     await invoke("save_settings", {
       settings: {
@@ -3654,8 +3722,8 @@ $("settings-form").addEventListener("submit", async (ev) => {
         smtp_server: $("set-smtp").value,
         smtp_port: parseInt($("set-port").value, 10),
         mark_read_after_seconds: seconds,
-        signature: sig.text,
-        signature_html: sig.html,
+        signature: mainSignature.signature,
+        signature_html: mainSignature.signature_html,
         default_bcc: $("set-bcc").value,
         use_system_contacts: $("set-contacts").checked,
         load_remote_images: $("set-remote").checked,
@@ -3665,6 +3733,8 @@ $("settings-form").addEventListener("submit", async (ev) => {
         group_threads: $("set-group").checked,
         folders: prefsDraft,
         rules: rulesDraft.filter((r) => r.contains.trim() && r.folder.trim()),
+        senders: sendersDraft.map(senderOf),
+        sender_passwords: Object.fromEntries(sendersDraft.filter((x) => x.password).map((x) => [x.email.trim(), x.password])),
         notify: $("set-notify").value,
         undo_seconds: parseInt($("set-undo").value, 10),
         undo_send_seconds: parseInt($("set-undo-send").value, 10),
@@ -3694,8 +3764,8 @@ $("settings-form").addEventListener("submit", async (ev) => {
     if ($("set-contacts").checked) loadContacts(!wasUsingContacts);
     else state.contacts = [];
     state.markReadAfter = seconds;
-    state.signature = sig.text;
-    state.signatureHtml = sig.html;
+    state.signature = mainSignature.signature;
+    state.signatureHtml = mainSignature.signature_html;
     state.defaultBcc = $("set-bcc").value.trim();
     state.undoSendSeconds = parseInt($("set-undo-send").value, 10);
     state.loadRemoteImages = $("set-remote").checked;
@@ -3847,6 +3917,66 @@ $("add-column").addEventListener("click", () => {
   $("column-prefs").lastElementChild?.querySelector("input")?.focus();
 });
 
+let sendersDraft = []; // extra senders being edited, with a typed password and whether one is saved
+
+/// A sender as saved in the settings (without the password fields).
+const senderOf = ({ email, display_name, smtp_server, smtp_port, signature, signature_html }) => ({ email, display_name, smtp_server, smtp_port, signature, signature_html });
+
+function renderSenderPrefs() {
+  const box = $("sender-prefs");
+  box.replaceChildren();
+  sendersDraft.forEach((s, i) => {
+    const field = (tag, key, placeholder, type) => {
+      const f = el(tag);
+      if (type) f.type = type;
+      f.placeholder = placeholder;
+      f.value = s[key];
+      f.addEventListener("input", () => (s[key] = f.value));
+      return f;
+    };
+    const port = document.createElement("select");
+    port.append(...[...$("set-port").options].map((o) => new Option(o.text, o.value)));
+    port.value = String(s.smtp_port);
+    port.addEventListener("change", () => (s.smtp_port = parseInt(port.value, 10)));
+    const password = field("input", "password", s.saved ? "Password saved in the keychain (type to change)" : "Password", "password");
+    password.classList.add("wide");
+    const signature = el("button", "", "Signature…");
+    signature.type = "button";
+    signature.title = "Edit the signature of this mailbox";
+    signature.addEventListener("click", () => {
+      showSettingsTab("signatures");
+      editSignatureOf(s);
+    });
+    const status = el("span", "muted");
+    const test = el("button", "", "Test");
+    test.type = "button";
+    test.addEventListener("click", async () => {
+      status.textContent = "Logging in…";
+      try {
+        await invoke("test_sender", { sender: senderOf(s), password: s.password });
+        status.textContent = "✓ The login works";
+      } catch (e) {
+        status.textContent = String(e);
+      }
+    });
+    const actions = el("div", "sender-actions");
+    actions.append(status, signature, test, removeButton(() => {
+      sendersDraft.splice(i, 1);
+      renderSenderPrefs();
+      if (signatureOwner === s) editSignatureOf(mainSignature, false);
+    }));
+    const row = el("div", "sender-pref");
+    row.append(field("input", "email", "Address, e.g. desk@example.org", "email"), field("input", "display_name", "Sender name (optional)", "text"), field("input", "smtp_server", "SMTP server", "text"), port, password, actions);
+    box.append(row);
+  });
+}
+
+$("add-sender").addEventListener("click", () => {
+  sendersDraft.push({ email: "", display_name: "", smtp_server: $("set-smtp").value.trim(), smtp_port: parseInt($("set-port").value, 10), signature: "", signature_html: "", password: "", saved: false });
+  renderSenderPrefs();
+  $("sender-prefs").lastElementChild.querySelector("input").focus();
+});
+
 function renderRulePrefs() {
   const box = $("rule-prefs");
   box.replaceChildren();
@@ -3978,6 +4108,38 @@ function loadSignatureEditor(text, html) {
   $("sig-link-row").hidden = true;
   sigEditor.innerHTML = html || escapeHtml(text || "").replace(/\n/g, "<br>");
   checkSignatureImages();
+}
+
+// One editor for the signatures of all mailboxes: the main account and each
+// extra sender (objects with `signature` and `signature_html`).
+let mainSignature = { signature: "", signature_html: "" };
+let signatureOwner = null; // whose signature is in the editor
+
+/// Keeps the editor's signature in its owner, then shows `owner`'s (null = just keep).
+/// `keep` false drops the editor content (the owner is gone or the dialog reopens).
+function editSignatureOf(owner, keep = true) {
+  if (keep && signatureOwner) {
+    const { text, html } = readSignatureEditor();
+    Object.assign(signatureOwner, { signature: text, signature_html: html });
+  }
+  if (!owner) return;
+  signatureOwner = owner;
+  loadSignatureEditor(owner.signature, owner.signature_html);
+  renderSignatureOwners();
+}
+
+function renderSignatureOwners() {
+  const box = $("sig-mailboxes");
+  box.replaceChildren();
+  for (const owner of [mainSignature, ...sendersDraft]) {
+    const email = owner === mainSignature ? state.email : owner.email.trim() || "New sender";
+    const b = el("button", "", email);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(owner === signatureOwner));
+    if (owner !== mainSignature && !owner.signature) b.title = "No signature of its own: the main one is used";
+    b.addEventListener("click", () => editSignatureOf(owner));
+    box.append(b);
+  }
 }
 
 /// Warns about images linked from the internet: recipients' apps often block them.

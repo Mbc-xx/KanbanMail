@@ -666,13 +666,13 @@ button:disabled { opacity: 0.6; cursor: default; }
 }
 .settings-head { padding: 18px 20px 0; border-bottom: 1px solid var(--border); }
 .settings-head h2 { margin: 0 0 12px; }
-.tabs { display: flex; flex-wrap: wrap; gap: 2px 4px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; }
 .tab {
   border: none;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
-  padding: 6px 12px 8px;
+  padding: 6px 9px 8px;
   color: var(--muted);
 }
 .tab:hover { color: var(--text); border-color: transparent; border-bottom-color: var(--border); }
@@ -693,6 +693,8 @@ button:disabled { opacity: 0.6; cursor: default; }
 .settings-card > .settings-buttons { padding: 12px 20px; border-top: 1px solid var(--border); }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-weight: 600; }
+.sig-mailboxes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.sig-mailboxes button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .sig-toolbar { display: flex; gap: 2px; align-items: center; }
 .sig-toolbar .spacer { flex: 1; }
 .sig-toolbar button { min-width: 30px; justify-content: center; border-color: transparent; background: transparent; }
@@ -924,9 +926,17 @@ body.resizing { cursor: col-resize; user-select: none; }
 .rule-prefs { display: flex; flex-direction: column; gap: 6px; }
 .rule-pref { display: grid; grid-template-columns: 110px 1fr auto 1fr auto; gap: 6px; align-items: center; }
 .rule-pref span { font-size: 12px; color: var(--muted); }
-.rule-pref input, .rule-pref select, .column-pref input {
+.rule-pref input, .rule-pref select, .column-pref input, .sender-pref input, .sender-pref select, .sender-pref textarea {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; min-width: 0;
 }
+/* Extra senders: one small card per mailbox. */
+.sender-prefs { display: flex; flex-direction: column; gap: 8px; }
+.sender-pref { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.sender-pref .wide { grid-column: 1 / -1; }
+.sender-pref .sender-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+.sender-pref .sender-actions .muted { flex: 1; font-size: 12px; }
+.sender-pref textarea { resize: vertical; min-height: 44px; }
+.compose-sender { max-width: 380px; font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
 .pref-remove { border: none; background: transparent; color: var(--muted); padding: 3px; }
 .pref-remove:hover { color: var(--error); }
 .folder-pref {
