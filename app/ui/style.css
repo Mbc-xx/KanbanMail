@@ -542,6 +542,30 @@ button:disabled { opacity: 0.6; cursor: default; }
 .cards.rows .card.child { padding-left: 48px; }
 .cards.rows.threads .row-preview { padding-left: 70px; }
 .thread-loading { padding: 6px 12px 6px 48px; font-size: 12px; }
+/* An open conversation reads as one flat block: the emails share a tinted background,
+   thin separators instead of their own edges, and hang from a line under the chevron. */
+.cards.rows { --thread-bg: color-mix(in srgb, var(--accent) 8%, var(--card)); --thread-line: color-mix(in srgb, var(--accent) 55%, transparent); }
+.cards.rows .card.thread-open { background: var(--thread-bg); border-bottom-color: transparent; border-radius: 6px 6px 0 0; }
+.cards.rows .card.child, .cards.rows .thread-loading {
+  position: relative;
+  margin-top: -4px;
+  background: var(--thread-bg);
+  border: 1px solid color-mix(in srgb, var(--border) 50%, var(--card-edge) 50%);
+  border-top-color: color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom-color: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+.cards.rows .child::before, .cards.rows .thread-loading::before { content: ""; position: absolute; left: 20px; top: 0; bottom: 0; width: 2px; background: var(--thread-line); }
+.cards.rows .child::after, .cards.rows .thread-loading::after { content: ""; position: absolute; left: 20px; top: calc(50% - 1px); width: 16px; height: 2px; background: var(--thread-line); }
+/* The first email opens the line with a ┌ curve, the last closes it with └. */
+.cards.rows .thread-start::before, .cards.rows .thread-end::before { width: 10px; background: none; border: 0 solid var(--thread-line); border-left-width: 2px; }
+.cards.rows .thread-start::before { top: calc(50% - 1px); border-top-width: 2px; border-top-left-radius: 8px; }
+.cards.rows .thread-end::before { bottom: calc(50% - 1px); border-bottom-width: 2px; border-bottom-left-radius: 8px; }
+.cards.rows .thread-start.thread-end::before { display: none; }
+.cards.rows .thread-start::after, .cards.rows .thread-end::after { left: 30px; width: 6px; }
+.cards.rows .thread-start.thread-end::after { left: 20px; width: 16px; }
+.cards.rows .card.thread-end, .cards.rows .thread-loading.thread-end { border-bottom-color: color-mix(in srgb, var(--border) 50%, var(--card-edge) 50%); border-radius: 0 0 6px 6px; }
 .cards.rows .card.child .row-subject { color: var(--muted); }
 .thread-count.unread-count { background: var(--accent); color: #fff; border-color: var(--accent); }
 

@@ -115,8 +115,9 @@ Written in Rust with [Tauri](https://tauri.app).
   folder lists show one card per conversation, with its latest email, the
   people involved and how many emails it has (in folder lists: how many are
   unread). In folder lists, › opens a conversation to show each of its emails
-  below it, also those in other folders such as Sent or Archive (tagged with
-  their folder); click one to read it, ⌄ closes it. Replies show › even when
+  below it as one tinted block, bracketed by a line, also those in other
+  folders such as Sent or Archive (tagged with their folder); click one to
+  read it, ⌄ closes it. Replies show › even when
   the rest of their conversation is in other folders. Archive, delete, pin and drag act
   on the whole conversation.
 - "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,

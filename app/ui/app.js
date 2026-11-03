@@ -998,12 +998,17 @@ function renderCards(folder) {
   if (state.groupThreads) {
     for (const g of groupByThread(list, folder)) {
       const thread = g.members.length > 1 ? g : null;
-      container.append(renderCard(g.rep.folder, g.rep.card, thread));
+      const rep = renderCard(g.rep.folder, g.rep.card, thread);
+      container.append(rep);
       // An expanded conversation in a folder list shows each of its emails below,
-      // including those in other folders (Sent, Archive…).
+      // including those in other folders (Sent, Archive…), as one block.
       if (state.view && state.expanded.has(threadKey(g))) {
-        for (const m of threadChildren(g, folder)) {
-          container.append(m.loading ? el("div", "thread-loading muted", "Looking for the rest of the conversation…") : renderCard(m.folder, m.card, null, { child: true }));
+        const kids = threadChildren(g, folder).map((m) => (m.loading ? el("div", "thread-loading muted", "Looking for the rest of the conversation…") : renderCard(m.folder, m.card, null, { child: true })));
+        if (kids.length) {
+          rep.classList.add("thread-open");
+          kids[0].classList.add("thread-start");
+          kids.at(-1).classList.add("thread-end");
+          container.append(...kids);
         }
       }
     }
