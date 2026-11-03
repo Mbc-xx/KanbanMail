@@ -586,7 +586,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 
 .composer { position: relative; width: min(760px, 100%); }
 .compose-fields { display: flex; flex-direction: column; gap: 6px; padding: 4px 16px 10px; }
-.compose-fields label, .compose-fields .field-row { display: grid; grid-template-columns: 70px 1fr; align-items: center; color: var(--muted); }
+.compose-fields label, .compose-fields .field-row { display: grid; grid-template-columns: 70px minmax(0, 1fr); align-items: center; color: var(--muted); }
 /* Recipients as chips: click to select, double-click to see the address, drag between To / Cc / Bcc. */
 .rcpt {
   display: flex;
@@ -594,6 +594,8 @@ button:disabled { opacity: 0.6; cursor: default; }
   align-items: center;
   gap: 4px;
   min-height: 34px;
+  max-height: 104px; /* about four rows of chips, then it scrolls */
+  overflow-y: auto;
   padding: 2px 4px;
   border: 1px solid var(--border);
   border-radius: 6px;

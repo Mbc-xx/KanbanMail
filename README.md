@@ -182,7 +182,10 @@ Written in Rust with [Tauri](https://tauri.app).
 - The compose area is always light, like the reader.
 - Recipients appear as chips with the person's name: double-click one to see
   its address, click to select it (⌘-click for more), drag the selection
-  between To, Cc and Bcc, and remove it with × or Backspace.
+  between To, Cc and Bcc, and remove it with × or Backspace. Pasting a list
+  (one per line, from a spreadsheet, an Outlook "Rossi, Mario <m@x.it>;" list
+  or any text) turns every address found around an @ into a chip, with the
+  name written next to it; a long list scrolls inside its field.
 - ⌘↩ (Ctrl+Enter) sends the email from any field of the composer.
 - Minimize the composer (the line button next to ×): it becomes a bar at the
   bottom right while you read other emails or copy from them; click the bar to

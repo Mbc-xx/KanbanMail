@@ -4408,8 +4408,37 @@ function validAddress(email) {
   return /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(email);
 }
 
-/// "Name <a@b.c>, d@e.f; \"Doe, John\" <j@x.y>" -> [{ name, email }]
+const EMAIL_IN_TEXT = /[^\s<>()[\]{},;:"'|@]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+
+/// The addresses found in any text (pasted lists, signatures, "Name <a@b.c>",
+/// "Rossi, Mario <m@x.it>", "a@b.c (Anna)"...), each with the name written
+/// next to it. Text without "@" is split at commas and semicolons instead.
 function parseAddresses(text) {
+  const found = [...(text || "").matchAll(EMAIL_IN_TEXT)];
+  if (!found.length) return splitAddresses(text);
+  let from = 0;
+  return found.map((m, i) => {
+    const end = m.index + m[0].length;
+    const next = found[i + 1]?.index ?? text.length;
+    // The name is on the same line before the address: the whole segment when
+    // the address is in <...> (names may contain commas), else after the last separator.
+    let name = text.slice(from, m.index).split(/[\r\n]/).pop();
+    if (text[m.index - 1] !== "<") name = name.split(/[,;|]/).pop();
+    name = name.replace(/mailto:?\s*$/i, "").replace(/^[\s>,;:|-]+|[\s<(,;:|-]+$/g, "").replace(/^(["'])(.*)\1$/, "$2").replace(/\s+/g, " ").trim();
+    from = end;
+    // ...or in brackets right after it: "a@b.c (Anna)".
+    const after = text.slice(end, next).match(/^\s*>?\s*\(([^()@]{1,80})\)/);
+    if (!name && after) {
+      name = after[1].trim();
+      from = end + after[0].length;
+    }
+    // Not a name: too long, another address, or a phone number nearby.
+    return { name: name.length > 80 || name.includes("@") || /\d.*\d.*\d/.test(name) ? "" : name, email: m[0] };
+  });
+}
+
+/// "Name <a@b.c>, d@e.f; \"Doe, John\" <j@x.y>" -> [{ name, email }]
+function splitAddresses(text) {
   const parts = [];
   let cur = "";
   let quoted = false;
@@ -4551,6 +4580,16 @@ for (const id of RCPT_FIELDS) {
   input.addEventListener("input", () => {
     clearChipSelection();
     if (/[,;]/.test(input.value)) commitRecipients(id);
+  });
+  // A pasted list becomes chips at once (a text field would turn its line breaks into spaces).
+  input.addEventListener("paste", (ev) => {
+    const text = ev.clipboardData?.getData("text/plain") || "";
+    if (!text.includes("@")) return;
+    ev.preventDefault();
+    const typed = input.value;
+    input.value = "";
+    hideSuggestions();
+    addRecipients(id, parseAddresses(typed + "\n" + text));
   });
   input.addEventListener("blur", () => setTimeout(() => {
     if (document.activeElement !== input) commitRecipients(id, true);
