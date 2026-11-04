@@ -968,6 +968,11 @@ function renderCards(folder) {
     (c) => searching || ((!state.onlyUnread || !c.seen) && (!state.onlyImportant || importance(c).important) && matchesFilter(c)),
   );
   const container = column.querySelector(".cards");
+  // Emptying the list sends it back to the top in WebKit: redrawing keeps the place,
+  // except when a filter changed and this is a different list.
+  const shown = JSON.stringify([state.onlyUnread, state.onlyImportant, $("search").value]);
+  const scrollTop = container.dataset.shown === shown ? container.scrollTop : 0;
+  container.dataset.shown = shown;
   container.replaceChildren();
   container.classList.toggle("threads", !!state.groupThreads);
   if (!list.length) {
@@ -1021,6 +1026,7 @@ function renderCards(folder) {
   }
   const more = loadMore();
   if (more) container.append(more);
+  container.scrollTop = scrollTop;
 }
 
 // ---------- waiting for an answer ----------
