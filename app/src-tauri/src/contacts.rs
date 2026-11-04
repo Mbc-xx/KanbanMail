@@ -30,9 +30,19 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
     use std::ptr::NonNull;
 
     unsafe {
-        // No status check up front: on ad-hoc signed builds macOS can report "denied"
-        // while reading works. Try to read, and look at the status only if it fails.
         let store = CNContactStore::new();
+        // The first time, ask explicitly: this shows the macOS dialog and adds the app to
+        // Privacy & Security. No other status check up front: on ad-hoc signed builds macOS
+        // can report "denied" while reading works, so try to read and look at it only on failure.
+        if CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts) == CNAuthorizationStatus::NotDetermined {
+            let (answered, answer) = std::sync::mpsc::channel();
+            let done = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
+                let _ = answered.send(());
+            });
+            store.requestAccessForEntityType_completionHandler(CNEntityType::Contacts, &done);
+            drop(done);
+            let _ = answer.recv();
+        }
         let keys: [&ProtocolObject<dyn CNKeyDescriptor>; 4] = [
             ProtocolObject::from_ref(CNContactGivenNameKey),
             ProtocolObject::from_ref(CNContactFamilyNameKey),
