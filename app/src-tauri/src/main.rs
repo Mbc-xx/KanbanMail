@@ -4,7 +4,7 @@
 mod contacts;
 
 use kanbanmail_core::{
-    account::Account,
+    account::{self, Account},
     board::{board_path, Board},
     imap::{self, FolderCache, ServerCaps, Session},
     message::{Card, MessageView},
@@ -88,6 +88,21 @@ impl AppState {
                 eprintln!("local copy: {e:#}");
                 None
             }
+        }
+    }
+
+    /// Stops everything working on the account in use, before moving to another:
+    /// watchers, the replay of waiting changes, the connection, the local copy.
+    async fn stop_account(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        let _replay = self.replaying.lock().await;
+        let mut inner = self.inner.lock().await;
+        if let Some(mut s) = inner.session.take() {
+            tokio::time::timeout(Duration::from_secs(3), s.logout()).await.ok();
+        }
+        *inner = Inner::default();
+        if let Ok(mut guard) = self.store.lock() {
+            *guard = None;
         }
     }
 
@@ -195,11 +210,25 @@ async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
 }
 
 /// Tries to log in; on success saves server and email to file and the password to the keychain.
+/// With `add` the mailbox becomes a new account, next to the existing ones.
 #[tauri::command]
-async fn login(server: String, email: String, password: String, state: State<'_, AppState>) -> CmdResult<()> {
+async fn login(server: String, email: String, password: String, add: bool, state: State<'_, AppState>) -> CmdResult<()> {
     let account = Account::new(server.trim().to_string(), email.trim().to_string());
+    let same = |a: &Account| a.email.eq_ignore_ascii_case(&account.email);
+    if add && account::list().map_err(err)?.iter().any(same) {
+        return Err(format!("{} is already connected", account.email));
+    }
+    if !add && account::is_extra() && !Account::load().map_err(err)?.is_some_and(|a| same(&a)) {
+        return Err("To use another address, add it as a new account".into());
+    }
     let mut session = imap::connect(&account, &password).await.map_err(err)?;
     let caps = imap::server_caps(&mut session).await.map_err(err)?;
+    if add {
+        let shared = Settings::load().map_err(err)?;
+        state.stop_account().await;
+        account::begin_new(&account.email).map_err(err)?;
+        Settings::default().with_shared_from(&shared).save().map_err(err)?;
+    }
     account.save().map_err(err)?;
     secret::set_password(&account.email, &password).map_err(err)?;
     state.open_store(&account.email);
@@ -208,24 +237,43 @@ async fn login(server: String, email: String, password: String, state: State<'_,
     Ok(())
 }
 
-/// Forgets account and password (to switch account or fix the details).
+/// The addresses of every account, the first one first.
+#[tauri::command]
+fn list_accounts() -> CmdResult<Vec<String>> {
+    Ok(account::list().map_err(err)?.into_iter().map(|a| a.email).collect())
+}
+
+/// Moves to another account. The interface then starts again from `get_status`.
+#[tauri::command]
+async fn switch_account(email: String, state: State<'_, AppState>) -> CmdResult<()> {
+    state.stop_account().await;
+    account::switch_to(&email).map_err(err)
+}
+
+/// Does an account, or an extra sender of one, still sign in with this address?
+fn password_in_use(email: &str) -> bool {
+    let same = |other: &str| other.eq_ignore_ascii_case(email);
+    account::list().unwrap_or_default().iter().any(|a| same(&a.email))
+        || account::all_dirs().unwrap_or_default().iter().any(|dir| {
+            Settings::load_from(dir).is_ok_and(|s| s.senders.iter().any(|x| same(&x.email)))
+        })
+}
+
+/// Forgets the account in use with its password and local copy; the next account, if any, takes over.
 #[tauri::command]
 async fn forget_account(state: State<'_, AppState>) -> CmdResult<()> {
-    state.generation.fetch_add(1, Ordering::SeqCst);
-    let mut inner = state.inner.lock().await;
-    if let Some(acc) = &inner.account {
-        secret::delete_password(&acc.email).map_err(err)?;
-        if let Ok(mut guard) = state.store.lock() {
-            *guard = None;
-        }
-        kanbanmail_core::store::delete_for(&acc.email).ok();
+    state.stop_account().await;
+    let Some(acc) = Account::load().map_err(err)? else { return Ok(()) };
+    // An added account goes completely, its extra senders too.
+    let mut addresses = vec![acc.email.clone()];
+    if account::is_extra() {
+        addresses.extend(Settings::load().map_err(err)?.senders.into_iter().map(|s| s.email));
     }
-    if let Some(mut s) = inner.session.take() {
-        s.logout().await.ok();
+    account::remove_active().map_err(err)?;
+    kanbanmail_core::store::delete_for(&acc.email).ok();
+    for address in addresses.iter().filter(|a| !password_in_use(a)) {
+        secret::delete_password(address).map_err(err)?;
     }
-    *inner = Inner::default();
-    let path = kanbanmail_core::account::config_dir().map_err(err)?.join("account.toml");
-    std::fs::remove_file(path).ok();
     Ok(())
 }
 
@@ -540,6 +588,10 @@ async fn prefetch_bodies(
                 let fetch = imap::fetch_raws(&mut s, &folder, &uids, PREFETCH_MAX_SIZE);
                 let Ok(Ok(list)) = tokio::time::timeout(OPERATION_TIMEOUT, fetch).await else { break };
                 session = Some(s);
+                // The local copy may already be another account's.
+                if current.load(Ordering::SeqCst) != generation {
+                    return;
+                }
                 for (uid, raw, size) in list {
                     match raw {
                         Some(raw) => state.with_store(|st| st.put_raw(&folder, uid, &raw)),
@@ -736,12 +788,8 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
             secret::set_password(email.trim(), password).map_err(err)?;
         }
     }
-    for old in Settings::load().map(|o| o.senders).unwrap_or_default() {
-        if !senders.iter().any(|x| x.email.eq_ignore_ascii_case(&old.email)) {
-            secret::delete_password(&old.email).ok();
-        }
-    }
-    Settings {
+    let before = Settings::load().map(|o| o.senders).unwrap_or_default();
+    let saved = Settings {
         senders,
         mark_read_after_seconds: s.mark_read_after_seconds.max(-1),
         signature: s.signature.trim_end().to_string(),
@@ -759,9 +807,13 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         waiting_days: s.waiting_days.min(365),
         cache_max_mb: s.cache_max_mb.clamp(100, 20_000),
         ..s
+    };
+    saved.save().map_err(err)?;
+    saved.share_with_other_accounts().map_err(err)?;
+    for old in before.iter().filter(|old| !password_in_use(&old.email)) {
+        secret::delete_password(&old.email).ok();
     }
-    .save()
-    .map_err(err)
+    Ok(())
 }
 
 /// The email being replied to, so it can be marked as answered.
@@ -1311,6 +1363,7 @@ async fn import_settings(json: String, state: State<'_, AppState>) -> CmdResult<
         std::fs::write(board_path().map_err(err)?, &file.board_toml).map_err(|e| e.to_string())?;
     }
     file.settings.save().map_err(err)?;
+    file.settings.share_with_other_accounts().map_err(err)?;
     let mut inner = state.inner.lock().await;
     let same = inner.account.as_ref().is_some_and(|a| a.email.eq_ignore_ascii_case(&file.account.email));
     if same {
@@ -1463,6 +1516,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             login,
+            list_accounts,
+            switch_account,
             forget_account,
             open_board,
             load_column,

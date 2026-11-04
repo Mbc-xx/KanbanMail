@@ -389,7 +389,7 @@ async function start() {
   try {
     const status = await invoke("get_status");
     if (status.configured) {
-      state.email = status.email;
+      setAccount(status.email);
       const fromCache = showCachedBoard();
       await openBoard({ fromCache });
     } else {
@@ -402,6 +402,67 @@ async function start() {
     showLoginError(String(e));
   }
 }
+
+/// The account in use, shown at the top of the sidebar.
+function setAccount(email) {
+  state.email = email;
+  setAvatar($("account-avatar"), email);
+  $("account-name").textContent = email;
+  $("account-btn").title = `${email}: switch account`;
+}
+
+/// Moving to another account starts the interface again, so nothing may be in progress.
+function canLeaveAccount() {
+  if ($("composer").hidden && !state.sending) return true;
+  toast(state.sending ? "Wait for the email to be sent first." : "Send or close the email you are writing first.");
+  return false;
+}
+
+async function switchAccount(email) {
+  if (!canLeaveAccount()) return;
+  show("loading");
+  await invoke("switch_account", { email }).catch((e) => console.error(e));
+  location.reload();
+}
+
+/// The login screen, this time for one more mailbox.
+function setAddingAccount(on) {
+  state.addingAccount = on;
+  $("login-cancel").hidden = !on;
+  $("login-intro").textContent = on ? "Connect another mailbox. It gets its own board, signature and rules." : "Connect your mailbox. The password is stored in the system keychain.";
+  for (const id of ["login-email", "login-server", "login-password"]) $(id).value = "";
+  showLoginError("");
+}
+
+$("login-cancel").addEventListener("click", () => {
+  setAddingAccount(false);
+  show("board-screen");
+});
+
+$("account-btn").addEventListener("click", async (ev) => {
+  ev.stopPropagation();
+  if (document.querySelector(".conv-menu")) return closeConvMenu();
+  const accounts = await invoke("list_accounts").catch(() => [state.email]);
+  const r = $("account-btn").getBoundingClientRect();
+  const pick = (run) => () => {
+    closeConvMenu();
+    run();
+  };
+  popMenuAt(r.left, r.bottom + 6, (menu) => {
+    for (const email of accounts) {
+      const here = email === state.email;
+      menu.append(menuButton(here ? "check" : "inbox", email, pick(() => here || switchAccount(email))));
+    }
+    menu.append(
+      el("div", "menu-sep"),
+      menuButton("compose", "Add account…", pick(() => {
+        if (!canLeaveAccount()) return;
+        setAddingAccount(true);
+        show("login");
+      })),
+    );
+  });
+});
 
 function showLoginError(msg) {
   $("login-error").textContent = msg;
@@ -425,9 +486,11 @@ $("login-form").addEventListener("submit", async (ev) => {
       server: $("login-server").value,
       email: $("login-email").value,
       password: $("login-password").value,
+      add: !!state.addingAccount,
     });
+    if (state.addingAccount) return location.reload();
     $("login-password").value = "";
-    state.email = $("login-email").value.trim();
+    setAccount($("login-email").value.trim());
     await openBoard();
   } catch (e) {
     showLoginError(String(e));
@@ -472,6 +535,7 @@ $("logout").addEventListener("click", async () => {
   cacheClear();
   await invoke("forget_account").catch((e) => toast(String(e)));
   invoke("set_unread_badge", { count: 0 }).catch(() => {});
+  if ((await invoke("list_accounts").catch(() => [])).length) return location.reload();
   $("settings").hidden = true;
   state.columns = [];
   state.cards = {};
@@ -2648,7 +2712,7 @@ $("conv-move").addEventListener("click", async (ev) => {
   });
 });
 document.addEventListener("mousedown", (ev) => {
-  if (!ev.target.closest?.(".conv-menu, #conv-move, #reader-move, [data-sel='move']")) closeConvMenu();
+  if (!ev.target.closest?.(".conv-menu, #conv-move, #reader-move, #account-btn, [data-sel='move']")) closeConvMenu();
 });
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && document.querySelector(".conv-menu")) {
@@ -3567,6 +3631,7 @@ $("compose-form").addEventListener("submit", async (ev) => {
     saved: state.undoSendSeconds > 0 ? saveDraft() : compose.saving,
   };
   hideComposer();
+  state.sending = (state.sending || 0) + 1;
   if (!(state.undoSendSeconds > 0)) return sendPending(pending);
   pending.timer = setTimeout(() => sendPending(pending), state.undoSendSeconds * 1000);
   toast("Sending…", "info", { label: "Undo", run: () => undoSend(pending) }, state.undoSendSeconds);
@@ -3591,6 +3656,7 @@ async function sendPending(pending) {
   } catch (e) {
     toast("Sending failed: " + e, "error", { label: "Open", run: () => reopenPending(pending) });
   }
+  state.sending--;
   const drafts = state.folders.find((f) => f.kind === "drafts")?.name;
   if (drafts && columnEl(drafts)) loadColumn(drafts);
 }
@@ -3599,6 +3665,7 @@ async function sendPending(pending) {
 async function undoSend(pending) {
   if (pending.sending) return toast("Too late: the email is already being sent.");
   pending.cancelled = true;
+  state.sending--;
   clearTimeout(pending.timer);
   const saved = await pending.saved;
   await reopenPending(pending, saved === true || pending.hasDraft);

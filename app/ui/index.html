@@ -54,7 +54,7 @@
   <section id="login" class="screen" hidden>
     <form id="login-form" class="login-card">
       <h1>KanbanMail</h1>
-      <p class="muted">Connect your mailbox. The password is stored in the system keychain.</p>
+      <p id="login-intro" class="muted">Connect your mailbox. The password is stored in the system keychain.</p>
       <label>Email address
         <input id="login-email" type="email" autocomplete="username" required>
       </label>
@@ -66,6 +66,7 @@
       </label>
       <p id="login-error" class="error" hidden></p>
       <button id="login-submit" type="submit" class="primary">Connect</button>
+      <button id="login-cancel" type="button" hidden>Cancel</button>
     </form>
   </section>
 
@@ -84,6 +85,7 @@
     </header>
     <div class="body-row">
       <aside id="sidebar" class="sidebar">
+        <button id="account-btn" class="account-btn" title="Switch account"><span id="account-avatar" class="avatar"></span><span id="account-name" class="label"></span></button>
         <button id="compose" class="primary compose-btn" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span class="label">New email</span></button>
         <div class="filters">
           <button id="only-important" class="filter-btn" aria-pressed="false" title="Important only: emails from people you know; notifications and newsletters are hidden"><svg class="icon"><use href="#i-star"/></svg><span id="count-important" class="filter-count"></span></button>

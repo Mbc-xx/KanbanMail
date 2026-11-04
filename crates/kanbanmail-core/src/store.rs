@@ -111,11 +111,7 @@ fn body_key(folder: &str, uidvalidity: Option<u32>, card: &Card) -> String {
 /// The folder of the cache for an email address (one database per account).
 pub fn path_for(email: &str) -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "KanbanMail").context("cannot determine the cache folder")?;
-    let safe: String = email
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '@' || c == '-' { c } else { '_' })
-        .collect();
-    Ok(dirs.cache_dir().join(format!("{safe}.sqlite")))
+    Ok(dirs.cache_dir().join(format!("{}.sqlite", crate::account::safe_name(email))))
 }
 
 /// Deletes the local copy of an account (when it is disconnected or the cache is cleared).

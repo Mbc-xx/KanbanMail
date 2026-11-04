@@ -733,6 +733,10 @@ button:disabled { opacity: 0.6; cursor: default; }
   flex-direction: column;
   gap: 1px;
 }
+.account-btn { display: flex; align-items: center; gap: 8px; width: 100%; flex-shrink: 0; margin-bottom: 8px; padding: 4px 6px; border-color: transparent; background: transparent; color: var(--text); text-align: left; }
+.account-btn:hover { background: var(--drop); }
+.account-btn .avatar { width: 22px; height: 22px; font-size: 10px; flex-shrink: 0; }
+.account-btn .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .compose-btn { justify-content: center; margin-bottom: 8px; }
 .filters { display: flex; gap: 6px; margin-bottom: 8px; }
 .filter-btn { flex: 1; justify-content: center; gap: 5px; padding: 5px 6px; background: transparent; color: var(--muted); }
@@ -747,6 +751,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .sidebar.collapsed .filters { flex-direction: column; gap: 4px; }
 .sidebar.collapsed .filter-btn { flex-direction: column; gap: 1px; padding: 5px 0; }
 .sidebar.collapsed .compose-btn { padding: 6px 0; }
+.sidebar.collapsed .account-btn { justify-content: center; padding: 4px 0; }
 .sidebar.collapsed .nav-item { position: relative; justify-content: center; padding: 6px 0 !important; }
 .sidebar.collapsed .nav-item .badge { position: absolute; top: 0; right: 0; font-size: 9px; }
 .nav-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 12px 8px 4px; }

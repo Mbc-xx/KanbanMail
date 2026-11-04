@@ -1,8 +1,9 @@
 //! App preferences in `settings.toml` (written by the app itself).
 
-use crate::account::config_dir;
+use crate::account::{all_dirs, config_dir};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -275,7 +276,11 @@ impl Settings {
     }
 
     pub fn load() -> Result<Settings> {
-        let path = config_dir()?.join("settings.toml");
+        Settings::load_from(&config_dir()?)
+    }
+
+    pub fn load_from(dir: &Path) -> Result<Settings> {
+        let path = dir.join("settings.toml");
         if !path.exists() {
             return Ok(Settings::default());
         }
@@ -284,9 +289,45 @@ impl Settings {
     }
 
     pub fn save(&self) -> Result<()> {
-        let dir = config_dir()?;
-        std::fs::create_dir_all(&dir)?;
+        self.save_to(&config_dir()?)
+    }
+
+    fn save_to(&self, dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(dir)?;
         std::fs::write(dir.join("settings.toml"), toml::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    /// These settings with the preferences of the app taken from `from`: how it
+    /// looks and behaves is the same for every account, while signatures,
+    /// senders, rules, folders and the Waiting column belong to each one.
+    pub fn with_shared_from(self, from: &Settings) -> Settings {
+        Settings {
+            mark_read_after_seconds: from.mark_read_after_seconds,
+            use_system_contacts: from.use_system_contacts,
+            load_remote_images: from.load_remote_images,
+            group_threads: from.group_threads,
+            notify: from.notify.clone(),
+            theme: from.theme.clone(),
+            zoom: from.zoom,
+            undo_seconds: from.undo_seconds,
+            undo_send_seconds: from.undo_send_seconds,
+            preview_board: from.preview_board,
+            preview_list: from.preview_list,
+            cache_max_mb: from.cache_max_mb,
+            prefetch: from.prefetch,
+            compact_actions: from.compact_actions,
+            ask_conversation: from.ask_conversation,
+            ..self
+        }
+    }
+
+    /// Passes the shared preferences on to the other accounts.
+    pub fn share_with_other_accounts(&self) -> Result<()> {
+        let here = config_dir()?;
+        for dir in all_dirs()?.into_iter().filter(|d| *d != here) {
+            Settings::load_from(&dir)?.with_shared_from(self).save_to(&dir)?;
+        }
         Ok(())
     }
 }
@@ -297,6 +338,15 @@ mod tests {
 
     fn sender(email: &str, server: &str) -> Sender {
         Sender { email: email.into(), display_name: " Desk ".into(), smtp_server: server.into(), smtp_port: 587, signature: String::new(), signature_html: String::new() }
+    }
+
+    #[test]
+    fn a_new_account_shares_preferences_but_not_its_own_details() {
+        let from = Settings { theme: "dark".into(), zoom: 120, signature: "Mine".into(), waiting_folder: "Later".into(), ..Settings::default() };
+        let other = Settings { signature: "Theirs".into(), ..Settings::default() }.with_shared_from(&from);
+        assert_eq!((other.theme.as_str(), other.zoom), ("dark", 120));
+        assert_eq!(other.signature, "Theirs");
+        assert_eq!(other.waiting_folder, "");
     }
 
     #[test]
