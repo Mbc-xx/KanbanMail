@@ -1042,6 +1042,7 @@ function renderCards(folder) {
   if (!list.length) {
     if (searching) {
       container.append(el("div", "empty muted", state.view.searchDone ? "No emails found" : "Searching…"));
+      appendServerSearch(container);
       return;
     }
     const filtered = all.length && (state.onlyUnread || state.onlyImportant || state.filter);
@@ -1090,6 +1091,7 @@ function renderCards(folder) {
   }
   const more = loadMore();
   if (more) container.append(more);
+  if (searching) appendServerSearch(container);
   container.scrollTop = scrollTop;
 }
 
@@ -1437,7 +1439,8 @@ function renderCard(folder, card, group = null, { child = false } = {}) {
     const date = el("span", "row-date");
     if (anyAttachment) date.append(icon("paperclip", "clip"));
     date.append(document.createTextNode(formatDate(card.date)));
-    if (state.view?.multi || (child && folder !== state.view.folder)) date.prepend(folderTag(folder));
+    if (state.view?.multi) date.prepend(...folderTags(members));
+    else if (child && folder !== state.view.folder) date.prepend(folderTag(folder));
     const from = el("span", "row-from");
     const thread = group || (!child && state.groupThreads && hasConversation(card) ? { members, rep: { folder, card } } : null);
     if (thread) {
@@ -1896,9 +1899,7 @@ async function loadAllMail() {
   // What is already known first (in memory, else on this Mac), then the server's list.
   if (state.cards[ALL_KEY]?.length) renderCards(ALL_KEY);
   const local = await invoke("cached_all_mail").catch(() => []);
-  const localCards = local
-    .filter((x) => !["trash", "junk", "drafts"].includes(folderKind(x.folder)))
-    .map((x) => ({ ...x.card, __folder: x.folder }));
+  const localCards = local.map((x) => ({ ...x.card, __folder: x.folder }));
   if (localCards.length && !state.cards[ALL_KEY]?.length) {
     state.cards[ALL_KEY] = localCards;
     renderCards(ALL_KEY);
@@ -1945,6 +1946,18 @@ function orderedFolders(includeHidden = false) {
     .sort((a, b) => a.key - b.key)
     .map((x) => x.f);
   return includeHidden ? list : list.filter((f) => !folderPref(f.name)?.hidden);
+}
+
+/// The folders an email or conversation is in: two tags at most, then how many more.
+function folderTags(members) {
+  const folders = [...new Set(members.map((m) => m.folder))];
+  const tags = folders.slice(0, 2).map(folderTag);
+  if (folders.length > 2) {
+    const more = el("span", "row-folder", `+${folders.length - 2}`);
+    more.title = folders.slice(2).map(folderLabel).join(", ");
+    tags.push(more);
+  }
+  return tags;
 }
 
 function folderTag(folder) {
@@ -2043,17 +2056,17 @@ async function runSearch() {
     return entries.length ? `${entries.length} found in ${where.slice(0, 6).join(", ")}${where.length > 6 ? "…" : ""}` : "Nothing found yet";
   };
   view.searchDone = false;
+  view.serverSearch = null;
   const folders = state.columns.map((c) => c.folder);
-  if (view.from && !folders.includes(view.from)) folders.push(view.from);
+  if (view.from && !MULTI_KEYS.includes(view.from) && !folders.includes(view.from)) folders.push(view.from);
   const query = parseQuery(view.search);
   const args = { query, inBody: !!view.inBody, folders };
   // Results found on this Mac come first (instant, also offline); the server
   // results are merged in as they arrive and win for the same email.
   let entries = [];
-  const key = (e) => (e.card.message_id || "").toLowerCase() || e.folder + "/" + e.card.uid;
   const merge = (found) => {
-    const byKey = new Map(entries.map((e) => [key(e), e]));
-    for (const e of found) byKey.set(key(e), e);
+    const byKey = new Map(entries.map((e) => [searchKey(e.card, e.folder), e]));
+    for (const e of found) byKey.set(searchKey(e.card, e.folder), e);
     entries = [...byKey.values()];
   };
   const show = () => {
@@ -2063,7 +2076,7 @@ async function runSearch() {
   };
   let local = [];
   try {
-    local = (await invoke("search_local", { query })).filter((e) => !["trash", "junk", "drafts"].includes(folderKind(e.folder)));
+    local = await invoke("search_local", { query });
   } catch (_) {}
   if (!alive()) return;
   merge(local);
@@ -2093,6 +2106,54 @@ async function runSearch() {
   }
 }
 
+const searchKey = (card, folder) => (card.message_id || "").toLowerCase() || folder + "/" + card.uid;
+
+/// Under the results: the search of every email on the server, then its outcome.
+function appendServerSearch(container) {
+  const view = state.view;
+  if (!view.searchDone) return;
+  if (view.serverSearch === "done") return container.append(el("div", "empty muted", "The whole server was searched"));
+  const b = el("button", "load-more", view.serverSearch === "running" ? "Searching the whole server…" : "Search the whole server");
+  b.title = "Every email of every folder, in the text too, with no limit on the results. It can take a few minutes.";
+  b.disabled = view.serverSearch === "running";
+  b.addEventListener("click", searchWholeServer);
+  container.append(b);
+}
+
+/// Every email of every folder, one folder at a time so results arrive as they are found.
+async function searchWholeServer() {
+  const view = state.view;
+  const seq = ++searchSeq;
+  const alive = () => seq === searchSeq && state.view === view;
+  const setStatus = (text) => {
+    const s = $("search-status");
+    if (s) s.textContent = text;
+  };
+  view.serverSearch = "running";
+  renderCards(SEARCH_KEY);
+  const query = parseQuery(view.search);
+  const folders = state.folders.filter((f) => f.selectable !== false).map((f) => f.name);
+  const found = new Map(state.cards[SEARCH_KEY].map((c) => [searchKey(c, c.__folder), c]));
+  const failed = [];
+  for (const [i, folder] of folders.entries()) {
+    setStatus(`${found.size} found · searching ${folderLabel(folder)} (${i + 1} of ${folders.length})…`);
+    try {
+      const entries = await invoke("search_emails", { query, inBody: true, folders: [folder], scope: "full" });
+      if (!alive()) return;
+      for (const e of entries) found.set(searchKey(e.card, e.folder), { ...e.card, __folder: e.folder });
+      state.cards[SEARCH_KEY] = [...found.values()].sort((a, b) => b.date - a.date);
+      renderCards(SEARCH_KEY);
+    } catch (e) {
+      if (!alive()) return;
+      console.error(folder, e);
+      failed.push(folderLabel(folder));
+    }
+  }
+  view.serverSearch = failed.length ? null : "done";
+  renderCards(SEARCH_KEY);
+  setStatus(`${found.size} found · ` + (failed.length ? `could not search ${failed.join(", ")}` : "whole server searched"));
+}
+
 function startSearch(text) {
   const from = state.view && !state.view.search ? state.view.folder : state.view?.from;
   state.view = { folder: SEARCH_KEY, label: `Search: ${text}`, search: text, inBody: state.view?.inBody || false, from, multi: true };
@@ -2102,20 +2163,34 @@ function startSearch(text) {
   runSearch();
 }
 
+/// All Mail holds only the latest emails, so what is typed there searches every folder.
+const inAllMail = () => state.view?.folder === ALL_KEY || (state.view?.search && state.view.from === ALL_KEY);
+let allMailSearch = null;
+
 $("search").addEventListener("input", () => {
   state.filter = boardFilter($("search").value);
+  clearTimeout(allMailSearch);
+  if (inAllMail()) {
+    allMailSearch = setTimeout(() => {
+      if (!inAllMail()) return;
+      if (state.filter) startSearch($("search").value.trim());
+      else if (state.view.search) openAllMail();
+    }, 500);
+  }
   if (!state.view?.search) for (const c of visibleColumns()) renderCards(c.folder);
 });
 
 $("search").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") {
+    clearTimeout(allMailSearch);
     const text = $("search").value.trim();
     if (text) startSearch(text);
   } else if (ev.key === "Escape") {
     ev.stopPropagation();
+    clearTimeout(allMailSearch);
     $("search").value = "";
     state.filter = null;
-    if (state.view?.search) showBoard();
+    if (state.view?.search) inAllMail() ? openAllMail() : showBoard();
     else for (const c of visibleColumns()) renderCards(c.folder);
     $("search").blur();
   }

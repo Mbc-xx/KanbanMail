@@ -1056,6 +1056,10 @@ async fn search_emails(
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<imap::ThreadEntry>> {
     async fn run(s: &mut Session, query: &imap::SearchQuery, in_body: bool, extra: &[String], scope: &str) -> anyhow::Result<Vec<imap::ThreadEntry>> {
+        // Just the folders asked for, with every email found there.
+        if scope == "full" {
+            return imap::search(s, query, in_body, extra, usize::MAX).await;
+        }
         let mut main = vec!["INBOX".to_string()];
         for kind in ["sent", "archive"] {
             if let Some(f) = imap::find_special_folder(s, kind).await? {

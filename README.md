@@ -42,7 +42,10 @@ Written in Rust with [Tauri](https://tauri.app).
   (case- and accent-insensitive). Enter searches the server in sender,
   recipients and subject, in two steps: first Inbox, Sent, Archive, the board
   columns and the open folder, then every other folder (Trash, Junk and Drafts
-  excluded); every word must match. Besides plain words the box understands
+  too); every word must match. These searches stop at the 100 newest matches of
+  each folder: "Search the whole server", always under the results, goes through
+  every email of every folder, in the text too and with no limit, folder by
+  folder (slower, results appear as they are found). Besides plain words the box understands
   `from:`, `to:` (To and Cc), `subject:`, `after:`, `before:` and `date:`
   (a day as `2026-10-05` or `5/10/2026`, a month `2026-10` or a year `2026`;
   both ends included), and quotes keep words together:
@@ -124,8 +127,15 @@ Written in Rust with [Tauri](https://tauri.app).
   read it, ⌄ closes it. Replies show › even when
   the rest of their conversation is in other folders. Archive, delete, pin and drag act
   on the whole conversation.
+- Several accounts (2.0 alpha): the address at the top of the sidebar switches
+  account or adds one. Each account has its own board, signatures, senders,
+  rules and Waiting column; appearance and behavior are shared. Only the account
+  in use is followed. Accounts sign in with a password: Microsoft and Gmail OAuth
+  are not supported yet.
 - "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,
-  Junk and Drafts excluded) in one list, each tagged with its folder.
+  Junk and Drafts too) in one list, each tagged with its folder; a conversation
+  shows the tags of the folders it is in. What you type there searches every
+  folder on the server, older emails included.
 - Sidebar folders: choose which ones to show, drag them into your order and pick a color
   (Settings → Folders). The color also marks the board column and the folder
   tags in search results and All Mail.
