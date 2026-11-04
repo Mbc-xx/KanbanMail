@@ -683,23 +683,26 @@ async fn search_folders(
             continue;
         }
         uids.sort_unstable();
-        let set = uids.iter().rev().take(per_folder).map(u32::to_string).collect::<Vec<_>>().join(",");
-        let fetched: Vec<_> = session
-            .uid_fetch(&set, "(UID FLAGS INTERNALDATE BODY.PEEK[]<0.32768>)")
-            .await
-            .with_context(|| format!("reading results in {folder} failed"))?
-            .try_collect()
-            .await?;
-        for f in fetched {
-            let Some(uid) = f.uid else { continue };
-            let date = f.internal_date().map(|d| d.timestamp()).unwrap_or(0);
-            let flagged = f.flags().any(|x| matches!(x, Flag::Flagged));
-            let seen = f.flags().any(|x| matches!(x, Flag::Seen));
-            let card = crate::message::parse_card(uid, f.body().unwrap_or_default(), flagged, seen, date);
-            // The same email can sit in several folders (e.g. Inbox and Archive).
-            let key = card.message_id.clone().map(|id| bare_id(&id)).unwrap_or_else(|| format!("{folder}/{uid}"));
-            if seen_ids.insert(key) {
-                out.push(ThreadEntry { folder: folder.clone(), card });
+        let newest: Vec<u32> = uids.iter().rev().take(per_folder).copied().collect();
+        for chunk in newest.chunks(200) {
+            let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+            let fetched: Vec<_> = session
+                .uid_fetch(&set, "(UID FLAGS INTERNALDATE BODY.PEEK[]<0.32768>)")
+                .await
+                .with_context(|| format!("reading results in {folder} failed"))?
+                .try_collect()
+                .await?;
+            for f in fetched {
+                let Some(uid) = f.uid else { continue };
+                let date = f.internal_date().map(|d| d.timestamp()).unwrap_or(0);
+                let flagged = f.flags().any(|x| matches!(x, Flag::Flagged));
+                let seen = f.flags().any(|x| matches!(x, Flag::Seen));
+                let card = crate::message::parse_card(uid, f.body().unwrap_or_default(), flagged, seen, date);
+                // The same email can sit in several folders (e.g. Inbox and Archive).
+                let key = card.message_id.clone().map(|id| bare_id(&id)).unwrap_or_else(|| format!("{folder}/{uid}"));
+                if seen_ids.insert(key) {
+                    out.push(ThreadEntry { folder: folder.clone(), card });
+                }
             }
         }
     }
@@ -711,15 +714,13 @@ fn imap_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Every folder worth searching: all selectable folders except Trash, Junk and Drafts.
+/// Every folder that can hold emails, Trash, Junk and Drafts included.
 pub async fn searchable_folders(session: &mut Session) -> Result<Vec<String>> {
     use async_imap::types::NameAttribute;
     let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
-    let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".").to_string();
     let mut out: Vec<String> = names
         .iter()
         .filter(|n| !n.attributes().iter().any(|a| matches!(a, NameAttribute::NoSelect)))
-        .filter(|n| !matches!(folder_kind(n.name(), n.attributes(), &delim), "trash" | "junk" | "drafts"))
         .map(|n| n.name().to_string())
         .collect();
     // INBOX first: it is where most results are.
