@@ -4,6 +4,7 @@ pub mod account;
 pub mod board;
 pub mod imap;
 pub mod message;
+pub mod oauth;
 pub mod secret;
 pub mod settings;
 pub mod smtp;

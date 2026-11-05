@@ -3,7 +3,7 @@
 use crate::account::Account;
 use anyhow::{anyhow, bail, Context, Result};
 use lettre::message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart};
-use lettre::transport::smtp::authentication::Credentials;
+use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::Deserialize;
 
@@ -403,7 +403,7 @@ fn build_message(
         .context("building the message failed")
 }
 
-fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
+async fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
     let host = account.smtp_host();
     let builder = if account.smtp_port == 465 {
         AsyncSmtpTransport::<Tokio1Executor>::relay(host)
@@ -411,19 +411,36 @@ fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTransport<Tok
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
     }
     .with_context(|| format!("invalid SMTP server: {host}"))?;
-    Ok(builder
-        .port(account.smtp_port)
-        .credentials(Credentials::new(account.email.clone(), password.to_string()))
-        .timeout(Some(std::time::Duration::from_secs(30)))
-        .build())
+    let builder = builder.port(account.smtp_port).timeout(Some(std::time::Duration::from_secs(30)));
+    let user = account.smtp_login().to_string();
+    Ok(if account.oauth {
+        let token = crate::oauth::access_token(account).await?;
+        builder.credentials(Credentials::new(user, token)).authentication(vec![Mechanism::Xoauth2]).build()
+    } else {
+        builder.credentials(Credentials::new(user, password.to_string())).build()
+    })
+}
+
+/// Adds what to do about the refusals with a known cure.
+fn explain(account: &Account, error: anyhow::Error) -> anyhow::Error {
+    let text = format!("{error:#}");
+    if text.contains("5.7.139") || text.contains("SmtpClientAuthentication") {
+        return error.context("sending is turned off for this mailbox: the administrator must allow Authenticated SMTP (SMTP AUTH) for it");
+    }
+    if text.contains("535") || text.contains("534") || text.to_lowercase().contains("authentication") {
+        return error.context(format!("the SMTP server refused the login.{}", account.provider().login_help(account.oauth)));
+    }
+    error
 }
 
 /// Connects to the SMTP server and logs in, without sending anything.
 pub async fn test_login(account: &Account, password: &str) -> Result<()> {
-    let ok = transport(account, password)?
+    let ok = transport(account, password)
+        .await?
         .test_connection()
         .await
-        .with_context(|| format!("SMTP login to {}:{} failed", account.smtp_host(), account.smtp_port))?;
+        .with_context(|| format!("SMTP login to {}:{} failed", account.smtp_host(), account.smtp_port))
+        .map_err(|e| explain(account, e))?;
     anyhow::ensure!(ok, "the SMTP server does not respond");
     Ok(())
 }
@@ -431,11 +448,15 @@ pub async fn test_login(account: &Account, password: &str) -> Result<()> {
 /// Sends the message.
 pub async fn send(account: &Account, password: &str, message: &Message) -> Result<()> {
     let host = account.smtp_host();
-    transport(account, password)?
+    let sent = transport(account, password)
+        .await?
         .send(message.clone())
         .await
-        .with_context(|| format!("sending via {host}:{} failed", account.smtp_port))?;
-    Ok(())
+        .with_context(|| format!("sending via {host}:{} failed", account.smtp_port));
+    if sent.is_err() && account.oauth {
+        crate::oauth::forget(&account.email).await;
+    }
+    sent.map(|_| ()).map_err(|e| explain(account, e))
 }
 
 #[cfg(test)]

@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>KanbanMail</title>
+  <title>Pigeonhole</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <!-- Line icons (24×24, stroke = currentColor), referenced with <use href="#i-name"> -->
   <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
     <symbol id="i-allmail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9l1.6-4.2A1.5 1.5 0 0 1 7 4h10a1.5 1.5 0 0 1 1.4.8L20 9v4H4z"/><path d="M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><path d="M4 9h4l1 2h6l1-2h4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
     <symbol id="i-forward" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 7l5 5-5 5"/><path d="M20 12H10a6 6 0 0 0-6 6v1"/></symbol>
     <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
@@ -53,19 +54,31 @@
   <!-- First run: account details -->
   <section id="login" class="screen" hidden>
     <form id="login-form" class="login-card">
-      <h1>KanbanMail</h1>
+      <h1>Pigeonhole</h1>
       <p id="login-intro" class="muted">Connect your mailbox. The password is stored in the system keychain.</p>
+      <div id="login-providers" class="login-providers" role="group" aria-label="Mail service">
+        <button type="button" data-provider="other">IMAP</button>
+        <button type="button" data-provider="icloud">iCloud</button>
+        <button type="button" data-provider="gmail">Gmail</button>
+        <button type="button" data-provider="microsoft">Microsoft</button>
+      </div>
+      <p id="login-help" class="muted small" hidden></p>
+      <button id="login-help-link" type="button" class="link-button" hidden></button>
       <label>Email address
         <input id="login-email" type="email" autocomplete="username" required>
       </label>
-      <label>IMAP server (port 993, SSL/TLS)
+      <label id="login-server-row">IMAP server (port 993, SSL/TLS)
         <input id="login-server" type="text" placeholder="mail.yourdomain.com" required>
       </label>
-      <label>Password
+      <label id="login-username-row" hidden>iCloud address (only with a custom domain)
+        <input id="login-username" type="text" autocomplete="off" placeholder="name@icloud.com">
+      </label>
+      <label id="login-password-row"><span id="login-password-label">Password</span>
         <input id="login-password" type="password" autocomplete="current-password" required>
       </label>
       <p id="login-error" class="error" hidden></p>
       <button id="login-submit" type="submit" class="primary">Connect</button>
+      <button id="login-oauth" type="button" hidden></button>
       <button id="login-cancel" type="button" hidden>Cancel</button>
     </form>
   </section>
@@ -74,6 +87,7 @@
   <section id="board-screen" class="screen" hidden>
     <header class="topbar">
       <button id="toggle-sidebar" class="icon-btn" title="Expand/collapse the sidebar (Ctrl/⌘+B)"><svg class="icon"><use href="#i-sidebar"/></svg></button>
+      <button id="account-btn" class="account-btn" title="Switch account" aria-haspopup="menu"><span id="account-avatar" class="avatar"></span><span id="account-name" class="label"></span><svg class="icon account-chevron"><use href="#i-chevron"/></svg></button>
       <div id="sync" class="sync" data-level="busy"><span class="sync-light"></span><span id="sync-status" class="muted"></span></div>
       <div class="spacer"></div>
       <div class="search-box">
@@ -85,7 +99,6 @@
     </header>
     <div class="body-row">
       <aside id="sidebar" class="sidebar">
-        <button id="account-btn" class="account-btn" title="Switch account"><span id="account-avatar" class="avatar"></span><span id="account-name" class="label"></span></button>
         <button id="compose" class="primary compose-btn" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span class="label">New email</span></button>
         <div class="filters">
           <button id="only-important" class="filter-btn" aria-pressed="false" title="Important only: emails from people you know; notifications and newsletters are hidden"><svg class="icon"><use href="#i-star"/></svg><span id="count-important" class="filter-count"></span></button>

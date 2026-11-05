@@ -5,13 +5,19 @@ const { listen } = window.__TAURI__.event;
 const $ = (id) => document.getElementById(id);
 
 // Calls that read the server turn the connection light yellow while they run.
+// Part of the error of a browser sign-in that stopped working (see oauth.rs).
+const SIGN_IN_AGAIN = "Sign in again";
 const SERVER_READS = new Set(["open_board", "load_column", "list_folders", "load_all_mail", "search_emails", "flush_queue"]);
 let serverBusy = 0;
 function invoke(cmd, args) {
-  if (!SERVER_READS.has(cmd)) return tauriInvoke(cmd, args);
+  const call = tauriInvoke(cmd, args).catch((e) => {
+    if (String(e).includes(SIGN_IN_AGAIN)) askToSignInAgain(String(e));
+    throw e;
+  });
+  if (!SERVER_READS.has(cmd)) return call;
   serverBusy++;
   setSyncStatus();
-  return tauriInvoke(cmd, args).finally(() => {
+  return call.finally(() => {
     serverBusy--;
     setSyncStatus();
   });
@@ -29,6 +35,8 @@ const state = {
   signatureHtml: "",
   senders: [], // extra mailboxes used only to send from
   displayName: "", // sender name of the main account
+  accountUnread: {}, // address -> unread Inbox emails, as last seen
+  unreadChecked: {}, // address -> when it was last asked
   defaultBcc: "", // addresses added in Bcc of every new email and reply
   loadRemoteImages: false, // load remote images in every email without asking
   onlyUnread: false,
@@ -386,6 +394,8 @@ function goOffline() {
 
 async function start() {
   show("loading");
+  state.browserSignIn = await invoke("oauth_providers").catch(() => []);
+  setLoginProvider("other");
   try {
     const status = await invoke("get_status");
     if (status.configured) {
@@ -393,8 +403,7 @@ async function start() {
       const fromCache = showCachedBoard();
       await openBoard({ fromCache });
     } else {
-      if (status.email) $("login-email").value = status.email;
-      if (status.server) $("login-server").value = status.server;
+      prepareLogin(status);
       show("login");
     }
   } catch (e) {
@@ -403,12 +412,23 @@ async function start() {
   }
 }
 
-/// The account in use, shown at the top of the sidebar.
-function setAccount(email) {
+/// The badge of an account: its chosen icon and color, otherwise its initial.
+function accountBadge(a, account) {
+  setAvatar(a, account.email);
+  if (account.icon) a.textContent = account.icon;
+  if (account.color) a.style.background = account.color;
+  return a;
+}
+
+/// The account in use, shown in the top bar.
+async function setAccount(email) {
   state.email = email;
-  setAvatar($("account-avatar"), email);
+  accountBadge($("account-avatar"), { email });
   $("account-name").textContent = email;
   $("account-btn").title = `${email}: switch account`;
+  const accounts = await invoke("list_accounts").catch(() => []);
+  const account = accounts.find((a) => a.email === email);
+  if (account && state.email === email) accountBadge($("account-avatar"), account);
 }
 
 /// Moving to another account starts the interface again, so nothing may be in progress.
@@ -430,7 +450,8 @@ function setAddingAccount(on) {
   state.addingAccount = on;
   $("login-cancel").hidden = !on;
   $("login-intro").textContent = on ? "Connect another mailbox. It gets its own board, signature and rules." : "Connect your mailbox. The password is stored in the system keychain.";
-  for (const id of ["login-email", "login-server", "login-password"]) $(id).value = "";
+  for (const id of ["login-email", "login-server", "login-username", "login-password"]) $(id).value = "";
+  setLoginProvider("other");
   showLoginError("");
 }
 
@@ -439,29 +460,131 @@ $("login-cancel").addEventListener("click", () => {
   show("board-screen");
 });
 
-$("account-btn").addEventListener("click", async (ev) => {
-  ev.stopPropagation();
-  if (document.querySelector(".conv-menu")) return closeConvMenu();
-  const accounts = await invoke("list_accounts").catch(() => [state.email]);
+/// A menu under the account button.
+function popAccountMenu(fill) {
   const r = $("account-btn").getBoundingClientRect();
-  const pick = (run) => () => {
+  return popMenuAt(r.left, r.bottom + 6, fill);
+}
+
+/// One line of the account menu: the account, and a button to change its icon.
+function accountRow(account) {
+  const here = account.email === state.email;
+  const row = el("div", "account-row");
+  const open = menuButton("check", account.email, () => {
     closeConvMenu();
-    run();
+    if (!here) switchAccount(account.email);
+  });
+  const check = open.firstChild;
+  check.replaceWith(accountBadge(el("span", "avatar"), account));
+  open.lastChild.className = "account-address";
+  const unread = el("span", "account-unread", state.accountUnread[account.email] || "");
+  open.append(unread);
+  if (here) open.append(check);
+  const edit = menuButton("compose", "", () => editAccountLook(account));
+  edit.classList.add("account-edit");
+  edit.title = "Change icon";
+  edit.setAttribute("aria-label", `Change the icon of ${account.email}`);
+  row.append(open, edit);
+  updateAccountUnread(account.email, unread);
+  return row;
+}
+
+const UNREAD_CHECK_MS = 60_000;
+
+/// Fills in the unread Inbox emails of an account. The one in use is already known;
+/// another needs a short connection, so it is asked at most once a minute.
+async function updateAccountUnread(email, label) {
+  const show = (count) => {
+    state.accountUnread[email] = count;
+    label.textContent = count || "";
+    label.title = count ? `${count} unread in the Inbox` : "";
   };
-  popMenuAt(r.left, r.bottom + 6, (menu) => {
-    for (const email of accounts) {
-      const here = email === state.email;
-      menu.append(menuButton(here ? "check" : "inbox", email, pick(() => here || switchAccount(email))));
-    }
+  if (email === state.email) return show(state.folders.find((f) => f.kind === "inbox")?.unseen || 0);
+  if (Date.now() - (state.unreadChecked[email] || 0) < UNREAD_CHECK_MS) return;
+  state.unreadChecked[email] = Date.now();
+  const count = await invoke("account_unread", { email }).catch(() => null);
+  if (count === null) delete state.unreadChecked[email];
+  else show(count);
+}
+
+async function openAccountMenu() {
+  const accounts = await invoke("list_accounts").catch(() => [{ email: state.email }]);
+  popAccountMenu((menu) => {
     menu.append(
+      ...accounts.map(accountRow),
       el("div", "menu-sep"),
-      menuButton("compose", "Add account…", pick(() => {
+      menuButton("plus", "Add account…", () => {
+        closeConvMenu();
         if (!canLeaveAccount()) return;
         setAddingAccount(true);
         show("login");
-      })),
+      }),
     );
   });
+}
+
+const ACCOUNT_ICONS = ["🏠", "💼", "🏢", "🎓", "🛒", "🧾", "✈️", "❤️", "⭐", "🔒", "🌍", "📰", "⚽", "🎵", "🐾"];
+
+/// Chooses the icon and color of an account; every change is saved at once.
+function editAccountLook(account) {
+  const look = { icon: account.icon || null, color: account.color || null };
+  popAccountMenu((menu) => {
+    const preview = el("span", "avatar");
+    const typed = el("input");
+    const icons = el("div", "look-grid");
+    const colors = el("div", "look-grid");
+    const choice = (parent, key, value, content) => {
+      const b = el("button");
+      b.type = "button";
+      b.dataset.value = value ?? "";
+      content(b);
+      b.addEventListener("click", () => change({ [key]: value }));
+      parent.append(b);
+    };
+    const paint = () => {
+      accountBadge(preview, { ...account, ...look });
+      for (const [grid, value] of [[icons, look.icon], [colors, look.color]]) {
+        for (const b of grid.children) b.classList.toggle("selected", b.dataset.value === (value ?? ""));
+      }
+      if (document.activeElement !== typed) typed.value = ACCOUNT_ICONS.includes(look.icon) ? "" : look.icon || "";
+    };
+    const change = (part) => {
+      Object.assign(look, part);
+      paint();
+      invoke("set_account_look", { email: account.email, look }).catch((e) => toast(String(e)));
+      if (account.email === state.email) accountBadge($("account-avatar"), { ...account, ...look });
+    };
+
+    choice(icons, "icon", null, (b) => {
+      b.textContent = (account.email[0] || "?").toUpperCase();
+      b.title = "The initial";
+    });
+    for (const emoji of ACCOUNT_ICONS) choice(icons, "icon", emoji, (b) => (b.textContent = emoji));
+    choice(colors, "color", null, (b) => {
+      b.append(icon("refresh"));
+      b.title = "Automatic color";
+    });
+    for (const color of AVATAR_COLORS) choice(colors, "color", color, (b) => (b.style.background = color));
+
+    typed.placeholder = "Or type an emoji or two letters";
+    typed.setAttribute("aria-label", "Your own icon");
+    typed.addEventListener("input", () => {
+      const parts = [...new Intl.Segmenter().segment(typed.value.trim())].slice(0, 2);
+      change({ icon: parts.map((p) => p.segment).join("") || null });
+    });
+
+    const head = el("div", "look-head");
+    head.append(preview, el("span", "account-address", account.email));
+    menu.classList.add("look-menu");
+    menu.append(head, icons, colors, typed, el("div", "menu-sep"), menuButton("back", "Back to accounts", openAccountMenu));
+    paint();
+  });
+}
+
+$("account-btn").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  if (document.querySelector(".conv-menu")) closeConvMenu();
+  else openAccountMenu();
 });
 
 function showLoginError(msg) {
@@ -475,8 +598,115 @@ $("login-email").addEventListener("change", () => {
   if (domain && !server.value) server.value = "mail." + domain;
 });
 
+// What each mail service asks for. `browser`: the words on its sign-in button.
+const LOGIN_SERVICES = {
+  other: { help: "", password: "Password" },
+  icloud: {
+    server: "imap.mail.me.com",
+    help: "iCloud needs an app-specific password, not your Apple Account password.",
+    link: ["Create an app-specific password", "https://account.apple.com/account/manage"],
+    password: "App-specific password",
+    username: true,
+  },
+  gmail: {
+    server: "imap.gmail.com",
+    help: "Gmail needs an app password, available once 2-Step Verification is on. Work accounts may not have it.",
+    link: ["Create an app password", "https://myaccount.google.com/apppasswords"],
+    password: "App password",
+    browser: "Sign in with Google",
+  },
+  microsoft: {
+    server: "outlook.office365.com",
+    help: "Microsoft 365 and Outlook.com use your browser to sign in: the app never sees your password.",
+    browser: "Sign in with Microsoft",
+    browserOnly: true,
+  },
+};
+
+state.loginProvider = "other";
+state.browserSignIn = []; // services this build can sign in to
+let signingIn = false;
+
+function setLoginProvider(name) {
+  const service = LOGIN_SERVICES[name] || LOGIN_SERVICES.other;
+  state.loginProvider = LOGIN_SERVICES[name] ? name : "other";
+  for (const b of $("login-providers").children) b.setAttribute("aria-pressed", String(b.dataset.provider === state.loginProvider));
+  const can = state.browserSignIn.includes(state.loginProvider);
+  const missing = service.browserOnly && !can;
+  $("login-help").textContent = missing ? "This copy of Pigeonhole was built without a Microsoft application id, so it cannot sign in to Microsoft mailboxes." : service.help;
+  $("login-help").hidden = !$("login-help").textContent;
+  $("login-help-link").hidden = !service.link;
+  $("login-help-link").textContent = service.link?.[0] || "";
+  $("login-server-row").hidden = !!service.server;
+  $("login-server").required = !service.server;
+  if (service.server) $("login-server").value = service.server;
+  else if (Object.values(LOGIN_SERVICES).some((s) => s.server === $("login-server").value)) $("login-server").value = "";
+  $("login-username-row").hidden = !service.username;
+  $("login-password-row").hidden = !!service.browserOnly;
+  $("login-password").required = !service.browserOnly;
+  $("login-password-label").textContent = service.password || "Password";
+  $("login-email").required = !service.browserOnly;
+  $("login-submit").hidden = !!service.browserOnly;
+  $("login-oauth").disabled = !can;
+  $("login-oauth").hidden = !service.browser || (!can && !service.browserOnly);
+  $("login-oauth").className = service.browserOnly ? "primary" : "";
+  $("login-oauth").textContent = service.browser || "";
+  showLoginError("");
+}
+
+for (const b of $("login-providers").children) b.addEventListener("click", () => setLoginProvider(b.dataset.provider));
+$("login-help-link").addEventListener("click", () => {
+  const link = LOGIN_SERVICES[state.loginProvider].link;
+  if (link) invoke("open_url", { url: link[1] }).catch((e) => showLoginError(String(e)));
+});
+
+/// Fills the login screen for the account in `status`.
+function prepareLogin(status) {
+  if (status.server) $("login-server").value = status.server;
+  setLoginProvider(status.provider || "other");
+  if (status.email) $("login-email").value = status.email;
+}
+
+/// The browser sign-in of the account in use stopped working (revoked, or expired).
+let askedToSignIn = false;
+async function askToSignInAgain(message) {
+  if (askedToSignIn) return;
+  askedToSignIn = true;
+  prepareLogin(await tauriInvoke("get_status").catch(() => ({})));
+  show("login");
+  showLoginError(message);
+}
+
+async function browserSignIn() {
+  const btn = $("login-oauth");
+  if (signingIn) return invoke("cancel_sign_in");
+  showLoginError("");
+  signingIn = true;
+  const label = btn.textContent;
+  btn.textContent = "Waiting for the browser… Cancel";
+  try {
+    const email = await invoke("oauth_sign_in", {
+      provider: state.loginProvider,
+      email: $("login-email").value,
+      add: !!state.addingAccount,
+    });
+    if (state.addingAccount) return location.reload();
+    askedToSignIn = false;
+    setAccount(email);
+    await openBoard();
+  } catch (e) {
+    if (String(e) !== "cancelled") showLoginError(String(e));
+  } finally {
+    signingIn = false;
+    btn.textContent = label;
+  }
+}
+
+$("login-oauth").addEventListener("click", browserSignIn);
+
 $("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (LOGIN_SERVICES[state.loginProvider].browserOnly) return browserSignIn();
   showLoginError("");
   const btn = $("login-submit");
   btn.disabled = true;
@@ -485,11 +715,13 @@ $("login-form").addEventListener("submit", async (ev) => {
     await invoke("login", {
       server: $("login-server").value,
       email: $("login-email").value,
+      username: $("login-username").value,
       password: $("login-password").value,
       add: !!state.addingAccount,
     });
     if (state.addingAccount) return location.reload();
     $("login-password").value = "";
+    askedToSignIn = false;
     setAccount($("login-email").value.trim());
     await openBoard();
   } catch (e) {
@@ -1948,9 +2180,16 @@ function orderedFolders(includeHidden = false) {
   return includeHidden ? list : list.filter((f) => !folderPref(f.name)?.hidden);
 }
 
+/// Does this folder hold every email, like Gmail's All Mail?
+function isAllFolder(name) {
+  return state.folders.some((f) => f.name === name && f.kind === "all");
+}
+
 /// The folders an email or conversation is in: two tags at most, then how many more.
 function folderTags(members) {
-  const folders = [...new Set(members.map((m) => m.folder))];
+  let folders = [...new Set(members.map((m) => m.folder))];
+  // Gmail: under a label an email is also in All Mail, which says nothing more.
+  if (folders.some((f) => !isAllFolder(f))) folders = folders.filter((f) => !isAllFolder(f));
   const tags = folders.slice(0, 2).map(folderTag);
   if (folders.length > 2) {
     const more = el("span", "row-folder", `+${folders.length - 2}`);
@@ -2066,7 +2305,10 @@ async function runSearch() {
   let entries = [];
   const merge = (found) => {
     const byKey = new Map(entries.map((e) => [searchKey(e.card, e.folder), e]));
-    for (const e of found) byKey.set(searchKey(e.card, e.folder), e);
+    for (const e of found) {
+      const key = searchKey(e.card, e.folder);
+      if (!isAllFolder(e.folder) || !byKey.has(key)) byKey.set(key, e);
+    }
     entries = [...byKey.values()];
   };
   const show = () => {
@@ -2132,7 +2374,7 @@ async function searchWholeServer() {
   view.serverSearch = "running";
   renderCards(SEARCH_KEY);
   const query = parseQuery(view.search);
-  const folders = state.folders.filter((f) => f.selectable !== false).map((f) => f.name);
+  const folders = state.folders.filter((f) => f.selectable !== false && f.kind !== "view").map((f) => f.name);
   const found = new Map(state.cards[SEARCH_KEY].map((c) => [searchKey(c, c.__folder), c]));
   const failed = [];
   for (const [i, folder] of folders.entries()) {
@@ -2140,7 +2382,10 @@ async function searchWholeServer() {
     try {
       const entries = await invoke("search_emails", { query, inBody: true, folders: [folder], scope: "full" });
       if (!alive()) return;
-      for (const e of entries) found.set(searchKey(e.card, e.folder), { ...e.card, __folder: e.folder });
+      for (const e of entries) {
+        const key = searchKey(e.card, e.folder);
+        if (!isAllFolder(e.folder) || !found.has(key)) found.set(key, { ...e.card, __folder: e.folder });
+      }
       state.cards[SEARCH_KEY] = [...found.values()].sort((a, b) => b.date - a.date);
       renderCards(SEARCH_KEY);
     } catch (e) {

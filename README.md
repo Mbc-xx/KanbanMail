@@ -127,11 +127,12 @@ Written in Rust with [Tauri](https://tauri.app).
   read it, ⌄ closes it. Replies show › even when
   the rest of their conversation is in other folders. Archive, delete, pin and drag act
   on the whole conversation.
-- Several accounts (2.0 alpha): the address at the top of the sidebar switches
-  account or adds one. Each account has its own board, signatures, senders,
+- Several accounts (2.0 alpha, named Pigeonhole so that it can run next to
+  KanbanMail with its own accounts and data): the menu next to the connection light in the top bar
+  lists every account, each with an icon and color you choose and its unread Inbox emails, and adds new ones. Each account has its own board, signatures, senders,
   rules and Waiting column; appearance and behavior are shared. Only the account
-  in use is followed. Accounts sign in with a password: Microsoft and Gmail OAuth
-  are not supported yet.
+  in use is followed. iCloud, Gmail and Microsoft have their own choice on the
+  login screen: see [Mail services](#mail-services).
 - "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,
   Junk and Drafts too) in one list, each tagged with its folder; a conversation
   shows the tags of the folders it is in. What you type there searches every
@@ -272,6 +273,47 @@ To build the installable app (`.app` / `.dmg` on macOS):
 cd app
 npx tauri build
 ```
+
+## Mail services
+
+The login screen knows these services, so there are no servers to type:
+
+| Service | How it logs in | Notes |
+| --- | --- | --- |
+| iCloud | App-specific password, from account.apple.com | With a custom domain, also type your iCloud address |
+| Gmail | App password, or Sign in with Google | App passwords need 2-Step Verification, and work accounts may not have them |
+| Microsoft 365, Outlook.com | Sign in with Microsoft | The only way: Microsoft refuses passwords for IMAP |
+
+Signing in happens in your browser: the app never sees that password, and the
+keychain keeps only a token. If the service cancels it, the app asks you to sign
+in again.
+
+On Gmail a label is a folder. All Mail and search show each email under its
+labels, and under All Mail only when it has none. Starred and Important are
+skipped when searching, because they hold the same emails again. Gmail saves sent
+emails by itself; on iCloud and Microsoft the app checks and saves a copy only if
+it is missing.
+
+A work mailbox can still be closed by its administrator: IMAP or Authenticated
+SMTP may be off, or the app may need approval.
+
+### Building with browser sign-in
+
+Browser sign-in needs an application id, which each build brings its own. Without
+one, Sign in with Microsoft is off and Sign in with Google is not shown. Set these
+when building, and do not commit them:
+
+```bash
+KANBANMAIL_MICROSOFT_CLIENT_ID=... KANBANMAIL_GOOGLE_CLIENT_ID=... KANBANMAIL_GOOGLE_CLIENT_SECRET=... npx tauri build
+```
+
+- **Microsoft:** register an application in Microsoft Entra for accounts in any
+  organization and personal accounts, with a *Mobile and desktop* redirect URI
+  `http://localhost`, public client flows on, and the delegated permissions
+  `IMAP.AccessAsUser.All` and `SMTP.Send`.
+- **Google:** create a *Desktop app* OAuth client and add the scope
+  `https://mail.google.com/`. That scope is restricted: until Google verifies the
+  app, it allows 100 users and sign-ins in testing mode last 7 days.
 
 ## Settings
 

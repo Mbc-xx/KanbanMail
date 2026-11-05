@@ -110,7 +110,7 @@ fn body_key(folder: &str, uidvalidity: Option<u32>, card: &Card) -> String {
 
 /// The folder of the cache for an email address (one database per account).
 pub fn path_for(email: &str) -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "KanbanMail").context("cannot determine the cache folder")?;
+    let dirs = directories::ProjectDirs::from("", "", crate::account::APP_NAME).context("cannot determine the cache folder")?;
     Ok(dirs.cache_dir().join(format!("{}.sqlite", crate::account::safe_name(email))))
 }
 

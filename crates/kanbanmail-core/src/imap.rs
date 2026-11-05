@@ -21,13 +21,15 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session> {
         .map_err(|_| anyhow!("no answer from {} (offline or very slow connection)", account.server))?
 }
 
-async fn connect_now(account: &Account, password: &str) -> Result<Session> {
+/// TLS with the well-known certificate authorities.
+pub(crate) fn tls_config() -> ClientConfig {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let connector = TlsConnector::from(Arc::new(config));
+    ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
+}
+
+async fn connect_now(account: &Account, password: &str) -> Result<Session> {
+    let connector = TlsConnector::from(Arc::new(tls_config()));
 
     let tcp = TcpStream::connect((account.server.as_str(), account.port))
         .await
@@ -46,10 +48,41 @@ async fn connect_now(account: &Account, password: &str) -> Result<Session> {
         .await
         .context("no greeting from the IMAP server")?;
 
-    client
-        .login(&account.email, password)
-        .await
-        .map_err(|(e, _)| anyhow!("login rejected: {e}"))
+    let help = account.provider().login_help(account.oauth);
+    if !account.oauth {
+        return client
+            .login(account.imap_login(), password)
+            .await
+            .map_err(|(e, _)| anyhow!("login rejected: {e}.{help}"));
+    }
+    let token = crate::oauth::access_token(account).await?;
+    let auth = XOAuth2 { message: crate::oauth::xoauth2(account.imap_login(), &token), answered: false };
+    match client.authenticate("XOAUTH2", auth).await {
+        Ok(session) => Ok(session),
+        Err((e, _)) => {
+            // Perhaps revoked: the next attempt must not use it again.
+            crate::oauth::forget(&account.email).await;
+            Err(anyhow!("login rejected: {e}.{help}"))
+        }
+    }
+}
+
+/// SASL XOAUTH2: the first answer logs in. After a failure the server sends its
+/// reason and expects an empty line.
+struct XOAuth2 {
+    message: String,
+    answered: bool,
+}
+
+impl async_imap::Authenticator for XOAuth2 {
+    type Response = String;
+
+    fn process(&mut self, _challenge: &[u8]) -> String {
+        if std::mem::replace(&mut self.answered, true) {
+            return String::new();
+        }
+        std::mem::take(&mut self.message)
+    }
 }
 
 /// Lists the names of all IMAP folders.
@@ -368,6 +401,13 @@ pub async fn set_answered(session: &mut Session, folder: &str, uid: u32) -> Resu
     Ok(())
 }
 
+/// The folder holding every email (Gmail's All Mail), if the server has one.
+pub async fn all_mail_folder(session: &mut Session) -> Result<Option<String>> {
+    use async_imap::types::NameAttribute;
+    let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
+    Ok(names.iter().find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::All))).map(|n| n.name().to_string()))
+}
+
 /// Finds the sent-mail folder: the one the server marks \Sent, otherwise
 /// by name (Sent, Inviata, Sent Messages...). Creates it if missing.
 pub async fn sent_folder(session: &mut Session) -> Result<String> {
@@ -393,6 +433,12 @@ pub async fn sent_folder(session: &mut Session) -> Result<String> {
     Ok(resolved.into_iter().next().unwrap())
 }
 
+/// Is the email with this Message-ID already in the folder?
+pub async fn has_message(session: &mut Session, folder: &str, message_id: &str) -> Result<bool> {
+    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    Ok(!uids_by_message_id(session, message_id).await?.is_empty())
+}
+
 /// Saves a copy of a sent email to the given folder, already marked as read.
 pub async fn append_sent(session: &mut Session, folder: &str, raw: &[u8]) -> Result<()> {
     session
@@ -410,7 +456,8 @@ pub struct FolderInfo {
     pub label: String,
     /// Nesting level (0 = top level).
     pub depth: usize,
-    /// inbox, sent, trash, junk, drafts, archive or "".
+    /// inbox, sent, trash, junk, drafts, archive, all (every email, as in Gmail),
+    /// view (Gmail's Starred and Important: emails kept elsewhere) or "".
     pub kind: String,
     /// Whether the folder can hold emails (some are only containers).
     pub selectable: bool,
@@ -419,6 +466,9 @@ pub struct FolderInfo {
 
 fn folder_kind(name: &str, attrs: &[async_imap::types::NameAttribute<'_>], delim: &str) -> &'static str {
     use async_imap::types::NameAttribute as A;
+    if is_virtual(attrs) {
+        return "view";
+    }
     for a in attrs {
         match a {
             A::Sent => return "sent",
@@ -426,6 +476,7 @@ fn folder_kind(name: &str, attrs: &[async_imap::types::NameAttribute<'_>], delim
             A::Junk => return "junk",
             A::Drafts => return "drafts",
             A::Archive => return "archive",
+            A::All => return "all",
             _ => {}
         }
     }
@@ -434,9 +485,9 @@ fn folder_kind(name: &str, attrs: &[async_imap::types::NameAttribute<'_>], delim
     }
     let leaf = name.rsplit(delim).next().unwrap_or(name).to_lowercase();
     match leaf.as_str() {
-        "sent" | "sent items" | "sent messages" | "inviata" | "posta inviata" => "sent",
-        "trash" | "deleted messages" | "deleted items" | "cestino" | "eliminati" => "trash",
-        "junk" | "spam" | "posta indesiderata" => "junk",
+        "sent" | "sent items" | "sent messages" | "sent mail" | "inviata" | "posta inviata" => "sent",
+        "trash" | "deleted messages" | "deleted items" | "cestino" | "eliminati" | "posta eliminata" => "trash",
+        "junk" | "junk email" | "junk e-mail" | "spam" | "posta indesiderata" => "junk",
         "drafts" | "bozze" => "drafts",
         "archive" | "archivio" => "archive",
         _ => "",
@@ -714,18 +765,36 @@ fn imap_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Every folder that can hold emails, Trash, Junk and Drafts included.
+/// Is this a view of emails kept elsewhere? Gmail lists Starred and Important as
+/// folders; going through them would only find the same emails again.
+fn is_virtual(attrs: &[async_imap::types::NameAttribute<'_>]) -> bool {
+    use async_imap::types::NameAttribute as A;
+    attrs.iter().any(|a| match a {
+        A::Flagged => true,
+        A::Extension(name) => name.eq_ignore_ascii_case("\\Important"),
+        _ => false,
+    })
+}
+
+/// Search order: INBOX first, where most results are, and the folder of every
+/// email last, so that a label found earlier says where an email is.
+fn search_rank(name: &str, is_all: bool) -> (bool, bool, String) {
+    (is_all, !name.eq_ignore_ascii_case("INBOX"), name.to_lowercase())
+}
+
+/// Every folder that can hold emails, Trash, Junk and Drafts included. The folder
+/// holding every email (Gmail's All Mail) comes last, when there is one.
 pub async fn searchable_folders(session: &mut Session) -> Result<Vec<String>> {
     use async_imap::types::NameAttribute;
     let names: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
-    let mut out: Vec<String> = names
+    let mut out: Vec<(String, bool)> = names
         .iter()
         .filter(|n| !n.attributes().iter().any(|a| matches!(a, NameAttribute::NoSelect)))
-        .map(|n| n.name().to_string())
+        .filter(|n| !is_virtual(n.attributes()))
+        .map(|n| (n.name().to_string(), n.attributes().iter().any(|a| matches!(a, NameAttribute::All))))
         .collect();
-    // INBOX first: it is where most results are.
-    out.sort_by_key(|n| (!n.eq_ignore_ascii_case("INBOX"), n.to_lowercase()));
-    Ok(out)
+    out.sort_by_key(|(name, is_all)| search_rank(name, *is_all));
+    Ok(out.into_iter().map(|(name, _)| name).collect())
 }
 
 /// What the search box asks for: words to find anywhere, plus words that must be
@@ -843,6 +912,12 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
     Ok(out)
 }
 
+/// Unread emails in the Inbox.
+pub async fn inbox_unread(session: &mut Session) -> Result<u32> {
+    let mb = session.status("INBOX", "(UNSEEN)").await.context("STATUS INBOX failed")?;
+    Ok(mb.unseen.unwrap_or(0))
+}
+
 /// A cheap fingerprint of a folder (count, next UID, unread count and, with
 /// CONDSTORE, the modification sequence that also changes on flag updates).
 /// When it changes, something happened in the folder.
@@ -858,6 +933,7 @@ pub async fn folder_fingerprint(session: &mut Session, folder: &str, caps: Serve
 pub async fn load_all_mail(
     session: &mut Session,
     folders: &[String],
+    all_folder: Option<&str>,
     caches: &mut std::collections::HashMap<String, FolderCache>,
     total: u32,
 ) -> Result<Vec<ThreadEntry>> {
@@ -868,6 +944,7 @@ pub async fn load_all_mail(
         date: i64,
         flagged: bool,
         seen: bool,
+        size: u32,
     }
     let mut rows = Vec::new();
     for folder in folders {
@@ -882,7 +959,7 @@ pub async fn load_all_mail(
         }
         let start = mailbox.exists.saturating_sub(total.max(1) - 1).max(1);
         let fetched: Vec<_> = session
-            .fetch(format!("{start}:*"), "(UID FLAGS INTERNALDATE)")
+            .fetch(format!("{start}:*"), "(UID FLAGS INTERNALDATE RFC822.SIZE)")
             .await
             .with_context(|| format!("reading {folder} failed"))?
             .try_collect()
@@ -895,8 +972,16 @@ pub async fn load_all_mail(
                 date: f.internal_date().map(|d| d.timestamp()).unwrap_or(0),
                 flagged: f.flags().any(|x| matches!(x, Flag::Flagged)),
                 seen: f.flags().any(|x| matches!(x, Flag::Seen)),
+                size: f.size.unwrap_or(0),
             });
         }
+    }
+    // Gmail: an email with a label is also in All Mail, with the same date and size.
+    // The copy under the label stays: it says where the email is.
+    if let Some(all) = all_folder {
+        let labelled: std::collections::HashSet<(i64, u32)> =
+            rows.iter().filter(|r| r.folder != all).map(|r| (r.date, r.size)).collect();
+        rows.retain(|r| r.folder != all || !labelled.contains(&(r.date, r.size)));
     }
     rows.sort_by_key(|a| std::cmp::Reverse(a.date));
     rows.truncate(total as usize);
@@ -982,6 +1067,30 @@ pub async fn empty_folder(session: &mut Session, kind: &str) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folder_of_every_email_is_searched_last() {
+        let mut list = [("[Gmail]/All Mail", true), ("Work", false), ("INBOX", false), ("Archive", false)];
+        list.sort_by_key(|(name, all)| search_rank(name, *all));
+        assert_eq!(list.iter().map(|x| x.0).collect::<Vec<_>>(), ["INBOX", "Archive", "Work", "[Gmail]/All Mail"]);
+    }
+
+    #[test]
+    fn xoauth2_answers_once_then_closes_the_exchange() {
+        use async_imap::Authenticator;
+        let mut auth = XOAuth2 { message: "login".into(), answered: false };
+        assert_eq!(auth.process(b""), "login");
+        // The server's reason for refusing: it expects an empty line.
+        assert_eq!(auth.process(b"{\"status\":\"400\"}"), "");
+    }
+
+    #[test]
+    fn stars_and_important_are_only_views() {
+        use async_imap::types::NameAttribute as A;
+        assert!(is_virtual(&[A::Flagged]));
+        assert!(is_virtual(&[A::Extension("\\Important".into())]));
+        assert!(!is_virtual(&[A::Sent, A::Extension("\\HasNoChildren".into())]));
+    }
 
     #[test]
     fn quoting_and_or_chains() {

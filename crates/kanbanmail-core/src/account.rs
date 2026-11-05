@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
@@ -25,6 +26,76 @@ pub struct Account {
     /// 465 = SSL/TLS diretto, 587 = STARTTLS.
     #[serde(default = "default_smtp_port")]
     pub smtp_port: u16,
+    /// Login name, when it is not the address (iCloud with a custom domain, the
+    /// work name of a Microsoft account).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// Signed in with the browser: the keychain holds a refresh token, not a password.
+    #[serde(default)]
+    pub oauth: bool,
+}
+
+/// The mail services with their own rules. Everything else is a plain IMAP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Other,
+    Icloud,
+    Gmail,
+    Microsoft,
+}
+
+/// Who writes the copy of a sent email in the Sent folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SentCopy {
+    /// The app.
+    App,
+    /// The server, always: another copy would be a duplicate.
+    Server,
+    /// The server, depending on the account: look first, then save if it is missing.
+    Check,
+}
+
+impl Provider {
+    /// Recognised from the IMAP server, so accounts saved earlier count too.
+    pub fn of(server: &str) -> Provider {
+        match server.trim().to_lowercase().as_str() {
+            "imap.mail.me.com" => Provider::Icloud,
+            "imap.gmail.com" | "imap.googlemail.com" => Provider::Gmail,
+            "outlook.office365.com" | "imap-mail.outlook.com" => Provider::Microsoft,
+            _ => Provider::Other,
+        }
+    }
+
+    /// IMAP server, SMTP server and SMTP port.
+    pub fn servers(self) -> Option<(&'static str, &'static str, u16)> {
+        match self {
+            Provider::Other => None,
+            Provider::Icloud => Some(("imap.mail.me.com", "smtp.mail.me.com", 587)),
+            Provider::Gmail => Some(("imap.gmail.com", "smtp.gmail.com", 465)),
+            Provider::Microsoft => Some(("outlook.office365.com", "smtp.office365.com", 587)),
+        }
+    }
+
+    pub fn sent_copy(self) -> SentCopy {
+        match self {
+            Provider::Gmail => SentCopy::Server,
+            Provider::Microsoft | Provider::Icloud => SentCopy::Check,
+            Provider::Other => SentCopy::App,
+        }
+    }
+
+    /// What to do when the server refuses the login. These words end up in errors:
+    /// no "connection" or "network", or the app would think it is offline.
+    pub fn login_help(self, oauth: bool) -> &'static str {
+        match (self, oauth) {
+            (Provider::Icloud, _) => " iCloud needs an app-specific password, created at account.apple.com, not your Apple Account password. With a custom domain, the username is your iCloud address.",
+            (Provider::Gmail, false) => " Gmail needs an app password, created at myaccount.google.com/apppasswords after turning on 2-Step Verification, not your Google password.",
+            (Provider::Gmail, true) => " Your Google Workspace administrator may have turned off IMAP or this app.",
+            (Provider::Microsoft, _) => " IMAP may be turned off: in Outlook.com under Settings → Mail → Forwarding and IMAP, or by the administrator of a work mailbox.",
+            (Provider::Other, _) => "",
+        }
+    }
 }
 
 fn default_port() -> u16 {
@@ -35,27 +106,61 @@ fn default_smtp_port() -> u16 {
     465
 }
 
-/// Main configuration folder, e.g. `~/Library/Application Support/KanbanMail` on macOS.
-fn root_dir() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "KanbanMail")
-        .context("cannot determine the configuration folder")?;
-    let dir = dirs.config_dir().to_path_buf();
-    // The app used to be called MailMau: on first run, move the old files over.
-    if !dir.exists() {
-        if let Some(old) = directories::ProjectDirs::from("", "", OLD_APP_NAME) {
-            if old.config_dir().exists() {
-                std::fs::rename(old.config_dir(), &dir).ok();
-            }
-        }
-    }
-    Ok(dir)
-}
+/// Name of this app for the system: configuration folder and keychain. It differs
+/// from the stable KanbanMail, so that the two can run side by side without sharing
+/// accounts, boards or local copies.
+pub(crate) const APP_NAME: &str = "Pigeonhole";
 
-/// Previous app name, used only to recover saved data.
-pub(crate) const OLD_APP_NAME: &str = concat!("Mail", "Mau");
+/// Main configuration folder, e.g. `~/Library/Application Support/Pigeonhole` on macOS.
+fn root_dir() -> Result<PathBuf> {
+    let dirs = directories::ProjectDirs::from("", "", APP_NAME)
+        .context("cannot determine the configuration folder")?;
+    Ok(dirs.config_dir().to_path_buf())
+}
 
 /// File in the main folder naming the account in use (absent for the first account).
 const ACTIVE_FILE: &str = "active-account";
+
+/// File in the main folder with the icon chosen for each account. It sits outside
+/// the accounts so that the menu reads one file and logging in again keeps the choice.
+const LOOKS_FILE: &str = "account-icons.toml";
+
+/// How an account appears in the account menu; empty fields mean its initial and
+/// the color that comes from its address.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Look {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// A damaged file only costs the icons, so it never stops the app.
+fn read_looks(root: &Path) -> BTreeMap<String, Look> {
+    std::fs::read_to_string(root.join(LOOKS_FILE)).ok().and_then(|text| toml::from_str(&text).ok()).unwrap_or_default()
+}
+
+fn write_look(root: &Path, email: &str, look: Look) -> Result<()> {
+    let mut looks = read_looks(root);
+    let key = email.to_lowercase();
+    if look == Look::default() {
+        looks.remove(&key);
+    } else {
+        looks.insert(key, look);
+    }
+    let path = root.join(LOOKS_FILE);
+    std::fs::write(&path, toml::to_string_pretty(&looks)?).with_context(|| format!("writing {}", path.display()))
+}
+
+/// The chosen icons, by lowercase address.
+pub fn looks() -> Result<BTreeMap<String, Look>> {
+    Ok(read_looks(&root_dir()?))
+}
+
+/// Sets the icon of an account; an empty [`Look`] goes back to the initial.
+pub fn set_look(email: &str, look: Look) -> Result<()> {
+    write_look(&root_dir()?, email, look)
+}
 
 /// An email address as a file name.
 pub(crate) fn safe_name(email: &str) -> String {
@@ -181,7 +286,32 @@ fn account_path() -> Result<PathBuf> {
 
 impl Account {
     pub fn new(server: String, email: String) -> Account {
-        Account { server, port: 993, email, display_name: None, smtp_server: None, smtp_port: 465 }
+        let known = Provider::of(&server).servers();
+        Account {
+            server,
+            port: 993,
+            email,
+            display_name: None,
+            smtp_server: known.map(|(_, smtp, _)| smtp.to_string()),
+            smtp_port: known.map_or(465, |(_, _, port)| port),
+            username: None,
+            oauth: false,
+        }
+    }
+
+    pub fn provider(&self) -> Provider {
+        Provider::of(&self.server)
+    }
+
+    /// The name to log in with on the IMAP server.
+    pub fn imap_login(&self) -> &str {
+        self.username.as_deref().filter(|u| !u.is_empty()).unwrap_or(&self.email)
+    }
+
+    /// The name to log in with on the SMTP server: iCloud wants a whole address
+    /// there, also where IMAP takes only the part before the @.
+    pub fn smtp_login(&self) -> &str {
+        Some(self.imap_login()).filter(|u| u.contains('@')).unwrap_or(&self.email)
     }
 
     pub fn smtp_host(&self) -> &str {
@@ -208,6 +338,58 @@ mod tests {
     fn write_account(dir: &Path, email: &str) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("account.toml"), format!("server = \"mail.example.com\"\nemail = \"{email}\"\n")).unwrap();
+    }
+
+    #[test]
+    fn account_icons_are_kept_by_address() {
+        let root = std::env::temp_dir().join(format!("kanbanmail-looks-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let look = Look { icon: Some("🏠".into()), color: Some("#43a07a".into()) };
+        write_look(&root, "Me@Example.com", look.clone()).unwrap();
+        write_look(&root, "other@example.com", Look { icon: Some("AB".into()), color: None }).unwrap();
+        assert_eq!(read_looks(&root).get("me@example.com"), Some(&look));
+        write_look(&root, "ME@example.com", Look::default()).unwrap();
+        let left = read_looks(&root);
+        assert_eq!(left.keys().collect::<Vec<_>>(), ["other@example.com"]);
+        std::fs::write(root.join(LOOKS_FILE), "not toml =").unwrap();
+        assert!(read_looks(&root).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn known_services_get_their_servers() {
+        let icloud = Account::new("imap.mail.me.com".into(), "a@icloud.com".into());
+        assert_eq!((icloud.smtp_host(), icloud.smtp_port), ("smtp.mail.me.com", 587));
+        let other = Account::new("mail.example.com".into(), "a@example.com".into());
+        assert_eq!((other.smtp_host(), other.smtp_port), ("mail.example.com", 465));
+        assert_eq!(Provider::of(" IMAP.Gmail.com "), Provider::Gmail);
+    }
+
+    #[test]
+    fn a_short_username_is_not_used_for_smtp() {
+        let mut a = Account::new("imap.mail.me.com".into(), "me@mydomain.com".into());
+        assert_eq!((a.imap_login(), a.smtp_login()), ("me@mydomain.com", "me@mydomain.com"));
+        a.username = Some("me".into());
+        assert_eq!((a.imap_login(), a.smtp_login()), ("me", "me@mydomain.com"));
+        a.username = Some("me@icloud.com".into());
+        assert_eq!((a.imap_login(), a.smtp_login()), ("me@icloud.com", "me@icloud.com"));
+    }
+
+    #[test]
+    fn accounts_saved_earlier_still_load() {
+        let a: Account = toml::from_str("server = \"imap.gmail.com\"\nemail = \"a@gmail.com\"\n").unwrap();
+        assert!(!a.oauth && a.username.is_none());
+        assert_eq!(a.provider(), Provider::Gmail);
+    }
+
+    #[test]
+    fn login_help_does_not_look_like_being_offline() {
+        for p in [Provider::Icloud, Provider::Gmail, Provider::Microsoft] {
+            for oauth in [false, true] {
+                let text = p.login_help(oauth).to_lowercase();
+                assert!(!["connection", "network", "offline", "cannot reach"].iter().any(|k| text.contains(k)));
+            }
+        }
     }
 
     #[test]

@@ -99,10 +99,11 @@ async fn main() -> Result<()> {
 
     if std::env::args().nth(1).as_deref() == Some("allmail") {
         let folders = imap::searchable_folders(&mut session).await?;
+        let every = imap::all_mail_folder(&mut session).await?;
         let mut caches = std::collections::HashMap::new();
         for round in ["first load", "second load (cached)"] {
             let started = std::time::Instant::now();
-            let all = imap::load_all_mail(&mut session, &folders, &mut caches, 200).await?;
+            let all = imap::load_all_mail(&mut session, &folders, every.as_deref(), &mut caches, 200).await?;
             let mut per_folder: std::collections::BTreeMap<&str, usize> = Default::default();
             for e in &all {
                 *per_folder.entry(e.folder.as_str()).or_default() += 1;

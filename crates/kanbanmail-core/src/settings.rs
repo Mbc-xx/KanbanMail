@@ -130,6 +130,9 @@ impl Sender {
             display_name: (!name.is_empty()).then(|| name.to_string()),
             smtp_server: Some(self.smtp_server.clone()),
             smtp_port: self.smtp_port,
+            // Senders always log in with their own password.
+            username: None,
+            oauth: false,
         }
     }
 

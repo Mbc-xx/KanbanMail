@@ -4,11 +4,11 @@
 mod contacts;
 
 use kanbanmail_core::{
-    account::{self, Account},
+    account::{self, Account, Provider, SentCopy},
     board::{board_path, Board},
     imap::{self, FolderCache, ServerCaps, Session},
     message::{Card, MessageView},
-    secret,
+    oauth, secret,
     settings::{Sender, Settings},
     smtp::{self, Draft},
     store::Store,
@@ -42,6 +42,13 @@ const OFFLINE_PAUSE: Duration = Duration::from_secs(30);
 /// Longest wait for one server operation on a slow connection.
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long a server that may save sent emails by itself gets to do it.
+const SENT_COPY_WAIT: Duration = Duration::from_secs(2);
+/// Personal Microsoft accounts send through this server, work ones through Microsoft 365.
+const MICROSOFT_PERSONAL_SMTP: &str = "smtp-mail.outlook.com";
+/// Error of a sign-in given up by the user: the UI shows nothing for it.
+const CANCELLED: &str = "cancelled";
+
 /// The error means the server could not be reached (not that it refused the action).
 fn is_offline(e: &str) -> bool {
     let e = e.to_lowercase();
@@ -74,6 +81,8 @@ struct AppState {
     store: std::sync::Mutex<Option<Store>>,
     /// Held while the waiting changes are being sent (one replay at a time).
     replaying: Mutex<()>,
+    /// Stops a sign-in waiting for the browser.
+    sign_in_cancel: tokio::sync::Notify,
 }
 
 impl AppState {
@@ -183,46 +192,70 @@ struct Status {
     configured: bool,
     email: Option<String>,
     server: Option<String>,
+    provider: Provider,
+    oauth: bool,
 }
 
-/// Is the account already saved (file + keychain)?
+/// Is the account already saved (file + keychain)? Accounts signed in with the
+/// browser have no password in the app: `password` stays empty for them.
 #[tauri::command]
 async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
     let acc = Account::load().map_err(err)?;
     let mut inner = state.inner.lock().await;
     let configured = match &acc {
-        Some(a) => match secret::get_password(&a.email).map_err(err)? {
-            Some(pw) => {
+        Some(a) => {
+            let password = if a.oauth {
+                secret::get_refresh_token(&a.email).map_err(err)?.map(|_| String::new())
+            } else {
+                secret::get_password(&a.email).map_err(err)?
+            };
+            let saved = password.is_some();
+            if saved {
                 inner.account = Some(a.clone());
-                inner.password = Some(pw);
+                inner.password = password;
                 state.open_store(&a.email);
-                true
             }
-            None => false,
-        },
+            saved
+        }
         None => false,
     };
     Ok(Status {
         configured,
         email: acc.as_ref().map(|a| a.email.clone()),
         server: acc.as_ref().map(|a| a.server.clone()),
+        provider: acc.as_ref().map_or(Provider::Other, Account::provider),
+        oauth: acc.as_ref().is_some_and(|a| a.oauth),
     })
 }
 
-/// Tries to log in; on success saves server and email to file and the password to the keychain.
-/// With `add` the mailbox becomes a new account, next to the existing ones.
-#[tauri::command]
-async fn login(server: String, email: String, password: String, add: bool, state: State<'_, AppState>) -> CmdResult<()> {
-    let account = Account::new(server.trim().to_string(), email.trim().to_string());
-    let same = |a: &Account| a.email.eq_ignore_ascii_case(&account.email);
+/// Can this address log in now? With `add` it must be new, otherwise it must be
+/// the account in use.
+fn check_login_allowed(email: &str, add: bool) -> CmdResult<()> {
+    let same = |a: &Account| a.email.eq_ignore_ascii_case(email);
     if add && account::list().map_err(err)?.iter().any(same) {
-        return Err(format!("{} is already connected", account.email));
+        return Err(format!("{email} is already connected"));
     }
     if !add && account::is_extra() && !Account::load().map_err(err)?.is_some_and(|a| same(&a)) {
         return Err("To use another address, add it as a new account".into());
     }
-    let mut session = imap::connect(&account, &password).await.map_err(err)?;
+    Ok(())
+}
+
+/// Makes a working login the account in use, as a new one with `add`.
+async fn finish_login(
+    account: Account,
+    mut session: Session,
+    password: String,
+    add: bool,
+    save_secret: impl FnOnce() -> anyhow::Result<()>,
+    state: &AppState,
+) -> CmdResult<()> {
+    let mut account = account;
     let caps = imap::server_caps(&mut session).await.map_err(err)?;
+    // Logging in again must not lose the name set in the settings.
+    if let Some(saved) = Account::load().map_err(err)?.filter(|a| !add && a.email.eq_ignore_ascii_case(&account.email)) {
+        account.display_name = saved.display_name;
+    }
     if add {
         let shared = Settings::load().map_err(err)?;
         state.stop_account().await;
@@ -230,17 +263,116 @@ async fn login(server: String, email: String, password: String, add: bool, state
         Settings::default().with_shared_from(&shared).save().map_err(err)?;
     }
     account.save().map_err(err)?;
-    secret::set_password(&account.email, &password).map_err(err)?;
+    save_secret().map_err(err)?;
     state.open_store(&account.email);
     let mut inner = state.inner.lock().await;
     *inner = Inner { account: Some(account), password: Some(password), session: Some(session), caps, ..Default::default() };
     Ok(())
 }
 
-/// The addresses of every account, the first one first.
+/// Tries to log in; on success saves server and email to file and the password to the keychain.
+/// With `add` the mailbox becomes a new account, next to the existing ones.
 #[tauri::command]
-fn list_accounts() -> CmdResult<Vec<String>> {
-    Ok(account::list().map_err(err)?.into_iter().map(|a| a.email).collect())
+async fn login(server: String, email: String, username: Option<String>, password: String, add: bool, state: State<'_, AppState>) -> CmdResult<()> {
+    let mut account = Account::new(server.trim().to_string(), email.trim().to_string());
+    account.username = username.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    check_login_allowed(&account.email, add)?;
+    // Google shows app passwords in groups, and people copy the spaces too.
+    let password = match account.provider() {
+        Provider::Gmail => password.split_whitespace().collect(),
+        _ => password,
+    };
+    let session = match imap::connect(&account, &password).await {
+        Ok(session) => session,
+        // iCloud may want only the part before the @.
+        Err(first) if account.provider() == Provider::Icloud && account.username.is_none() => {
+            account.username = account.email.split('@').next().map(String::from);
+            imap::connect(&account, &password).await.map_err(|_| err(first))?
+        }
+        Err(e) => return Err(err(e)),
+    };
+    let email = account.email.clone();
+    let keep = password.clone();
+    finish_login(account, session, password, add, move || secret::set_password(&email, &keep), &state).await
+}
+
+/// The services this build can sign in to with the browser.
+#[tauri::command]
+fn oauth_providers() -> Vec<Provider> {
+    oauth::available()
+}
+
+/// Signs in with the system browser and returns the address.
+/// `email` may be empty: the service then says who it is.
+#[tauri::command]
+async fn oauth_sign_in(provider: Provider, email: String, add: bool, state: State<'_, AppState>) -> CmdResult<String> {
+    let typed = email.trim().to_string();
+    let signed = tokio::select! {
+        r = oauth::sign_in(provider, &typed, open_in_browser) => r.map_err(err)?,
+        _ = state.sign_in_cancel.notified() => return Err(CANCELLED.into()),
+    };
+    if signed.email.is_empty() && typed.is_empty() {
+        return Err("The service did not say which address signed in: type it and try again".into());
+    }
+    // Google signs in one address. Microsoft's sign-in name may differ from the
+    // mailbox address, and then the typed address is the one that counts.
+    if provider == Provider::Gmail && !typed.is_empty() && !typed.eq_ignore_ascii_case(&signed.email) {
+        return Err(format!("You signed in as {}, not {typed}", signed.email));
+    }
+    let email = if typed.is_empty() { signed.email.clone() } else { typed };
+    check_login_allowed(&email, add)?;
+    let (imap_server, smtp_server, _) = provider.servers().ok_or("this service has no browser sign-in")?;
+    let mut account = Account::new(imap_server.to_string(), email.clone());
+    account.oauth = true;
+    account.username = Some(signed.email.clone()).filter(|u| !u.is_empty() && !u.eq_ignore_ascii_case(&email));
+    account.smtp_server = Some(if signed.personal { MICROSOFT_PERSONAL_SMTP } else { smtp_server }.to_string());
+    let session = imap::connect(&account, "").await.map_err(err)?;
+    let refresh = signed.refresh_token;
+    finish_login(account, session, String::new(), add, || secret::set_refresh_token(&email, &refresh), &state).await?;
+    Ok(email)
+}
+
+/// Gives up on the sign-in waiting for the browser.
+#[tauri::command]
+fn cancel_sign_in(state: State<'_, AppState>) {
+    state.sign_in_cancel.notify_waiters();
+}
+
+#[derive(Serialize)]
+struct AccountEntry {
+    email: String,
+    #[serde(flatten)]
+    look: account::Look,
+}
+
+/// Every account with its icon, the first one first.
+#[tauri::command]
+fn list_accounts() -> CmdResult<Vec<AccountEntry>> {
+    let mut looks = account::looks().map_err(err)?;
+    let entry = |a: Account| AccountEntry { look: looks.remove(&a.email.to_lowercase()).unwrap_or_default(), email: a.email };
+    Ok(account::list().map_err(err)?.into_iter().map(entry).collect())
+}
+
+/// Unread Inbox emails of any account, over a short connection of its own.
+/// None when they cannot be read: it is only a number in a menu, so a failure
+/// (offline, sign-in expired) is never reported as a problem of the account in use.
+#[tauri::command]
+async fn account_unread(email: String) -> Option<u32> {
+    let account = account::list().ok()?.into_iter().find(|a| a.email == email)?;
+    let password = if account.oauth { String::new() } else { secret::get_password(&email).ok()?? };
+    let check = async {
+        let mut session = imap::connect(&account, &password).await?;
+        let unread = imap::inbox_unread(&mut session).await;
+        tokio::time::timeout(Duration::from_secs(3), session.logout()).await.ok();
+        unread
+    };
+    tokio::time::timeout(OPERATION_TIMEOUT, check).await.ok()?.ok()
+}
+
+/// Chooses the icon of an account.
+#[tauri::command]
+fn set_account_look(email: String, look: account::Look) -> CmdResult<()> {
+    account::set_look(&email, look).map_err(err)
 }
 
 /// Moves to another account. The interface then starts again from `get_status`.
@@ -274,6 +406,9 @@ async fn forget_account(state: State<'_, AppState>) -> CmdResult<()> {
     for address in addresses.iter().filter(|a| !password_in_use(a)) {
         secret::delete_password(address).map_err(err)?;
     }
+    secret::delete_refresh_token(&acc.email).map_err(err)?;
+    oauth::forget(&acc.email).await;
+    account::set_look(&acc.email, account::Look::default()).ok();
     Ok(())
 }
 
@@ -895,10 +1030,23 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
     let raw = smtp::build_sent_copy(&account, &draft, signature.as_ref())
         .map(|m| m.formatted())
         .unwrap_or_else(|_| message.formatted());
+    // From an extra sender the mailbox's server never saw the email.
+    let copy = if sender.is_some() { SentCopy::App } else { main.provider().sent_copy() };
+    if copy == SentCopy::Check {
+        tokio::time::sleep(SENT_COPY_WAIT).await;
+    }
+    let sent_id = draft.message_id.clone().unwrap_or_default();
     let mut inner = state.inner.lock().await;
     let saved: Result<String, String> = with_retry!(inner, |s, _caps| async {
         let folder = imap::sent_folder(s).await?;
-        imap::append_sent(s, &folder, &raw).await?;
+        let there = match copy {
+            SentCopy::App => false,
+            SentCopy::Server => true,
+            SentCopy::Check => imap::has_message(s, &folder, &sent_id).await?,
+        };
+        if !there {
+            imap::append_sent(s, &folder, &raw).await?;
+        }
         Ok(folder)
     });
     if let Some(r) = reply {
@@ -1206,7 +1354,8 @@ async fn load_all_mail(state: State<'_, AppState>) -> CmdResult<Vec<imap::Thread
     let mut caches = std::mem::take(&mut inner.caches);
     let res = with_retry!(inner, |s, _caps| async {
         let folders = imap::searchable_folders(s).await?;
-        imap::load_all_mail(s, &folders, &mut caches, 200).await
+        let all = imap::all_mail_folder(s).await?;
+        imap::load_all_mail(s, &folders, all.as_deref(), &mut caches, 200).await
     });
     inner.caches = caches;
     if let Ok(entries) = &res {
@@ -1520,7 +1669,12 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             login,
+            oauth_providers,
+            oauth_sign_in,
+            cancel_sign_in,
             list_accounts,
+            set_account_look,
+            account_unread,
             switch_account,
             forget_account,
             open_board,
@@ -1570,7 +1724,7 @@ fn main() {
             system_contacts
         ])
         .run(tauri::generate_context!())
-        .expect("error while starting KanbanMail");
+        .expect("error while starting Pigeonhole");
 }
 
 #[cfg(test)]
