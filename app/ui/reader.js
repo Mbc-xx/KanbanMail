@@ -430,6 +430,7 @@ async function openReader(folder, card, opts = {}) {
   $("reader-to").textContent = "";
   $("reader-cc").textContent = "";
   $("reader-unsubscribe").hidden = true;
+  $("quick-reply").hidden = true;
   $("reader-cc").hidden = $("reader-cc-label").hidden = true;
   $("reader-date").textContent = formatDate(card.date, true);
   $("reader-toggle").hidden = true;
@@ -447,6 +448,7 @@ async function openReader(folder, card, opts = {}) {
     renderPeople($("reader-to"), msg.to);
     renderPeople($("reader-cc"), msg.cc);
     $("reader-unsubscribe").hidden = !msg.unsubscribe;
+    showQuickReply();
     $("reader-cc").hidden = $("reader-cc-label").hidden = !msg.cc;
     $("reader-reply").disabled = $("reader-reply-all").disabled = false;
     if (readerCard?.card === card) startSeenTimer(folder, card);

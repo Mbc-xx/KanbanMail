@@ -219,6 +219,15 @@
             <button id="reader-toggle" hidden></button>
           </div>
           <div id="reader-body" class="reader-body"></div>
+          <div id="quick-reply" class="quick-reply" hidden>
+            <textarea id="quick-reply-text" rows="2" spellcheck="true"></textarea>
+            <div class="quick-reply-bar">
+              <button type="button" id="quick-reply-templates" class="icon-btn" title="Saved replies"><svg class="icon"><use href="#i-list"/></svg></button>
+              <span class="spacer"></span>
+              <button type="button" id="quick-reply-open" title="Continue in the full editor (formatting, attachments, recipients)">Open in editor</button>
+              <button type="button" id="quick-reply-send" class="primary" title="Send the reply (⌘↵)">Send</button>
+            </div>
+          </div>
         </section>
         <div id="thread-after" class="thread" hidden></div>
         <div id="reader-spacer" aria-hidden="true"></div>
@@ -242,6 +251,7 @@
       </div>
       <div class="compose-tools">
         <button type="button" id="compose-attach" title="Attach files (or drop them here)"><svg class="icon"><use href="#i-paperclip"/></svg><span>Attach</span></button>
+        <button type="button" id="compose-templates" title="Put in a saved reply"><svg class="icon"><use href="#i-list"/></svg><span>Saved replies</span></button>
         <div class="segmented" role="radiogroup" aria-label="Format">
           <button type="button" id="fmt-plain" role="radio">Plain</button>
           <button type="button" id="fmt-md" role="radio" title="**bold**, *italic*, lists, [links](https://…), tables and inline HTML">Markdown</button>
@@ -534,6 +544,10 @@
             </select>
           </label>
           <p class="muted small">After "Send" the email waits this long with an "Undo" button, which brings it back to the composer. If the app is closed in the meantime, the email stays in Drafts.</p>
+          <h3 class="settings-sub">Saved replies</h3>
+          <p class="muted small">Texts written once and put in an email with “Saved replies” while writing, or in a quick reply. Drag to reorder.</p>
+          <div id="template-prefs" class="rule-prefs"></div>
+          <div class="settings-buttons"><button type="button" id="add-template">+ Add a saved reply</button></div>
           <label class="toggle"><input id="set-contacts" type="checkbox"> Suggest addresses from the address book (macOS Contacts)</label>
           <div class="contacts-status">
             <span id="contacts-status" class="muted small"></span>

@@ -1237,3 +1237,17 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* People in an open email: a click opens the contact menu. */
 .person, #reader-from, #reader-from-address { cursor: pointer; border-radius: 3px; }
 .person:hover, #reader-from:hover, #reader-from-address:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+/* Quick reply under the open email. */
+.quick-reply { margin: 10px 0 2px; padding: 8px; border: var(--hairline) solid var(--edge); border-radius: var(--r-m); background: var(--panel); }
+.quick-reply[hidden] { display: none; }
+.quick-reply textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 44px; font: inherit; font-size: 14px; padding: 6px 8px; color: var(--text); background: var(--field); border: var(--hairline) solid var(--edge); border-radius: var(--r-s); }
+.quick-reply textarea:focus { outline: none; border-color: var(--accent); }
+.quick-reply-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+/* Saved replies in the settings. */
+.template-pref { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: start; padding: 6px; border-radius: var(--r-s); cursor: grab; }
+.template-pref:hover { background: var(--panel); }
+.template-fields { display: flex; flex-direction: column; gap: 4px; }
+.template-pref input, .template-pref textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; }
+.template-pref.dragging { opacity: 0.4; }
+.template-pref.drop-before { box-shadow: 0 -2px 0 var(--accent); }
+.template-pref.drop-after { box-shadow: 0 2px 0 var(--accent); }

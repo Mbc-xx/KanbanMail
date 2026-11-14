@@ -9,7 +9,7 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 directories = "6.0.0"
 drag = "2.1.1"
-kanbanmail-core = { version = "2.9.0", path = "../../crates/kanbanmail-core" }
+kanbanmail-core = { version = "2.10.0", path = "../../crates/kanbanmail-core" }
 rfd = "0.17"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -26,4 +26,4 @@ block2 = "0.6.2"
 objc2 = "0.6.5"
 objc2-contacts = { version = "0.3.2", features = ["CNContactStore", "CNContact", "CNContactFetchRequest", "CNLabeledValue", "CNContactFormatter", "CNContact_Predicates", "CNMutableContact", "CNSaveRequest", "block2"] }
 objc2-foundation = { version = "0.3.2", features = ["NSString", "NSArray", "NSError", "NSBundle"] }
-objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "bitflags", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger"] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = ["std", "block2", "bitflags", "UNUserNotificationCenter", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger", "UNNotificationResponse"] }

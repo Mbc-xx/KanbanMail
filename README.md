@@ -90,6 +90,13 @@ accounts and data. Internal names such as the `kanbanmail-core` crate and the
 - Fewer waits: pointing at an email for a moment starts downloading it, so the
   click opens it at once. Optionally (Settings → Reading), archiving, deleting,
   moving or snoozing the open email opens the next one instead of the list.
+- Quick reply: a field under the open email answers its sender without opening
+  the editor (⌘↵ sends, with signature, quote and the usual Undo); "Open in
+  editor" carries on with formatting, attachments and recipients.
+- Saved replies: texts written once in Settings → Writing and put in an email
+  with "Saved replies" while writing, or in a quick reply.
+- Clicking a notification brings Pigeonhole forward on that email (or on the
+  Inbox when several arrived).
 - Unsubscribe: newsletters and mailing lists that say how to leave get an
   Unsubscribe button in the reader; with one click when the list allows it,
   otherwise its page or a prepared email.

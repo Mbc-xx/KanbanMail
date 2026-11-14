@@ -637,9 +637,8 @@ function quote(msg) {
   return `\n\n${when ? "On " + when + ", " : ""}${msg.from} wrote:\n${quoted}\n`;
 }
 
-function replyTo(all) {
-  const msg = readerMessage;
-  if (!msg) return;
+/// Who and what a reply to `msg` goes to (from the open email).
+function replyFields(msg, all) {
   const me = state.email.toLowerCase();
   const to = msg.reply_address;
   const from = senderAmong(msg.all_recipients);
@@ -656,17 +655,128 @@ function replyTo(all) {
       .join(", ");
   }
   const subject = /^re:/i.test(msg.subject.trim()) ? msg.subject : "Re: " + msg.subject;
-  openComposer({
-    to,
-    cc,
-    subject,
-    body: signatureBlock(from) + quote(msg),
-    from,
-    reply: { folder: readerCard.folder, uid: readerCard.card.uid },
-    context: { in_reply_to: msg.message_id, references: msg.references },
-    title: all ? "Reply all" : "Reply",
+  return { to, cc, subject, from, reply: { folder: readerCard.folder, uid: readerCard.card.uid }, context: { in_reply_to: msg.message_id, references: msg.references } };
+}
+
+function replyTo(all, text = "") {
+  const msg = readerMessage;
+  if (!msg) return;
+  const f = replyFields(msg, all);
+  openComposer({ ...f, body: text + signatureBlock(f.from) + quote(msg), title: all ? "Reply all" : "Reply" });
+}
+
+// ---------- quick reply ----------
+
+/// The quick reply under the open email: only for emails someone else sent.
+function showQuickReply() {
+  const msg = readerMessage;
+  const kind = readerCard && folderKind(readerCard.folder);
+  const show = !!msg?.reply_address && !["drafts", "sent"].includes(kind) && !myAddresses().has(msg.reply_address.toLowerCase());
+  $("quick-reply").hidden = !show;
+  $("quick-reply-text").value = "";
+  if (show) $("quick-reply-text").placeholder = `Quick reply to ${shortName(msg.from) || msg.reply_address}…  (⌘↵ sends)`;
+}
+
+/// Sends what was typed as a plain reply, with signature and quote, through
+/// the usual way (Undo brings it back in the full editor).
+async function quickReply() {
+  const text = $("quick-reply-text").value.trim();
+  if (!text || !readerMessage) return;
+  const f = replyFields(readerMessage, false);
+  const id = await invoke("new_message_id").catch(() => null);
+  const draft = {
+    to: f.to,
+    cc: "",
+    bcc: state.defaultBcc || "",
+    subject: f.subject,
+    body: text + signatureBlock(f.from) + quote(readerMessage),
+    html: null,
+    in_reply_to: f.context.in_reply_to,
+    references: f.context.references,
+    message_id: id,
+    from: f.from || null,
+    markdown: false,
+    attachments: [],
+  };
+  $("quick-reply-text").value = "";
+  queueSend({ draft, reply: f.reply, context: f.context, title: "Reply", rich: false, markdown: false, hasDraft: false, attachments: [], saved: true });
+}
+
+$("quick-reply-send").addEventListener("click", quickReply);
+$("quick-reply-text").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
+    ev.preventDefault();
+    quickReply();
+  }
+});
+$("quick-reply-open").addEventListener("click", () => {
+  const text = $("quick-reply-text").value.trim();
+  replyTo(false, text);
+  $("quick-reply-text").value = "";
+});
+$("quick-reply-templates").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  showTemplateMenu($("quick-reply-templates"), (text) => insertText($("quick-reply-text"), text));
+});
+
+// ---------- saved replies ----------
+
+/// Puts text where the cursor is in a text field.
+function insertText(field, text) {
+  field.focus();
+  const at = field.selectionStart ?? field.value.length;
+  field.setRangeText(text, at, field.selectionEnd ?? at, "end");
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+/// The saved replies in a menu, with a field to find one; `insert` gets the text.
+function showTemplateMenu(anchor, insert) {
+  if (document.querySelector(".conv-menu.templates")) return closeConvMenu();
+  popMenu(anchor, (menu) => {
+    menu.classList.add("templates");
+    const list = state.templates || [];
+    if (!list.length) {
+      menu.append(
+        el("div", "menu-hint muted", "No saved replies yet."),
+        menuButton("plus", "Write one in the settings…", async () => {
+          closeConvMenu();
+          if (await openSettings()) showSettingsTab("writing");
+        }),
+      );
+      return;
+    }
+    const items = el("div", "menu-items");
+    const fill = (words = "") => {
+      items.replaceChildren();
+      for (const t of list.filter((t) => (t.name + " " + t.text).toLowerCase().includes(words))) {
+        const b = menuButton("list", t.name, () => {
+          closeConvMenu();
+          insert(t.text);
+        });
+        b.title = t.text;
+        items.append(b);
+      }
+      if (!items.childElementCount) items.append(el("div", "menu-hint muted", "None found"));
+    };
+    if (list.length > 6) {
+      const find = menuInput("Find a saved reply", "", () => items.querySelector("button")?.click());
+      find.addEventListener("input", () => fill(find.value.trim().toLowerCase()));
+      menu.append(find);
+    }
+    menu.append(items);
+    fill();
   });
 }
+
+$("compose-templates").addEventListener("mousedown", (ev) => ev.preventDefault()); // keeps the cursor in the text
+$("compose-templates").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  showTemplateMenu($("compose-templates"), (text) => {
+    if (!compose.rich) return insertText($("compose-body"), text);
+    restoreRich();
+    document.execCommand("insertText", false, text);
+  });
+});
 
 $("reader-reply").addEventListener("click", () => replyTo(false));
 $("reader-reply-all").addEventListener("click", () => replyTo(true));
@@ -719,11 +829,16 @@ $("compose-form").addEventListener("submit", async (ev) => {
     saved: state.undoSendSeconds > 0 ? saveDraft() : compose.saving,
   };
   hideComposer();
+  queueSend(pending);
+});
+
+/// Sends an email after the undo delay (or at once), with its Undo.
+function queueSend(pending) {
   state.sending = (state.sending || 0) + 1;
   if (!(state.undoSendSeconds > 0)) return sendPending(pending);
   pending.timer = setTimeout(() => sendPending(pending), state.undoSendSeconds * 1000);
   toast("Sending…", "info", { label: "Undo", run: () => undoSend(pending) }, state.undoSendSeconds);
-});
+}
 
 /// Sends an email the composer handed over (after the undo delay, if any).
 async function sendPending(pending) {

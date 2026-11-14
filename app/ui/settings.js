@@ -58,6 +58,8 @@ async function openSettings(lookOf = null) {
     $("set-undo").value = String(s.undo_seconds ?? 8);
     $("set-undo-send").value = String(s.undo_send_seconds ?? 10);
     rulesDraft = (s.rules || []).map((r) => ({ ...r }));
+    templatesDraft = (s.templates || []).map((t) => ({ ...t }));
+    renderTemplatePrefs();
     // A sender is only saved with its password, so the saved ones have one in the keychain.
     sendersDraft = (s.senders || []).map((x) => ({ ...x, password: "", saved: true }));
     renderSenderPrefs();
@@ -148,6 +150,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
         group_threads: $("set-group").checked,
         folders: prefsDraft,
         rules: rulesDraft.filter((r) => r.contains.trim() && r.folder.trim()),
+        templates: templatesDraft.filter((t) => t.text.trim()),
         senders: sendersDraft.map(senderOf),
         sender_passwords: Object.fromEntries(sendersDraft.filter((x) => x.password).map((x) => [x.email.trim(), x.password])),
         notify: $("set-notify").value,
@@ -462,6 +465,41 @@ function renderRulePrefs() {
     box.append(row);
   });
 }
+
+let templatesDraft = [];
+
+function renderTemplatePrefs() {
+  const box = $("template-prefs");
+  box.replaceChildren();
+  if (!templatesDraft.length) box.append(el("p", "muted small", "None yet. Example: “Received, thanks: I will answer by tomorrow.”"));
+  templatesDraft.forEach((t, i) => {
+    const row = el("div", "template-pref");
+    const grip = el("span", "fp-grip");
+    grip.append(icon("grip"));
+    const name = el("input");
+    name.value = t.name;
+    name.placeholder = "Name (how you find it)";
+    name.addEventListener("input", () => (t.name = name.value));
+    const text = el("textarea");
+    text.rows = 3;
+    text.value = t.text;
+    text.placeholder = "The text that goes in the email";
+    text.addEventListener("input", () => (t.text = text.value));
+    const fields = el("div", "template-fields");
+    fields.append(name, text);
+    row.append(grip, fields, removeButton(() => {
+      templatesDraft.splice(i, 1);
+      renderTemplatePrefs();
+    }));
+    makeSortable(row, templatesDraft, i, renderTemplatePrefs, box);
+    box.append(row);
+  });
+}
+$("add-template").addEventListener("click", () => {
+  templatesDraft.push({ name: "", text: "" });
+  renderTemplatePrefs();
+  $("template-prefs").lastElementChild?.querySelector("input")?.focus();
+});
 
 /// A new rule row in the settings ("from" contains `text`), ready to be completed.
 function addRule(text = "") {

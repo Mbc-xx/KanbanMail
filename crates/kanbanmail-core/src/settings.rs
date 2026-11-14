@@ -104,6 +104,9 @@ pub struct Settings {
     /// Where emails are read and written: "light", "dark" or "theme".
     #[serde(default = "default_mail_surface")]
     pub mail_surface: String,
+    /// Texts written once and put in emails with a click ("Saved replies").
+    #[serde(default)]
+    pub templates: Vec<Template>,
     /// After archiving, deleting, moving or snoozing the open email: "next"
     /// opens the next one of the list, "list" goes back to the list.
     #[serde(default = "default_after_action")]
@@ -239,6 +242,13 @@ pub struct Rule {
     pub folder: String,
 }
 
+/// A saved reply: a short name to find it, and its text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Template {
+    pub name: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderPref {
     /// Full folder name on the server, e.g. "INBOX.Clients".
@@ -304,6 +314,7 @@ impl Default for Settings {
             mail_surface: default_mail_surface(),
             theme_per_account: false,
             after_action: default_after_action(),
+            templates: Vec::new(),
             save_folder: default_save_folder(),
             ask_conversation: true,
             senders: Vec::new(),
@@ -400,6 +411,7 @@ impl Settings {
             save_folder: from.save_folder.clone(),
             ask_conversation: from.ask_conversation,
             after_action: from.after_action.clone(),
+            templates: from.templates.clone(),
             ..self
         }
     }

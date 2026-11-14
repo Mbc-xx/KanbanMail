@@ -85,6 +85,7 @@ function applySettingsState(settings) {
   state.groupThreads = settings.group_threads;
   state.folderPrefs = settings.folders || [];
   state.rules = settings.rules || [];
+  state.templates = settings.templates || [];
   state.notify = settings.notify || "important";
   state.undoSeconds = settings.undo_seconds ?? 8;
   state.undoSendSeconds = settings.undo_send_seconds ?? 10;
@@ -458,11 +459,12 @@ async function afterInboxLoaded(cards) {
     (c) => !c.seen && !moved.has(c.message_id) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
   );
   if (!toNotify.length) return;
+  const target = toNotify.length === 1 ? { folder: "INBOX", uid: toNotify[0].uid } : { folder: "INBOX" };
   const [title, body] =
     toNotify.length === 1
       ? [toNotify[0].from || toNotify[0].from_address, toNotify[0].subject || "(no subject)"]
       : [`${toNotify.length} new emails`, toNotify.slice(0, 3).map((c) => `${shortName(c.from)}: ${c.subject}`).join("\n")];
-  showNotification(title, body);
+  showNotification(title, body, target).catch(() => {});
 }
 
 /// Keeps rules and notifications working while the Inbox is not on screen.
@@ -1632,10 +1634,26 @@ async function prepareNotifications() {
   if (!(await invoke("prepare_notifications").catch(() => true))) notificationsOff();
 }
 
-function showNotification(title, body) {
-  return invoke("notify", { title, body }).catch((e) => {
+/// `target`: what a click on the notification opens ({ folder, uid }).
+function showNotification(title, body, target = null) {
+  return invoke("notify", { title, body, target: target ? JSON.stringify(target) : null }).catch((e) => {
     if (String(e) === NOTIFY_DENIED) notificationsOff();
     else console.error("notification failed", e);
     throw e;
   });
 }
+
+/// A click on a notification: its email opens, or its column or folder.
+listen("notification-clicked", (ev) => {
+  let target;
+  try {
+    target = JSON.parse(ev.payload);
+  } catch (_) {
+    return;
+  }
+  const card = target.uid && (state.cards[target.folder] || []).find((c) => c.uid === target.uid);
+  if (card) return openReader(target.folder, card);
+  if (columnEl(target.folder) || state.columns.some((c) => c.folder === target.folder)) return goToColumn(target.folder);
+  const folder = state.folders.find((f) => f.name === target.folder);
+  if (folder) openFolder(folder);
+});

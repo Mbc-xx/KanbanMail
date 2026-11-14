@@ -312,7 +312,7 @@ function noticeReplies(answers) {
   const recent = Date.now() / 1000 - 3 * 86400;
   if (raw !== null && state.notify !== "off") {
     for (const a of answers.filter((a) => !seen.includes(idOf(a)) && a.card.date > recent)) {
-      showNotification(`Reply from ${shortName(a.card.from) || a.card.from_address}`, a.card.subject || "(no subject)").catch(() => {});
+      showNotification(`Reply from ${shortName(a.card.from) || a.card.from_address}`, a.card.subject || "(no subject)", { folder: a.folder, uid: a.card.uid }).catch(() => {});
     }
   }
   local.set(key, JSON.stringify(answers.map(idOf)));

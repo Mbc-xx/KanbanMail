@@ -1019,6 +1019,12 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         important_allow: kanbanmail_core::settings::normalize_rules(&s.important_allow),
         important_block: kanbanmail_core::settings::normalize_rules(&s.important_block),
         rules: s.rules.into_iter().filter(|r| !r.contains.trim().is_empty() && !r.folder.is_empty()).collect(),
+        templates: s
+            .templates
+            .into_iter()
+            .filter(|t| !t.text.trim().is_empty())
+            .map(|t| kanbanmail_core::settings::Template { name: if t.name.trim().is_empty() { t.text.lines().next().unwrap_or_default().chars().take(40).collect() } else { t.name.trim().to_string() }, text: t.text.trim_end().to_string() })
+            .collect(),
         zoom: s.zoom.clamp(80, 150),
         undo_seconds: s.undo_seconds.min(60),
         undo_send_seconds: s.undo_send_seconds.min(60),
@@ -1950,8 +1956,9 @@ fn save_board(columns: Vec<ColumnSpec>) -> CmdResult<()> {
 /// A desktop notification (macOS asks for permission the first time).
 /// Runs off the main thread: the first time it waits for the user's answer.
 #[tauri::command]
-async fn notify(title: String, body: String, app: AppHandle) -> CmdResult<()> {
-    tauri::async_runtime::spawn_blocking(move || notifications::show(&app, &title, &body)).await.map_err(|e| e.to_string())?
+async fn notify(title: String, body: String, target: Option<String>, app: AppHandle) -> CmdResult<()> {
+    let target = target.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || notifications::show(&app, &title, &body, &target)).await.map_err(|e| e.to_string())?
 }
 
 /// Shows (or creates, then shows) the contact of an address in Contacts.
@@ -2012,7 +2019,8 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(external_links())
         .manage(AppState::default())
-        .setup(|_| {
+        .setup(|app| {
+            notifications::init(app.handle());
             // Attachments dragged out last time are not needed any more.
             std::fs::remove_dir_all(drag_dir()).ok();
             Ok(())

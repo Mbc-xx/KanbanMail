@@ -6,6 +6,27 @@
 /// Error text when the system does not allow notifications; the UI offers a shortcut.
 pub const DENIED: &str = "Notifications are turned off for Pigeonhole in System Settings.";
 
+static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// Remembers the app, to bring it forward when a notification is clicked.
+pub fn init(app: &tauri::AppHandle) {
+    let _ = APP.set(app.clone());
+}
+
+/// A notification was clicked: the window comes forward and the interface
+/// opens what it was about (`target`, as the interface gave it).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn clicked(target: &str) {
+    use tauri::{Emitter, Manager};
+    let Some(app) = APP.get() else { return };
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit("notification-clicked", target);
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use block2::RcBlock;
@@ -15,7 +36,8 @@ mod mac {
     use objc2_foundation::{NSBundle, NSError, NSString};
     use objc2_user_notifications::{
         UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotification, UNNotificationPresentationOptions,
-        UNNotificationRequest, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+        UNNotificationRequest, UNNotificationResponse, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter,
+        UNUserNotificationCenterDelegate,
     };
     use std::ptr::NonNull;
     use std::sync::{mpsc, Once};
@@ -39,6 +61,16 @@ mod mac {
                 handler.call((UNNotificationPresentationOptions::Banner
                     | UNNotificationPresentationOptions::List
                     | UNNotificationPresentationOptions::Sound,));
+            }
+
+            // A click: what the notification was about rides in its identifier.
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(&self, _center: &UNUserNotificationCenter, response: &UNNotificationResponse, handler: &block2::DynBlock<dyn Fn()>) {
+                let id = response.notification().request().identifier().to_string();
+                if let Some((_, target)) = id.split_once('|') {
+                    super::clicked(target);
+                }
+                handler.call(());
             }
         }
     );
@@ -89,7 +121,7 @@ mod mac {
         }
     }
 
-    pub fn show(title: &str, body: &str) -> Result<(), String> {
+    pub fn show(title: &str, body: &str, target: &str) -> Result<(), String> {
         if !allowed() {
             return Err(super::DENIED.into());
         }
@@ -97,7 +129,8 @@ mod mac {
         content.setTitle(&NSString::from_str(title));
         content.setBody(&NSString::from_str(body));
         content.setSound(Some(&UNNotificationSound::defaultSound()));
-        let id = format!("pigeonhole-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let id = format!("pigeonhole-{stamp}|{target}");
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |error: *mut NSError| {
@@ -122,11 +155,12 @@ pub fn prepare() -> bool {
     true
 }
 
-pub fn show<R: tauri::Runtime>(app: &tauri::AppHandle<R>, title: &str, body: &str) -> Result<(), String> {
+pub fn show<R: tauri::Runtime>(app: &tauri::AppHandle<R>, title: &str, body: &str, target: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if mac::available() {
-        return mac::show(title, body);
+        return mac::show(title, body, target);
     }
+    let _ = target;
     use tauri_plugin_notification::NotificationExt;
     app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
 }
