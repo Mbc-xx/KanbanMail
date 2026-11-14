@@ -570,6 +570,8 @@ body:has(#composer.minimized:not([hidden])) .reader-dock { right: 352px; max-wid
 .attachment .att-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment .att-dl { color: var(--muted); }
 .attachment:hover .att-dl { color: var(--accent); }
+.attachment .att-preview { display: inline-flex; padding: 2px; border-radius: 4px; color: var(--muted); }
+.attachment .att-preview:hover { color: var(--accent); background: var(--hover); }
 .reader-body { overflow: hidden; border-radius: 0 0 var(--r-m) var(--r-m); background: var(--mail-bg); }
 .reader-body pre {
   margin: 0;

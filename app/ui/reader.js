@@ -53,7 +53,19 @@ function renderAttachments(folder, uid, list) {
     ...list.map((a) => {
       const chip = el("button", "attachment");
       chip.title = `Save ${a.name} · or drag it to a folder`;
-      chip.append(icon("paperclip"), el("span", "att-name", a.name), el("span", "att-size muted", formatSize(a.size)), icon("download", "att-dl"));
+      const look = el("span", "att-preview");
+      look.title = "Preview without saving (space)";
+      look.append(icon("eye"));
+      const preview = (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        invoke("preview_attachment", { folder, uid, index: a.index }).catch((e) => toast("Could not show the attachment: " + e));
+      };
+      look.addEventListener("click", preview);
+      // Space on the attachment previews it (Quick Look on macOS), Enter saves it.
+      chip.addEventListener("keydown", (ev) => ev.key === " " && preview(ev));
+      chip.addEventListener("keyup", (ev) => ev.key === " " && ev.preventDefault());
+      chip.append(icon("paperclip"), el("span", "att-name", a.name), el("span", "att-size muted", formatSize(a.size)), look, icon("download", "att-dl"));
       dragOut(chip, () => invoke("prepare_attachment", { folder, uid, index: a.index }));
       chip.addEventListener("click", async () => {
         if (Date.now() - (chip.draggedAt || 0) < 400) return; // the end of a drag, not a click
@@ -105,6 +117,31 @@ function contactMenuOn(elem, who, extra = () => []) {
 contactMenuOn($("reader-from"), () => readerSender);
 contactMenuOn($("reader-from-address"), () => readerSender);
 contactMenuOn($("reader-avatar"), () => readerSender);
+
+/// Leaves the mailing list of the open email: with one click when the list
+/// allows it, otherwise its page in the browser or an email to write.
+$("reader-unsubscribe").addEventListener("click", async () => {
+  const u = readerMessage?.unsubscribe;
+  if (!u) return;
+  const who = readerSender?.name || readerSender?.email || "this sender";
+  if (u.one_click) {
+    const choice = await ask(`Leave the mailing list of ${who}?\n\nPigeonhole tells the list directly; nothing else is sent.`, [
+      { label: "Cancel", value: null },
+      { label: "Unsubscribe", value: "go", kind: "primary" },
+    ]);
+    if (choice !== "go") return;
+    try {
+      await invoke("unsubscribe", { url: u.url });
+      $("reader-unsubscribe").hidden = true;
+      return toast(`Unsubscribed from ${who}`, "info", { label: "Archive this email", run: () => $("reader-archive").click() });
+    } catch (e) {
+      if (!u.url) return toast("Could not unsubscribe: " + e);
+      toast("The list did not answer: its page opens instead", "info");
+    }
+  }
+  if (u.url) return openLink(u.url);
+  openLink(u.mailto);
+});
 
 /// What can be done with a person: write to them, find their emails, copy
 /// the address, see or add them in Contacts. `extra`: menu items to add.
@@ -253,9 +290,28 @@ function folderKind(folder) {
   return state.folders.find((f) => f.name === folder)?.kind || "";
 }
 
+/// Closes the open email because it leaves the list (archived, deleted,
+/// moved, snoozed). With "Open the next email" in the settings, the email
+/// below it opens instead (or the one above, at the end of the list).
+function leaveEmail() {
+  const from = currentCardEl();
+  let next = null;
+  if (state.afterAction === "next" && from) {
+    const below = neighbour(from, { step: 1 });
+    next = below !== from ? below : neighbour(from, { step: -1 });
+    if (next === from) next = null;
+  }
+  const info = next?.menuInfo;
+  closeReader();
+  if (info) {
+    setFocus(next);
+    openReader(info.folder, info.card);
+  }
+}
+
 $("reader-spam").addEventListener("click", () => {
   const one = readerCard;
-  closeReader();
+  leaveEmail();
   if (folderKind(one.folder) === "junk") moveMany([one], "INBOX");
   else fileMany([one], "junk");
 });
@@ -263,7 +319,7 @@ $("reader-spam").addEventListener("click", () => {
 for (const kind of ["trash", "archive"]) {
   $("reader-" + kind).addEventListener("click", () => {
     const one = readerCard;
-    closeReader();
+    leaveEmail();
     fileMany([one], kind);
   });
 }
@@ -285,7 +341,7 @@ $("reader-move").addEventListener("click", (ev) => {
   ev.stopPropagation();
   showFolderMenu($("reader-move"), (to) => {
     const one = readerCard;
-    closeReader();
+    leaveEmail();
     moveMany([one], to);
   });
 });
@@ -373,6 +429,7 @@ async function openReader(folder, card, opts = {}) {
   setAvatar($("reader-avatar"), card.from || card.from_address || "?");
   $("reader-to").textContent = "";
   $("reader-cc").textContent = "";
+  $("reader-unsubscribe").hidden = true;
   $("reader-cc").hidden = $("reader-cc-label").hidden = true;
   $("reader-date").textContent = formatDate(card.date, true);
   $("reader-toggle").hidden = true;
@@ -389,6 +446,7 @@ async function openReader(folder, card, opts = {}) {
     $("reader-from").textContent = msg.from;
     renderPeople($("reader-to"), msg.to);
     renderPeople($("reader-cc"), msg.cc);
+    $("reader-unsubscribe").hidden = !msg.unsubscribe;
     $("reader-cc").hidden = $("reader-cc-label").hidden = !msg.cc;
     $("reader-reply").disabled = $("reader-reply-all").disabled = false;
     if (readerCard?.card === card) startSeenTimer(folder, card);
@@ -580,7 +638,7 @@ for (const [id, kind, verb] of [["conv-archive", "archive", "Archive"], ["conv-t
     ev.stopPropagation();
     const members = await convTargets($(id), verb);
     if (!members) return;
-    closeReader();
+    leaveEmail();
     fileMany(members, kind, { conversation: members.length > 1 });
   });
 }
@@ -590,7 +648,7 @@ $("conv-spam").addEventListener("click", async (ev) => {
   const inJunk = folderKind(readerCard.folder) === "junk";
   const members = await convTargets($("conv-spam"), inJunk ? "Not spam" : "Spam");
   if (!members) return;
-  closeReader();
+  leaveEmail();
   if (inJunk) moveMany(members, "INBOX");
   else fileMany(members, "junk", { conversation: members.length > 1 });
 });
@@ -719,7 +777,7 @@ $("conv-move").addEventListener("click", async (ev) => {
   const members = await convTargets($("conv-move"), "Move");
   if (!members) return;
   showFolderMenu($("conv-move"), (to) => {
-    closeReader();
+    leaveEmail();
     moveMany(members, to, { conversation: members.length > 1 });
   });
 });

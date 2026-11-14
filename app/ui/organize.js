@@ -355,7 +355,7 @@ function fillSnoozeMenu(menu, members, head) {
 }
 
 async function snoozeMany(members, until) {
-  if (readerCard && members.some((m) => m.card === readerCard.card)) closeReader();
+  if (readerCard && members.some((m) => m.card === readerCard.card)) leaveEmail();
   let target;
   try {
     target = await invoke("ensure_folder", { name: "Snoozed" });

@@ -71,6 +71,37 @@ pub struct MessageView {
     pub invite: Option<Invite>,
     /// How a draft of this app was written ("rich", "markdown", "plain").
     pub draft_format: Option<String>,
+    /// How to leave the mailing list the email comes from, if it says.
+    pub unsubscribe: Option<Unsubscribe>,
+}
+
+/// The List-Unsubscribe header (RFC 2369) and its one-click form (RFC 8058).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Unsubscribe {
+    /// A web address to leave the list.
+    pub url: Option<String>,
+    /// An address to write to instead, with its subject (a `mailto:` link).
+    pub mailto: Option<String>,
+    /// The web address takes a plain POST and needs no page to be opened.
+    pub one_click: bool,
+}
+
+/// Reads List-Unsubscribe: `<https://…>, <mailto:…>`. Only web and mail links.
+pub fn parse_unsubscribe(header: &str, post: Option<&str>) -> Option<Unsubscribe> {
+    let mut url = None;
+    let mut mailto = None;
+    for part in header.split(',') {
+        let link = part.trim().trim_start_matches('<').trim_end_matches('>').trim();
+        let lower = link.to_ascii_lowercase();
+        if url.is_none() && (lower.starts_with("https://") || lower.starts_with("http://")) {
+            url = Some(link.to_string());
+        } else if mailto.is_none() && lower.starts_with("mailto:") {
+            mailto = Some(link.to_string());
+        }
+    }
+    let one_click = url.as_deref().is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
+        && post.is_some_and(|p| p.to_ascii_lowercase().contains("list-unsubscribe=one-click"));
+    (url.is_some() || mailto.is_some()).then_some(Unsubscribe { url, mailto, one_click })
 }
 
 /// A date-time from a calendar file: local wall time unless `utc`.
@@ -242,6 +273,7 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             text_main: None,
             attachments: Vec::new(),
             draft_format: None,
+            unsubscribe: None,
         };
     };
     // Use HTML only if the message really has some: otherwise mail-parser
@@ -279,7 +311,10 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             references.extend((0..r.len()).filter_map(|i| r.get(i)).map(str::to_string));
         }
     }
+    let header = |name: &str| m.headers().get(name).map(|h| String::from_utf8_lossy(h.raw_value()).replace(['\r', '\n'], " ").trim().to_string());
+    let unsubscribe = header("List-Unsubscribe").and_then(|h| parse_unsubscribe(&h, header("List-Unsubscribe-Post").as_deref()));
     MessageView {
+        unsubscribe,
         from: sender(m.from()),
         reply_address: first_address(m.reply_to()).or_else(|| first_address(m.from())).unwrap_or_default(),
         to: recipients(m.to()),
@@ -297,10 +332,7 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
         has_remote_content: html.as_deref().is_some_and(has_remote_content),
         attachments: list_attachments(&m, raw_html.as_deref()),
         invite: find_invite(&m),
-        draft_format: m
-            .headers()
-            .get(crate::smtp::DRAFT_FORMAT_HEADER)
-            .map(|h| String::from_utf8_lossy(h.raw_value()).trim().to_string()),
+        draft_format: header(crate::smtp::DRAFT_FORMAT_HEADER),
         html,
     }
 }
@@ -574,6 +606,18 @@ pub fn parse_ics(ics: &str) -> Option<Invite> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_unsubscribe_header_is_read() {
+        let u = parse_unsubscribe("<mailto:leave@list.example?subject=unsubscribe>, <https://list.example/u/1>", Some("List-Unsubscribe=One-Click")).unwrap();
+        assert_eq!(u.url.as_deref(), Some("https://list.example/u/1"));
+        assert_eq!(u.mailto.as_deref(), Some("mailto:leave@list.example?subject=unsubscribe"));
+        assert!(u.one_click);
+        let plain = parse_unsubscribe("<http://list.example/u>", Some("List-Unsubscribe=One-Click")).unwrap();
+        assert!(!plain.one_click, "one click only over https");
+        assert_eq!(parse_unsubscribe("<javascript:alert(1)>, <file:///etc>", None), None);
+    }
+
 
     #[test]
     fn a_rich_draft_comes_back_with_its_format_and_signature() {

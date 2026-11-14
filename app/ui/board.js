@@ -90,6 +90,7 @@ function applySettingsState(settings) {
   state.undoSendSeconds = settings.undo_send_seconds ?? 10;
   state.appearance = { theme: settings.theme, zoom: settings.zoom, preview_board: settings.preview_board, preview_list: settings.preview_list, compact_actions: settings.compact_actions, mail_surface: settings.mail_surface, theme_per_account: !!settings.theme_per_account };
   state.askConversation = settings.ask_conversation ?? true;
+  state.afterAction = settings.after_action || "list";
   applyAppearance(state.appearance);
   state.waitingSetting = settings.waiting_folder || "";
   state.waitingDays = settings.waiting_days ?? 3;
@@ -993,6 +994,20 @@ function matchesFilter(card) {
   );
 }
 
+// Pointing at an email for a moment starts downloading it, so that the click
+// opens it at once. Once per email; the backend skips it when busy.
+const warmed = new Set();
+let warmTimer;
+function warmSoon(folder, card) {
+  clearTimeout(warmTimer);
+  const key = selKey(folder, card);
+  if (warmed.has(key) || MULTI_KEYS.includes(folder) || folderKind(folder) === "drafts") return;
+  warmTimer = setTimeout(() => {
+    warmed.add(key);
+    invoke("warm_message", { folder, uid: card.uid }).catch(() => warmed.delete(key));
+  }, 150);
+}
+
 /// One email, or a whole conversation when `group` is given (shown through its newest email).
 function renderCard(folder, card, group = null, { child = false } = {}) {
   const members = group ? group.members : [{ folder, card }];
@@ -1107,6 +1122,8 @@ function renderCard(folder, card, group = null, { child = false } = {}) {
     if (state.selection.size) clearSelection();
     kind === "drafts" ? openDraft(folder, card) : openReader(folder, card);
   });
+  c.addEventListener("mouseenter", () => warmSoon(folder, card));
+  c.addEventListener("mouseleave", () => clearTimeout(warmTimer));
   c.addEventListener("dragstart", (ev) => {
     // Dragging a selected card drags the whole selection.
     const dragged = state.selection.has(selKey(folder, card)) ? [...state.selection.values()] : members;

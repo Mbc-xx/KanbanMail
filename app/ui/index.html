@@ -187,6 +187,7 @@
           <div class="reader-sender">
             <span id="sender-why" class="muted"></span>
             <span class="spacer"></span>
+            <button id="reader-unsubscribe" hidden title="Leave this mailing list or newsletter">Unsubscribe</button>
             <button id="rule-allow" title="Always show this sender with Important only">Always important</button>
             <button id="rule-block" title="Never show this sender with Important only">Never important</button>
             <select id="rule-scope" title="Apply the rule to the address or to the whole domain">
@@ -591,6 +592,12 @@
               <option value="15">15 seconds</option>
               <option value="20">20 seconds</option>
               <option value="30">30 seconds</option>
+            </select>
+          </label>
+          <label>After archiving, deleting, moving or snoozing the open email
+            <select id="set-after-action">
+              <option value="list">Go back to the list</option>
+              <option value="next">Open the next email</option>
             </select>
           </label>
           <label class="toggle"><input id="set-ask-conv" type="checkbox"> In a conversation, ask whether to archive, delete or move only the open email or all of them</label>

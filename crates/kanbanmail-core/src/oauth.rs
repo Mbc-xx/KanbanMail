@@ -215,6 +215,15 @@ async fn wait_for_code(v4: TcpListener, v6: Option<TcpListener>, state: &str) ->
     }
 }
 
+/// Leaves a mailing list with its one-click address (RFC 8058): a POST with
+/// "List-Unsubscribe=One-Click" and nothing else (no cookies, no page).
+pub async fn unsubscribe_one_click(url: &str) -> Result<()> {
+    anyhow::ensure!(url.to_ascii_lowercase().starts_with("https://"), "only https addresses are used");
+    let reply = http()?.post(url).form(&[("List-Unsubscribe", "One-Click")]).send().await.context("the list could not be reached")?;
+    anyhow::ensure!(reply.status().is_success(), "the list answered {}", reply.status());
+    Ok(())
+}
+
 fn http() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .tls_backend_preconfigured(crate::imap::tls_config())

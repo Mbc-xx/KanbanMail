@@ -104,6 +104,10 @@ pub struct Settings {
     /// Where emails are read and written: "light", "dark" or "theme".
     #[serde(default = "default_mail_surface")]
     pub mail_surface: String,
+    /// After archiving, deleting, moving or snoozing the open email: "next"
+    /// opens the next one of the list, "list" goes back to the list.
+    #[serde(default = "default_after_action")]
+    pub after_action: String,
     /// Each account keeps its own theme and email background; otherwise
     /// they are the same for every account.
     #[serde(default)]
@@ -188,6 +192,10 @@ static LOADED: std::sync::Mutex<Loaded> = std::sync::Mutex::new(None);
 
 fn default_waiting_days() -> u32 {
     3
+}
+
+fn default_after_action() -> String {
+    "list".into()
 }
 
 fn default_todo_days() -> u32 {
@@ -295,6 +303,7 @@ impl Default for Settings {
             compact_actions: true,
             mail_surface: default_mail_surface(),
             theme_per_account: false,
+            after_action: default_after_action(),
             save_folder: default_save_folder(),
             ask_conversation: true,
             senders: Vec::new(),
@@ -390,6 +399,7 @@ impl Settings {
             theme_per_account: from.theme_per_account,
             save_folder: from.save_folder.clone(),
             ask_conversation: from.ask_conversation,
+            after_action: from.after_action.clone(),
             ..self
         }
     }

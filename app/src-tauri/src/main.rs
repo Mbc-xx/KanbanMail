@@ -1509,7 +1509,12 @@ fn drag_dir() -> std::path::PathBuf {
 /// returns its path. Copies older than an hour are removed meanwhile.
 #[tauri::command]
 async fn prepare_attachment(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<String> {
-    let raw = raw_email(&state, &folder, uid).await?;
+    attachment_copy(&state, &folder, uid, index).await.map(|p| p.display().to_string())
+}
+
+/// A copy of an attachment in the temporary folder (see [`prepare_attachment`]).
+async fn attachment_copy(state: &AppState, folder: &str, uid: u32, index: usize) -> CmdResult<std::path::PathBuf> {
+    let raw = raw_email(state, folder, uid).await?;
     let (name, bytes) = kanbanmail_core::message::attachment(&raw, index).ok_or("attachment not found")?;
     let root = drag_dir();
     if let Ok(list) = std::fs::read_dir(&root) {
@@ -1524,7 +1529,47 @@ async fn prepare_attachment(folder: String, uid: u32, index: usize, state: State
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(safe_file_name(&name));
     std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    Ok(path)
+}
+
+/// Shows an attachment without saving it: Quick Look on macOS, the default
+/// app elsewhere (from the temporary copy, removed later).
+#[tauri::command]
+async fn preview_attachment(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<()> {
+    let path = attachment_copy(&state, &folder, uid, index).await?;
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("qlmanage").arg("-p").arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("rundll32").arg("url.dll,FileProtocolHandler").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(&path).spawn();
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Downloads an email the user is pointing at, so that it opens at once.
+/// Only when the connection is free (a click never waits behind it) and the
+/// email is not too big; already downloaded ones cost nothing.
+#[tauri::command]
+async fn warm_message(folder: String, uid: u32, state: State<'_, AppState>) -> CmdResult<()> {
+    if state.with_store(|st| st.raw(&folder, uid)).flatten().is_some() {
+        return Ok(());
+    }
+    let Ok(mut inner) = state.inner.try_lock() else { return Ok(()) };
+    let fetched = read_retry!(inner, |s, _caps| imap::fetch_raws(s, &folder, &[uid], PREFETCH_MAX_SIZE))?;
+    drop(inner);
+    for (uid, raw, size) in fetched {
+        match raw {
+            Some(raw) => state.with_store(|st| st.put_raw(&folder, uid, &raw)),
+            None => state.with_store(|st| st.mark_too_big(&folder, uid, size)),
+        };
+    }
+    Ok(())
+}
+
+/// Leaves a mailing list with its one-click address.
+#[tauri::command]
+async fn unsubscribe(url: String) -> CmdResult<()> {
+    kanbanmail_core::oauth::unsubscribe_one_click(&url).await.map_err(err)
 }
 
 /// Starts dragging a prepared attachment out of the window: dropped on the
@@ -2005,6 +2050,9 @@ fn main() {
             pick_save_folder,
             reveal_file,
             prepare_attachment,
+            preview_attachment,
+            warm_message,
+            unsubscribe,
             drag_attachment,
             load_thread,
             set_unread_badge,

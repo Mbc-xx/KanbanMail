@@ -41,6 +41,7 @@ async function openSettings(lookOf = null) {
     // Only meaningful with more than one account.
     $("theme-per-account-row").hidden = $("theme-per-account-hint").hidden = !severalAccounts();
     $("set-ask-conv").checked = s.ask_conversation ?? true;
+    $("set-after-action").value = s.after_action || "list";
     renderWaitingChoices(s.waiting_folder || "");
     $("set-waiting-days").value = String(s.waiting_days ?? 3);
     renderColumnChoice("set-todo", s.todo_folder || "", "Todo");
@@ -163,6 +164,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
         cache_max_mb: parseInt($("set-cache-mb").value, 10),
         prefetch: $("set-prefetch").checked,
         ask_conversation: $("set-ask-conv").checked,
+        after_action: $("set-after-action").value,
       },
     });
     const saved = await invoke("get_settings");

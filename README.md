@@ -87,6 +87,14 @@ accounts and data. Internal names such as the `kanbanmail-core` crate and the
   in a week (reader button, right-click menu or Z). It waits in a "Snoozed"
   folder, shows when it comes back, and returns where it was while the app is
   open; a click on its tag brings it back at once.
+- Fewer waits: pointing at an email for a moment starts downloading it, so the
+  click opens it at once. Optionally (Settings → Reading), archiving, deleting,
+  moving or snoozing the open email opens the next one instead of the list.
+- Unsubscribe: newsletters and mailing lists that say how to leave get an
+  Unsubscribe button in the reader; with one click when the list allows it,
+  otherwise its page or a prepared email.
+- Attachments: the eye (or space on a selected attachment) previews it without
+  saving, with Quick Look on macOS.
 - People: in an open email, click or right-click the sender or a recipient (and
   right-click a recipient while writing) for a menu: new email to them, their
   emails, copy the address, and on macOS add them to Contacts or show them there
