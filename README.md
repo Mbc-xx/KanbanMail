@@ -11,13 +11,15 @@ It works with any mailbox that speaks IMAP, and signs in to iCloud, Gmail and
 Microsoft 365 / Outlook.com without typing servers. Written in Rust with
 [Tauri](https://tauri.app); open source under the MIT license.
 
-![The board: every column is a folder of your mailbox](docs/screenshot-board.png)
+![The board: Inbox, Todo, Waiting and Done columns, with late to-dos and replies counted in the top bar](docs/screenshot-board.png)
 
-![Folder view: expandable conversations and the reading pane](docs/screenshot-folder.png)
+![A conversation open, with the quick reply under the email](docs/screenshot-reader.png)
 
-![Writing an email: recipients as draggable chips](docs/screenshot-compose.png)
+![A folder as a list with the reading pane, and the Tasks tab in the sidebar](docs/screenshot-folder.png)
 
-![Search with operators across every folder](docs/screenshot-search.png)
+![Writing in the rich editor, with recipients as chips and saved replies](docs/screenshot-compose.png)
+
+![Search across every folder, each result tagged with its folder](docs/screenshot-search.png)
 
 <sub>Screenshots taken with fictional demo data.</sub>
 
