@@ -88,7 +88,21 @@ struct AppState {
     replaying: Mutex<()>,
     /// Stops a sign-in waiting for the browser.
     sign_in_cancel: tokio::sync::Notify,
+    /// Logged-in connections of accounts not in use (the one just left, the
+    /// ones whose unread emails were counted), kept a while so that moving
+    /// to them needs no new login. One per account.
+    parked: std::sync::Mutex<HashMap<String, Parked>>,
 }
+
+struct Parked {
+    session: Session,
+    caps: ServerCaps,
+    since: std::time::Instant,
+}
+
+/// How long a parked connection is kept (servers close idle ones after
+/// about half an hour; the other accounts are counted every two minutes).
+const PARK_FOR: Duration = Duration::from_secs(10 * 60);
 
 impl AppState {
     /// Runs something on the local copy. Its errors are only logged: the
@@ -114,16 +128,38 @@ impl AppState {
         let _replay = self.replaying.lock().await;
         let mut inner = self.inner.lock().await;
         LEAVING.store(false, Ordering::SeqCst);
-        // Saying goodbye to the server must not hold up the next account.
-        if let Some(mut s) = inner.session.take() {
-            tauri::async_runtime::spawn(async move {
-                tokio::time::timeout(Duration::from_secs(3), s.logout()).await.ok();
-            });
+        // Kept for a while: coming back to this account needs no new login.
+        if let (Some(s), Some(acc)) = (inner.session.take(), inner.account.as_ref()) {
+            self.park(acc.key(), s, inner.caps);
         }
         *inner = Inner::default();
         if let Ok(mut guard) = self.store.lock() {
             *guard = None;
         }
+    }
+
+    /// Keeps a logged-in connection for later; ones kept too long are closed.
+    fn park(&self, key: &str, session: Session, caps: ServerCaps) {
+        let Ok(mut parked) = self.parked.lock() else { return };
+        let stale: Vec<String> = parked.iter().filter(|(_, p)| p.since.elapsed() > PARK_FOR).map(|(k, _)| k.clone()).collect();
+        let mut closing: Vec<Session> = stale.iter().filter_map(|k| parked.remove(k)).map(|p| p.session).collect();
+        if let Some(old) = parked.insert(key.to_string(), Parked { session, caps, since: std::time::Instant::now() }) {
+            closing.push(old.session);
+        }
+        drop(parked);
+        for mut s in closing {
+            tauri::async_runtime::spawn(async move {
+                tokio::time::timeout(Duration::from_secs(3), s.logout()).await.ok();
+            });
+        }
+    }
+
+    /// The connection kept for an account, if it is recent enough. If the
+    /// server closed it meanwhile, the first command fails and a new login
+    /// follows, as after any dropped connection.
+    fn unpark(&self, key: &str) -> Option<(Session, ServerCaps)> {
+        let parked = self.parked.lock().ok()?.remove(key)?;
+        (parked.since.elapsed() < PARK_FOR).then_some((parked.session, parked.caps))
     }
 
     fn open_store(&self, key: &str) {
@@ -258,6 +294,12 @@ async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
             if saved {
                 inner.account = Some(a.clone());
                 inner.password = password;
+                if inner.session.is_none() {
+                    if let Some((session, caps)) = state.unpark(a.key()) {
+                        inner.session = Some(session);
+                        inner.caps = caps;
+                    }
+                }
                 state.open_store(a.key());
             }
             saved
@@ -415,16 +457,31 @@ fn list_accounts() -> CmdResult<Vec<AccountEntry>> {
 /// None when they cannot be read: it is only a number in a menu, so a failure
 /// (offline, sign-in expired) is never reported as a problem of the account in use.
 #[tauri::command]
-async fn account_unread(id: String) -> Option<u32> {
+async fn account_unread(id: String, state: State<'_, AppState>) -> CmdResult<Option<u32>> {
+    Ok(count_other_account(&id, &state).await)
+}
+
+async fn count_other_account(id: &str, state: &AppState) -> Option<u32> {
+    let id = id.to_string();
     let account = account::list().ok()?.into_iter().find(|a| a.key() == id)?;
     let password = if account.oauth { String::new() } else { secret::get_password(&id).ok()?? };
+    // The connection kept from last time when there is one, so counting
+    // logs in once and moving to this account later needs no login at all.
     let check = async {
-        let mut session = imap::connect(&account, &password).await?;
-        let unread = imap::folder_unseen(&mut session, "INBOX").await;
-        tokio::time::timeout(Duration::from_secs(3), session.logout()).await.ok();
-        unread
+        let (mut session, caps) = match state.unpark(&id) {
+            Some(kept) => kept,
+            None => {
+                let mut s = imap::connect(&account, &password).await?;
+                let caps = imap::server_caps(&mut s).await?;
+                (s, caps)
+            }
+        };
+        let unread = imap::folder_unseen(&mut session, "INBOX").await?;
+        Ok::<_, anyhow::Error>((unread, session, caps))
     };
-    tokio::time::timeout(OPERATION_TIMEOUT, check).await.ok()?.ok()
+    let (unread, session, caps) = tokio::time::timeout(OPERATION_TIMEOUT, check).await.ok()?.ok()?;
+    state.park(&id, session, caps);
+    Some(unread)
 }
 
 /// Chooses the icon of an account.
@@ -454,6 +511,11 @@ fn password_in_use(key: &str) -> bool {
 async fn forget_account(state: State<'_, AppState>) -> CmdResult<()> {
     state.stop_account().await;
     let Some(acc) = Account::load().map_err(err)? else { return Ok(()) };
+    if let Some((mut s, _)) = state.unpark(acc.key()) {
+        tauri::async_runtime::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(3), s.logout()).await.ok();
+        });
+    }
     // An added account goes completely, its extra senders too.
     let mut addresses = vec![acc.key().to_string()];
     if account::is_extra() {

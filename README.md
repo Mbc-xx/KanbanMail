@@ -183,7 +183,9 @@ accounts and data. Internal names such as the `kanbanmail-core` crate and the
 - Several accounts: a row of badges in the top bar
   shows every account with its unread Inbox emails and adds new ones; label, icon and color are chosen in Settings → Account. The same address can be connected twice on different servers, for example when a domain signs in at Microsoft but keeps its mail elsewhere. Each account has its own board, signatures, senders,
   rules and Waiting column; appearance and behavior are shared (the theme too, unless "Each account has its own theme" is on in Settings → Appearance). Only the account
-  in use is followed. iCloud, Gmail and Microsoft have their own choice on the
+  in use is followed. The connection of the account just left, and of the ones whose
+  unread emails are counted in the top bar, is kept for ten minutes: moving to them
+  needs no new login. iCloud, Gmail and Microsoft have their own choice on the
   login screen: see [Mail services](#mail-services).
 - "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,
   Junk and Drafts too) in one list, each tagged with its folder; a conversation
