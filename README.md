@@ -1,350 +1,187 @@
 # Pigeonhole
 
-A kanban companion for your IMAP mailboxes: every board column is an IMAP folder,
-and dragging an email from one column to another really moves it on the server.
-Several accounts, each with its own board. Written in Rust with
-[Tauri](https://tauri.app).
+A desktop mail app that works like a kanban board. Your folders become columns
+(Inbox, Todo, Waiting, Done…), and moving an email from one column to another
+really moves it on the mail server, so every other client sees the same thing.
+It keeps track of what you wait on and what you still have to do, works with
+several accounts and without a connection, and is quick to drive from the
+keyboard.
 
-> Status: **in development**. See the [releases](https://github.com/Mbc-xx/Pigeonhole/releases).
+It works with any mailbox that speaks IMAP, and signs in to iCloud, Gmail and
+Microsoft 365 / Outlook.com without typing servers. Written in Rust with
+[Tauri](https://tauri.app); open source under the MIT license.
 
-Pigeonhole grew out of [KanbanMail](https://github.com/Mbc-xx/KanbanMail), the
-single-account app, and carries on its full history. KanbanMail stays available
-as a stable app of its own; the two can run side by side, each with its own
-accounts and data. Internal names such as the `kanbanmail-core` crate and the
-`KANBANMAIL_*` build variables come from there.
-
-![The board: every column is an IMAP folder](docs/screenshot-board.png)
+![The board: every column is a folder of your mailbox](docs/screenshot-board.png)
 
 ![Folder view: expandable conversations and the reading pane](docs/screenshot-folder.png)
 
 ![Writing an email: recipients as draggable chips](docs/screenshot-compose.png)
 
-![Sending from an extra mailbox, chosen with From](docs/screenshot-sender.png)
-
-![One rich signature for each mailbox](docs/screenshot-signatures.png)
-
-![Search with operators: subject:re after:2026-10-01 across every folder](docs/screenshot-search.png)
-
-![Sidebar collapsed to an icon rail, with the important and unread counts](docs/screenshot-rail.png)
-
-![An email being written, minimized to a bar while you read another one](docs/screenshot-minimized.png)
+![Search with operators across every folder](docs/screenshot-search.png)
 
 <sub>Screenshots taken with fictional demo data.</sub>
 
-## Features
+## Download
 
-- First-run setup (server, email, password).
-- Password stored in the operating system keychain, never in plain text.
-- Columns defined in a TOML file (display name → IMAP folder); missing folders
-  are created.
-- Cards show sender, subject, date and a preview.
-- Drag & drop between columns moves the email on the server (MOVE, or
-  COPY + `\Deleted` + EXPUNGE).
-- Pin via the IMAP `\Flagged` flag: 📌 icon on the card; pinned emails stay on top.
-- Live updates with few connections (mail servers limit them per user, shared
-  with every other client and device): the Inbox is watched live with IDLE on
-  one extra connection, the other columns are checked every 60 s with a cheap
-  STATUS on the main connection.
-- Search: typing in the search box (Ctrl/⌘+F) filters the loaded cards at once
-  (case- and accent-insensitive). Enter searches the server in sender,
-  recipients and subject, in two steps: first Inbox, Sent, Archive, the board
-  columns and the open folder, then every other folder (Trash, Junk and Drafts
-  too); every word must match. These searches stop at the 100 newest matches of
-  each folder: "Search the whole server", always under the results, goes through
-  every email of every folder, in the text too and with no limit, folder by
-  folder (slower, results appear as they are found). Besides plain words the box understands
-  `from:`, `to:` (To and Cc), `subject:`, `after:`, `before:` and `date:`
-  (a day as `2026-10-05` or `5/10/2026`, a month `2026-10` or a year `2026`;
-  both ends included), and quotes keep words together:
-  `from:"Rachel Green" after:2026-10-01 invoice`. They work in the as-you-type
-  filter, on this Mac and on the server. Results open in a list with a reading
-  pane, showing the folder of each email; "Unread only" and "Important only"
-  do not hide search results. "Also search in the text" adds the
-  email body, which is much slower on servers without a full-text index.
-  Esc goes back to the board.
-- Links in emails open in the default browser (mailto links open a new email).
-- Undo after archiving, deleting, marking as spam or moving emails; how long
-  the "Undo" button stays (or no undo at all) is set in Settings → Reading.
-- Waiting column: in the board column of emails you are waiting on (the one
-  named "Waiting", or another chosen in Settings → Columns), an email shows
-  "↩ Replied" as soon as an answer in the same conversation arrives (click it
-  to open the answer), and "Waiting N days" once it has waited longer than the
-  chosen time (3 days by default). A reminder you send in the conversation
-  (found in Sent) restarts the count, and only answers after it count.
-- To-do column: in the column named "Todo" (or another chosen in Settings →
-  Columns), an email shows "To do · N days" once it has been there longer than
-  the time chosen (5 days by default), in red after twice as long, and the
-  column title counts the late ones. A conversation counts from its newest
-  email written by someone else: your own replies do not reset it.
-- Done column: optionally, finished emails leave the "Done" column after a time
-  you choose (off by default), to Archive or to a folder of yours such as "Done
-  archive" (created if missing). Pinned and unread emails stay; it happens while
-  the app is open, with Undo.
-- Today, in the top bar: how many to-dos are late, how many answers arrived in
-  Waiting and how many drafts are not sent; a click shows the column or Drafts.
-  A notification also tells you when an answer arrives to an email you wait on.
-- Snooze: put an email aside until later today, tomorrow or Monday morning, or
-  in a week (reader button, right-click menu or Z). It waits in a "Snoozed"
-  folder, shows when it comes back, and returns where it was while the app is
-  open; a click on its tag brings it back at once.
-- Fewer waits: pointing at an email for a moment starts downloading it, so the
-  click opens it at once. Optionally (Settings → Reading), archiving, deleting,
-  moving or snoozing the open email opens the next one instead of the list.
-- Quick reply: the Quick reply button (or ⌘↓) opens a field under the open
-  email that answers its sender without opening the editor; it stays closed
-  until asked for, and Esc puts it away (⌘↵ sends, with signature, quote and the usual Undo); "Open in
-  editor" carries on with formatting, attachments and recipients.
-- Saved replies: texts written once in Settings → Writing and put in an email
-  with "Saved replies" while writing, or in a quick reply.
-- Clicking a notification brings Pigeonhole forward on that email (or on the
-  Inbox when several arrived).
-- Unsubscribe: newsletters and mailing lists that say how to leave get an
-  Unsubscribe button in the reader; with one click when the list allows it,
-  otherwise its page or a prepared email.
-- Attachments: the eye (or space on a selected attachment) previews it without
-  saving, with Quick Look on macOS.
-- People: in an open email, click or right-click the sender or a recipient (and
-  right-click a recipient while writing) for a menu: new email to them, their
-  emails, copy the address, and on macOS add them to Contacts or show them there
-  to edit. Minimized emails sit at the bottom right with a border in the theme's color.
-- Keyboard: ↑ ↓ (or J K) move between emails, ← → between columns, Enter opens;
-  E archives, ⌫ deletes, R / A / F reply, reply all and forward, U read or
-  unread, P pins, M moves (type to find the folder), Z snoozes, N writes a new
-  email; ? lists them all. With an email open, ↑ ↓ read the previous or next one.
-  The outline of the picked email goes away with a click anywhere or Esc.
-- Board columns are edited from the settings (add, rename, drag to reorder,
-  remove; type a new folder name to create it).
-- "Load more" at the bottom of a column or folder for older emails.
-- macOS notifications for new Inbox emails: only important ones, all, or off. macOS
-  asks for permission the first time; Settings → Reading has "Send a test
-  notification", and if they are turned off the app offers to open System
-  Settings → Notifications.
-- Multiple selection: ⌘/Ctrl-click or Shift-click cards (or "Select" in the
-  right-click menu), then Archive, Delete, Spam, Read, Unread, Pin or Move… from
-  the bar at the bottom or the right-click menu, or drag them together.
-  Every column has a "Mark all as read" button.
-- Automatic rules: "when From / To / Subject contains … move to …", applied to
-  new Inbox emails (first match wins), or to the whole Inbox on demand. Rules
-  are saved and always active while the app runs; emails that arrived while it
-  was closed are processed when it starts again. Rules that also work with the
-  app closed must live on the mail server (e.g. your provider's email filters).
-- Spam / Not spam, and "Empty Trash" / "Empty Junk" (with confirmation).
-- Copy on this Mac (a local SQLite database): every folder opens at once with
-  what is already known, then only new emails and changed flags are
-  downloaded. Recent emails of the Inbox and the board columns are downloaded
-  in the background, so they open instantly. Searching shows the matches on
-  this Mac first (sender, recipients, subject and the text of downloaded
-  emails, accents ignored), then the server results. Conversations are first
-  built from the local copy, then completed by the server.
-- Works without a connection: the board and the downloaded emails stay
-  readable and searchable; moving, archiving, deleting, pinning, read/unread
-  and sending are kept in a queue and done, in order, as soon as the server can
-  be reached again (next to the connection light, the top bar shows how many
-  changes are waiting).
-- Connection light in the top bar: green when connected, yellow while the
-  server is being read, red when offline; hover it for the details.
-- Instant start: the board, the folders and All Mail are shown right away from
-  the copy on this Mac, while the connection to the server is made in the
-  background; new emails and changes then appear without reloading the lists.
-  Emails are downloaded in the background on a connection of their own, so
-  clicks never wait behind them.
-- Calendar invitations (.ics) are shown with date, time, place and organizer;
-  answer Accept / Maybe / Decline (sent to the organizer) or add the event to
-  your calendar app.
-- A theme of your own from any color: every tone is worked out from it and text stays readable.
-- Emails are read and written on a light or dark background, or the one of the theme, whatever the colors of the app.
-- Light, dark or system theme, six colored themes (Sand, Rose, Mint, Ocean,
-  Forest, Midnight) and four interface sizes.
-- Preview text: none, 1 or 2 lines, on board cards and (separately) in folder
-  lists, where it runs under the sender and the subject.
-- Email reader. Remote images are blocked by default (they can reveal that you
-  opened the email): load them per email with "Load images", or always from
-  the settings. Inline images embedded in the email are always shown.
-- Attachments listed in the reader with their size; click one to save it to
-  the folder you choose (Settings → Reading: ask every time, Downloads or a folder of yours), then "Show in Finder" opens its folder; or drag it straight to a folder, the desktop or another app. Cards with attachments
-  show a paperclip.
-- Sidebar with "New email", the "Important only" and "Unread only" filters (as
-  icons with their counts) and every folder (Trash, Sent, Junk, subfolders…)
-  with unread counts. Collapse it to a narrow rail of icons with the sidebar
-  button or Ctrl/⌘+B. Click a folder to open it as a
-  compact list with a reading pane on the right (drag the divider to resize);
-  drop a card on a sidebar folder to move it there. On the board, emails open
-  in a popup.
-- Senders are shown with their initials in a colored circle.
-- Optional grouping by conversation (Settings → Reading): the board and the
-  folder lists show one card per conversation, with its latest email, the
-  people involved and how many emails it has (in folder lists: how many are
-  unread). In folder lists, › opens a conversation to show each of its emails
-  below it as one tinted block, bracketed by a line, also those in other
-  folders such as Sent or Archive (tagged with their folder); click one to
-  read it, ⌄ closes it. Replies show › even when
-  the rest of their conversation is in other folders. Archive, delete, pin and drag act
-  on the whole conversation.
-- An open email can be minimized to a bar at the bottom of the board, to read others meanwhile.
-- Several accounts: a row of badges in the top bar
-  shows every account with its unread Inbox emails and adds new ones; label, icon and color are chosen in Settings → Account. The same address can be connected twice on different servers, for example when a domain signs in at Microsoft but keeps its mail elsewhere. Each account has its own board, signatures, senders,
-  rules and Waiting column; appearance and behavior are shared (the theme too, unless "Each account has its own theme" is on in Settings → Appearance). Only the account
-  in use is followed. The connection of the account just left, and of the ones whose
-  unread emails are counted in the top bar, is kept for ten minutes: moving to them
-  needs no new login. iCloud, Gmail and Microsoft have their own choice on the
-  login screen: see [Mail services](#mail-services).
-- "All Mail" in the sidebar: the 200 most recent emails of every folder (Trash,
-  Junk and Drafts too) in one list, each tagged with its folder; a conversation
-  shows the tags of the folders it is in. What you type there searches every
-  folder on the server, older emails included.
-- Tasks: link an email or a conversation to a task kept elsewhere (Jira and the like) by
-  pasting its web link, from the reader, the right-click menu or by dropping a card on a
-  task in the sidebar. The task shows as a tag on the email and on the replies that
-  follow; the sidebar has a Tasks tab beside Folders, with a field to find a task, and
-  a click shows all the emails of one. The links
-  stay on your computer, in a file beside the settings, and are part of the exported settings.
-- Move to… lists start with a field to find a folder by name (Enter takes the
-  first). The folders offered are chosen apart from the sidebar, one tick per
-  folder or copied from it (Settings → Folders); "All folders…" shows the others when needed.
-- Sidebar folders: choose which ones to show, drag them into your order and pick a color
-  (Settings → Folders). The color also marks the board column and the folder
-  tags in search results and All Mail.
-- Conversations: when you open an email, the other emails of the same thread
-  (found through Message-ID / References in the folder, Inbox, Sent, Archive
-  and the board columns, among the most recent 2000 emails of each) appear as
-  compact rows above and below it, in one scrolling column with the open
-  email shown in full inside its own box. The open email stays in place when
-  the earlier rows arrive; scroll up (or click "↑ N earlier") to see them.
-  Click a row to open that email, or its reply button to answer it directly;
-  pointing at a row shows read/unread, archive and delete for that email only
-  (handy for an out-of-office reply in the middle of a thread).
-  The open email has its own actions: reply, reply all, forward, pin,
-  read/unread, archive, delete, spam and move to a folder. With "Compact email
-  actions" (Settings → Appearance, on by default) they are icons only, with the
-  name in the tooltip.
-  When the conversation has more than one email, a separate, highlighted bar
-  under the subject ("Whole conversation · N emails", with the number on each
-  icon) acts on all of them: pin, read/unread, archive, delete, spam and move to
-  a folder (your own sent emails are left in Sent when moving). Archive, delete,
-  spam and move first ask whether to act on the open email only or on the
-  whole conversation; the question can be turned off in Settings → Reading.
-  Moving several emails shows how many were moved, and its Undo stays at
-  least 15 seconds. Quoted earlier messages inside an email
-  are hidden behind "Show quoted text".
-- Quick actions on every card: 🗄 Archive, 🗑 Delete (move to Trash) and 📌 Pin.
-  In narrow columns, archive/delete appear on hover.
-- Right-click menu on every card, on the board and in folder lists: reply,
-  reply all, forward, read/unread, pin, archive, delete, spam, move to a folder,
-  select, and for the sender: always / never important, all emails from them
-  and a new rule. On a conversation, a switch at the top chooses "This email"
-  or the whole conversation, and every action shows how many emails it
-  touches. Right-clicking a card of a multiple selection acts on all the
-  selected emails.
-- Resizable columns: drag the right edge (minimum 160 px). Columns always fill
-  the window and keep their proportions when it is resized; double-click an
-  edge for the average width, or press Refresh to make them all equal again.
-- Unread emails stand out: a dot in the theme color, bold
-  sender; unread count per column and an
-  "Unread only" filter. The number of unread Inbox emails is shown as a badge
-  on the app icon in the Dock (only the important ones while "Important only"
-  is on).
-- "Important only" filter. An email is important when its sender is someone
-  you have written to (read from your Sent folders), is in your contacts, or
-  (optionally) shares your email domain. Automated emails are left out:
-  mailing lists and newsletters (`List-Id`, `List-Unsubscribe`), bulk and
-  automatic messages (`Precedence`, `Auto-Submitted`) and `noreply`-style
-  senders. Your own rules win over everything: from an open email choose
-  "Always important" or "Never important" for the address or the whole
-  domain, or edit the lists in the settings. The reader shows why an email is
-  (not) considered important.
-- An opened email is marked as read after a configurable number of seconds
-  (0 = immediately, or never); read/unread can also be toggled by hand.
-- The compose area is always light, like the reader.
-- Recipients appear as chips with the person's name: double-click one to edit
-  it as "Name <address>" (typing a name before a bare address is enough), click to
-  select it (⌘-click for more), copy the selection with ⌘C, drag it
-  between To, Cc and Bcc, and remove it with × or Backspace. Pasting a list
-  (one per line, from a spreadsheet, an Outlook "Rossi, Mario <m@x.it>;" list
-  or any text) turns every address found around an @ into a chip, with the
-  name written next to it; a long list scrolls inside its field.
-- ⌘↩ (Ctrl+Enter) sends the email from any field of the composer.
-- Minimize the composer (the line button next to ×): it becomes a bar at the
-  bottom right while you read other emails or copy from them; click the bar to
-  keep writing. One email is written at a time: starting another brings the
-  minimized one back.
-- Undo send: after "Send" the email waits a few seconds (10 by default, set in
-  Settings → Writing, or off) with an "Undo" button that brings it back to the
-  composer. While it waits it is kept in Drafts, so quitting the app does not
-  lose it.
-- Write new emails, reply ("Reply" / "Reply all") quoting the original message,
-  and forward ("Forward": the original text below a header, with its
-  attachments).
-- Attach files with the paperclip button (the system Open panel; the app reads
-  the files itself, downloading iCloud files if needed) or by dropping them on
-  the composer (up to about 25 MB in total); attachments are kept in drafts
-  too. An attachment whose content cannot be read is refused instead of being
-  sent empty.
-- Plain text, Markdown (bold, italic, lists, links, headings, tables and inline
-  HTML, with a preview) or Rich: a visual editor with font, size, bold, italic, underline, list indent,
-  lists, quotes and links, where pasted formatting and images are kept. Markdown
-  and Rich emails are sent as text + HTML. Sending uses SMTP (port 465 SSL/TLS or 587 STARTTLS, same
-  credentials as IMAP) and a copy is saved to the Sent folder.
-- Cc and Bcc fields; an optional "Always Bcc" address list is added to every
-  new email and reply. Bcc recipients receive the email without being visible
-  to the others, and stay recorded in your copy in the Sent folder.
-- Signatures added to new emails and replies, one per mailbox, with a rich
-  editor in Settings → Signatures (bold, italic, underline, links, images, or paste one from another
-  email client; the HTML source can be edited too). When the signature has
-  formatting, the email is sent as plain text + HTML, with signature images
-  embedded as inline attachments. Editing the signature text inside an email
-  sends that email as plain text only.
-- Extra senders: other mailboxes you only send from (Settings → Account), each
-  with its own address, name, SMTP server and signature (Settings →
-  Signatures; without one, the main signature is used). "Test" checks the
-  login. Their passwords go to the keychain under their own
-  address. When you write an email, From picks the mailbox and swaps the
-  signature; a reply to an email sent to one of them starts from it. Their
-  emails are not read here, and the copy of what you send from them is saved
-  to this account's Sent folder.
-- Drafts: while writing, the email is saved to the Drafts folder every 15
-  seconds (only when it changed). Closing the composer keeps the draft;
-  "Discard" deletes it; sending removes it. Click a card in Drafts to keep
-  writing it, in the editor it was written in (plain, Markdown or visual, with its
-  formatting and rich signature). Only the latest version is kept on the server. The Drafts
-  counter in the sidebar counts every draft, not only unread ones. A reply
-  left in Drafts is hard to miss: its conversation shows "✎ Draft reply · not
-  sent" on the board and in the lists, the open email has a banner with "Open
-  the draft", and inside the conversation the draft is marked in red.
-- Address suggestions while writing: from the senders of loaded emails and,
-  if enabled, from the system address book (macOS Contacts only for now;
-  macOS asks for permission the first time).
+- **macOS** (Apple silicon): the `.dmg` of the
+  [latest release](https://github.com/Mbc-xx/Pigeonhole/releases/latest). Open
+  it and drag Pigeonhole to Applications; updates replace the app and keep your
+  accounts and settings.
+- **Windows** (x64): the `…-setup.exe` of the newest *Windows test*
+  pre-release on the [releases page](https://github.com/Mbc-xx/Pigeonhole/releases).
+  It is not signed, so SmartScreen may warn: "More info" → "Run anyway".
 
-## Requirements
+Passwords and sign-in tokens are kept in the system's own safe store (the
+macOS keychain, the Windows Credential Manager), never in a file.
 
-- [Rust](https://rustup.rs) (stable)
-- Node.js (for the Tauri CLI)
-- macOS: Xcode Command Line Tools (`xcode-select --install`)
+Pigeonhole grew out of [KanbanMail](https://github.com/Mbc-xx/KanbanMail), the
+single-account app, and carries on its full history. KanbanMail stays available
+on its own; the two can run side by side with separate accounts and data.
+Internal names such as the `kanbanmail-core` crate and the `KANBANMAIL_*` build
+variables come from there.
 
-## Layout
+## What it does
 
-```
-crates/kanbanmail-core   shared logic: account, board, keychain, IMAP, SMTP, MIME parsing
-crates/kanbanmail-cli    command-line test tool
-app/src-tauri            desktop app (Tauri backend)
-app/ui                   user interface (HTML/CSS/JS, no external libraries): app.js,
-                         board.js, organize.js, reader.js, compose.js, settings.js,
-                         loaded in this order and sharing one scope
-```
+### A board for your work
 
-## Running the app
+- **Columns are folders.** Add, rename, reorder or remove them in Settings →
+  Columns; a new name creates the folder. Drag cards between columns, or onto a
+  folder in the sidebar. Columns resize by dragging their edge and fill the
+  window.
+- **Waiting.** In the column of emails you wait on, a card shows "↩ Replied" as
+  soon as an answer arrives in the conversation (click it to open the answer),
+  and "Waiting N days" once it has waited longer than you chose (3 days by
+  default). A reminder you send restarts the count. A notification tells you
+  when an answer arrives.
+- **To do.** In the Todo column a card shows "To do · N days" after the time you
+  chose (5 days by default), in red after twice as long, and the column title
+  counts the late ones. A conversation counts from its newest email written by
+  someone else.
+- **Done.** Optionally, finished emails leave the Done column after some days, to
+  Archive or to a folder of yours such as "Done archive". Pinned and unread
+  emails stay; Undo is offered.
+- **Today**, in the top bar: late to-dos, answers arrived in Waiting and unsent
+  drafts; a click takes you there.
+- **Snooze** an email until later today, tomorrow, Monday morning or next week.
+  It waits in a "Snoozed" folder and comes back where it was.
+- **Tasks.** Link an email or a whole conversation to a task kept elsewhere
+  (Jira and the like) by pasting its web link. The task shows as a tag on the
+  email and on the replies that follow, and the Tasks tab beside Folders lists
+  every task with its emails. The links stay on your computer.
+- **Pin** emails (the IMAP `\Flagged` flag) to keep them on top.
+- **Rules**: "when From / To / Subject contains … move to …", applied to new
+  Inbox emails while the app runs, or to the whole Inbox on demand.
 
-```bash
-cd app
-npm install
-npx tauri dev
-```
+### Reading
 
-To build the installable app (`.app` / `.dmg` on macOS):
+- **Conversations.** Optionally one card per conversation, on the board and in
+  folder lists. An open email shows the rest of its thread above and below it,
+  also from Sent, Archive and the board columns, each row with its own quick
+  actions. A bar acts on the whole conversation when you want it to.
+- **Important only.** An email is important when its sender is someone you have
+  written to, is in your contacts or (optionally) shares your domain;
+  newsletters, mailing lists and no-reply senders are left out. "Always" and
+  "Never important" fix it for an address or a domain, and the reader says why.
+- **Unread** emails stand out, with counts per column and folder, an "Unread
+  only" filter and a badge on the app icon.
+- **Safe by default.** Remote images (and tracking pixels) are blocked until you
+  allow them; links that pretend to lead somewhere else ask before opening. See
+  [Reading safely](#reading-safely).
+- **Attachments**: preview them without saving (Quick Look on macOS), save them
+  to the folder you choose and show them in Finder, or drag them straight to a
+  folder, the desktop or another app.
+- **Calendar invitations** show date, time, place and organizer, with Accept /
+  Maybe / Decline or "Add to Calendar".
+- **Unsubscribe** from newsletters that allow it, with one click when the list
+  supports it.
+- **People**: click or right-click a sender or recipient to write to them, see
+  their emails, copy the address, or add them to (or open them in) macOS
+  Contacts.
+- An opened email is marked as read after the seconds you choose, and can be
+  minimized to a bar while you read others.
 
-```bash
-cd app
-npx tauri build
-```
+### Writing
+
+- **Plain text, Markdown** (with a preview) **or Rich**, a visual editor that
+  keeps pasted formatting and images. Drafts reopen in the editor they were
+  written in.
+- **Recipients as chips**: drag them between To, Cc and Bcc, copy them with ⌘C,
+  edit one as "Name <address>", or paste a whole list from a spreadsheet or
+  Outlook. Suggestions come from your emails and the macOS address book.
+- **Signatures**, one rich signature for each mailbox, and **extra senders**:
+  mailboxes you only send from, each with its own SMTP server, chosen with From.
+- **Quick reply**: the Quick reply button (or ⌘↓) opens a field under the open
+  email; ⌘↵ sends it with signature and quote, Esc puts it away. **Saved
+  replies** are written once and inserted in any email.
+- **Undo send** for a few seconds (10 by default), with the email kept in Drafts
+  meanwhile. Drafts are saved every 15 seconds; a reply left in Drafts is
+  marked "✎ Draft reply · not sent" so it is hard to forget.
+- Attachments by button or drag and drop, forwarding with attachments, Cc,
+  Bcc and an optional "Always Bcc".
+- The composer can be minimized to a bar while you read or copy from other
+  emails. ⌘↵ sends.
+
+### Finding
+
+- **Search** filters the loaded cards as you type, then searches the server:
+  first the main folders, then all the others, and on request the whole server
+  including the text. It understands `from:`, `to:`, `subject:`, `after:`,
+  `before:`, `date:` and quotes:
+  `from:"Rachel Green" after:2026-10-01 invoice`.
+- **All Mail** lists the 200 most recent emails of every folder, each tagged
+  with its folder.
+- **Sidebar**: choose which folders it shows, their order and color; the Move
+  to… list has its own choice of folders and a field to find one by name. It
+  folds into a rail of icons (⌘B).
+
+### Several accounts
+
+- A row of badges in the top bar shows every account with its unread Inbox
+  emails; each has its own label, icon and color.
+- Each account has its own board, signatures, rules, important senders and
+  tasks. Appearance and behavior are shared, the theme too unless "Each account
+  has its own theme" is on.
+- The same address can be connected twice on different servers (a domain that
+  signs in at Microsoft but keeps its mail elsewhere).
+- Switching is quick: the connection of the account just left, and of the ones
+  counted in the top bar, is kept for ten minutes, so moving to them needs no
+  new login.
+
+### Fast, also offline
+
+- **Instant start**: the board and the folders appear at once from the copy on
+  this computer, while the connection is made in the background.
+- Recent emails are downloaded in the background, and pointing at an email
+  starts downloading it, so the click opens it at once.
+- **Without a connection** the board and downloaded emails stay readable and
+  searchable; moves, archiving, read state and sending wait in a queue and are
+  done in order when the server is back.
+- **Live updates**: the Inbox is followed live (IDLE), the other columns are
+  checked every minute. A light in the top bar shows the connection.
+- **Undo** after archiving, deleting, moving or marking as spam. Optionally,
+  acting on the open email opens the next one instead of the list.
+
+### Keyboard
+
+↑ ↓ (or J K) move between emails and ← → between columns, Enter opens; E
+archives, ⌫ deletes, R / A / F reply, reply all and forward, U read or unread,
+P pins, M moves (type to find the folder), Z snoozes, N writes a new email,
+⌘↓ opens the quick reply, ⌘F searches. With an email open, ↑ ↓ read the
+previous or next one. **?** lists them all.
+
+### Looks
+
+Light, dark or system theme, six colored themes and a theme of your own from
+any color (every tone is worked out from it, text stays readable). Emails can be
+read on a light or dark background whatever the theme. Four interface sizes,
+0–2 lines of preview, compact icon-only actions.
+
+### Notifications
+
+New Inbox emails (all, important only, or off) and answers to emails you wait
+on. On macOS, clicking a notification opens that email, and a Focus mode can
+hold notifications back: add Pigeonhole to the Focus's allowed apps. Settings →
+Reading can send a test notification.
 
 ## Mail services
 
@@ -355,25 +192,120 @@ The login screen knows these services, so there are no servers to type:
 | iCloud | App-specific password, from account.apple.com | With a custom domain, also type your iCloud address |
 | Gmail | App password, or Sign in with Google | App passwords need 2-Step Verification, and work accounts may not have them |
 | Microsoft 365, Outlook.com | Sign in with Microsoft | The only way: Microsoft refuses passwords for IMAP |
+| Any other | Server, email and password | IMAP over SSL/TLS, SMTP on 465 or 587 |
 
-Signing in happens in your browser: the app never sees that password, and the
-keychain keeps only a token. If the service cancels it, the app asks you to sign
-in again.
+Signing in with Google or Microsoft happens in your browser: the app never sees
+that password, and keeps only a token in the keychain. If the service cancels
+it, the app asks you to sign in again.
 
 On Gmail a label is a folder. All Mail and search show each email under its
-labels, and under All Mail only when it has none. Starred and Important are
+labels, and under All Mail only when it has none; Starred and Important are
 skipped when searching, because they hold the same emails again. Gmail saves sent
-emails by itself; on iCloud and Microsoft the app checks and saves a copy only if
-it is missing.
+emails by itself; on iCloud and Microsoft the app saves a copy only if it is
+missing.
 
 A work mailbox can still be closed by its administrator: IMAP or Authenticated
 SMTP may be off, or the app may need approval.
 
-### Building with browser sign-in
+## Settings
 
-Browser sign-in needs an application id, which each build brings its own. Without
-one, Sign in with Microsoft is off and Sign in with Google is not shown. Set these
-when building, and do not commit them:
+From the settings button, grouped in tabs:
+
+- **Account**: label, icon and color, sender name, SMTP server, extra send-only
+  mailboxes, export and import of the settings, the copy on this computer,
+  disconnecting the account.
+- **Writing**: "Always Bcc", undo send delay, address book suggestions, saved
+  replies.
+- **Signatures**: one rich signature for each mailbox.
+- **Columns**: the board columns, and the Waiting, Todo and Done columns with
+  their days.
+- **Reading**: undo time, "only this email or the whole conversation", what
+  happens after an action, notifications, marking as read, grouping by
+  conversation, remote images, where attachments are saved.
+- **Important**: colleagues of your domain, "always" and "never important" lists.
+- **Folders**: which folders the sidebar and the Move to… list show, their order
+  and colors.
+- **Rules**: automatic rules for new Inbox emails.
+- **Appearance**: theme (shared or per account), interface size, preview lines
+  and compact actions, previewed while you choose.
+
+They are stored as TOML files in the configuration folder
+(`~/Library/Application Support/Pigeonhole` on macOS), one folder per account.
+Nothing is synced to the cloud, and removing the app leaves these files in place.
+"Export settings…" saves columns, signatures, rules, folders, tasks and settings
+(never a password) to a JSON file; "Import settings…" applies it on another
+computer.
+
+## Copy on this computer
+
+The local copy is a SQLite database in the cache folder
+(`~/Library/Caches/Pigeonhole` on macOS), one file per account. It holds the cards
+of the folders you opened, the emails you read or that were downloaded in the
+background (those over 3 MB only when opened), a full-text index for search and
+the changes waiting for the connection. The server always stays the reference:
+the copy can be cleared from Settings → Account and is rebuilt as you use the
+app, and it is deleted when you disconnect the account. Emails are stored
+unencrypted, like in other mail apps (FileVault or BitLocker encrypt the whole
+disk); passwords are never stored there.
+
+## Connections
+
+Mail servers limit how many connections a user may open, shared with every other
+client and device, so Pigeonhole uses few: one for the account in use, one that
+watches the Inbox live (IDLE), one while emails are downloaded in the background,
+and a short one while searching. The connections of other accounts, kept for a
+quick switch, are closed after ten minutes without use.
+
+## Reading safely
+
+Email HTML is sanitized (no scripts, forms or links to external resources) and
+shown in an isolated frame that runs no scripts and cannot load anything from
+the network: remote images stay blocked until you allow them for one email or
+in the settings.
+
+Before a link of an email opens, Pigeonhole checks where it really leads. It
+asks first when the text of the link names another site than its address
+("www.yourbank.com" leading somewhere else), when the address hides its site
+behind a name and an "@", or when the site name uses look-alike letters from
+other alphabets. Hovering a link shows its full address.
+
+Every connection (IMAP, SMTP, sign-in with Microsoft or Google) is encrypted
+and checks the server's certificate against the well-known authorities: an
+invalid or self-signed certificate is refused, never accepted to make things
+work.
+
+## Not supported yet
+
+Printing. On Windows, the macOS-only parts (Contacts, Quick Look) are missing.
+
+## Building from source
+
+Requirements: [Rust](https://rustup.rs) (stable), Node.js (for the Tauri CLI),
+and on macOS the Xcode Command Line Tools (`xcode-select --install`).
+
+```bash
+cd app
+npm install
+npx tauri dev      # run while developing
+npx tauri build    # the installable app (.app / .dmg on macOS)
+```
+
+Layout:
+
+```
+crates/kanbanmail-core   shared logic: accounts, board, keychain, IMAP, SMTP, MIME, local copy
+crates/kanbanmail-cli    command-line test tool
+app/src-tauri            desktop app (Tauri backend)
+app/ui                   user interface (HTML/CSS/JS, no external libraries): app.js,
+                         board.js, organize.js, reader.js, compose.js, settings.js,
+                         loaded in this order and sharing one scope
+```
+
+### Browser sign-in
+
+Sign in with Microsoft and Google needs an application id, which each build
+brings its own. Without one, Sign in with Microsoft is off and Sign in with
+Google is not shown. Set these when building, and do not commit them:
 
 ```bash
 KANBANMAIL_MICROSOFT_CLIENT_ID=... KANBANMAIL_GOOGLE_CLIENT_ID=... KANBANMAIL_GOOGLE_CLIENT_SECRET=... npx tauri build
@@ -387,158 +319,24 @@ KANBANMAIL_MICROSOFT_CLIENT_ID=... KANBANMAIL_GOOGLE_CLIENT_ID=... KANBANMAIL_GO
   `https://mail.google.com/`. That scope is restricted: until Google verifies the
   app, it allows 100 users and sign-ins in testing mode last 7 days.
 
-## Settings
+### Command-line tool
 
-From the settings button on the board, grouped in tabs:
-
-- **Account**: sender name, SMTP server and port, extra send-only mailboxes,
-  export and import of the settings, the copy on this Mac (space it may use, background download,
-  clearing it), board columns file, disconnecting the account.
-- **Writing**: "Always Bcc", undo send delay, address book suggestions.
-- **Signatures**: one rich signature for each mailbox.
-- **Columns**: the board columns and the waiting column.
-- **Reading**: undo time, the question "only this email or the whole
-  conversation", notifications, seconds before an opened email is marked as
-  read, grouping by conversation, remote images.
-- **Important**: colleagues of your domain, "always" and "never important" lists.
-- **Folders**: which folders the sidebar and the Move to… lists show, their order and colors.
-- **Rules**: automatic rules for new Inbox emails.
-- **Appearance**: theme, interface size, preview lines and compact email
-  actions, previewed while you
-  choose.
-
-They are stored in `account.toml` and `settings.toml` in the configuration folder
-(`~/Library/Application Support/Pigeonhole` on macOS), next to `board.toml`. The
-password is in the system keychain. Nothing is synced to iCloud; removing the app
-leaves these files in place. "Export settings…" saves columns, signature, rules,
-folders and settings (never the password) to a JSON file, saved like attachments;
-"Import settings…" applies such a file on another computer (sender name and
-SMTP details only if it is for the same email address).
-
-## Configuring columns
-
-On first run, `board.toml` is created in the configuration folder
-(`~/Library/Application Support/Pigeonhole` on macOS):
-
-```toml
-max_cards_per_column = 200
-
-[[column]]
-name = "Inbox"
-folder = "INBOX"
-
-[[column]]
-name = "Todo"
-folder = "Todo"
-```
-
-On servers that keep every folder inside `INBOX` (such as SiteGround/Dovecot),
-writing `Todo` is enough: the app uses or creates `INBOX.Todo`. You can also
-give the full name, e.g. `folder = "INBOX.Waiting"`. Restart the app after
-editing.
-
-## Copy on this Mac
-
-The local copy is a SQLite database in `~/Library/Caches/Pigeonhole` (one file
-per account). It holds the cards of the folders you opened, the content of the
-emails you read or that were downloaded in the background (emails over 3 MB
-only when opened), a full-text index for search and the changes waiting for the
-connection. The server always stays the reference: the copy can be cleared at
-any time from Settings → Account and is rebuilt as you use the app; it is
-deleted when you disconnect the account. Emails are stored unencrypted, like in
-other mail apps (FileVault encrypts the whole disk); the password is never
-stored there.
-
-## Live updates
-
-If the server supports IDLE, the app keeps one extra connection on the Inbox
-and is notified of changes right away (including those made by other clients).
-The other columns are checked every 60 seconds on the main connection. In
-total Pigeonhole uses two connections, plus a short-lived one while searching
-or reading your sent emails, and one while emails are being downloaded in the
-background (it is closed when there is nothing left to download).
-
-## Reading safely
-
-Email HTML is sanitized (no scripts, forms or links to external resources) and
-shown in an isolated frame that runs no scripts and cannot load anything from
-the network: remote images (and tracking pixels) stay blocked until you allow
-them for one email or in the settings.
-
-Before a link of an email opens, Pigeonhole checks where it really leads. It
-asks first when the text of the link names another site than its address
-("www.yourbank.com" leading somewhere else), when the address hides its site
-behind a name and an "@", or when the site name uses look-alike letters from
-other alphabets. Hovering a link shows its full address.
-
-Every connection (IMAP, SMTP, sign-in with Microsoft or Google) is encrypted
-and checks the server's certificate against the well-known authorities: an
-invalid or self-signed certificate is refused, never accepted to make things
-work.
-
-## Command-line tool
+A small tool to test a server without the app. The first run asks for email,
+server and password and saves them like the app does.
 
 ```bash
-cargo run -p kanbanmail-cli
-```
-
-The first time it asks for email, server and password. If login succeeds, it
-saves server and email to `account.toml` in the configuration folder and the
-password to the keychain. Later runs connect on their own.
-
-Show the board columns and the first emails of each:
-
-```bash
-cargo run -p kanbanmail-cli -- board
-```
-
-List every folder with its kind and unread count:
-
-```bash
-cargo run -p kanbanmail-cli -- folders
-```
-
-Test the SMTP login and find the folder that receives sent emails (sends nothing):
-
-```bash
-cargo run -p kanbanmail-cli -- smtp
-```
-
-Save a test draft twice, check that only one copy is kept, then delete it:
-
-```bash
-cargo run -p kanbanmail-cli -- drafts
-```
-
-Search sender, recipients and subject in Inbox, Sent and Archive:
-
-```bash
+cargo run -p kanbanmail-cli              # log in and check the account
+cargo run -p kanbanmail-cli -- board     # the board columns and their first emails
+cargo run -p kanbanmail-cli -- folders   # every folder with its kind and unread count
+cargo run -p kanbanmail-cli -- smtp      # test the SMTP login (sends nothing)
+cargo run -p kanbanmail-cli -- drafts    # save a test draft twice, then delete it
 cargo run -p kanbanmail-cli -- search some words
+cargo run -p kanbanmail-cli -- known     # classify the newest Inbox emails (read-only)
+cargo run -p kanbanmail-cli -- thread    # the conversation of the newest reply (read-only)
+cargo run -p kanbanmail-cli -- reset     # forget the saved account and password
 ```
 
-Count the people you wrote to and classify the newest Inbox emails (read-only):
-
-```bash
-cargo run -p kanbanmail-cli -- known
-```
-
-Show the conversation of the newest reply in the Inbox (read-only):
-
-```bash
-cargo run -p kanbanmail-cli -- thread
-```
-
-Forget the saved account and password:
-
-```bash
-cargo run -p kanbanmail-cli -- reset
-```
-
-## Not supported yet
-
-Snoozing, keyboard shortcuts, printing.
-
-## Icons
+### Icons
 
 The interface uses a small set of original line icons drawn as inline SVG
 (`app/ui/index.html`), so no icon font or external file is loaded. The app icon
