@@ -430,7 +430,7 @@ async function openReader(folder, card, opts = {}) {
   $("reader-to").textContent = "";
   $("reader-cc").textContent = "";
   $("reader-unsubscribe").hidden = true;
-  $("quick-reply").hidden = true;
+  $("quick-reply").hidden = $("reader-quick").hidden = true;
   $("reader-cc").hidden = $("reader-cc-label").hidden = true;
   $("reader-date").textContent = formatDate(card.date, true);
   $("reader-toggle").hidden = true;

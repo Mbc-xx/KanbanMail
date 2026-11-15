@@ -1012,6 +1012,12 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
 /// Unread emails of a folder. On a big one this is slow, Gmail's All Mail above all:
 /// the folder list leaves it out so that it never stands in the way of the board.
 pub async fn folder_unseen(session: &mut Session, folder: &str) -> Result<u32> {
+    // STATUS on the open folder may give old numbers (RFC 3501 6.3.10, and
+    // Outlook and iCloud do): a kept connection usually has the Inbox open.
+    if session.open.as_ref().is_some_and(|(f, _)| f == folder || (f.eq_ignore_ascii_case("INBOX") && folder.eq_ignore_ascii_case("INBOX"))) {
+        let found = session.conn.uid_search("UNSEEN").await.with_context(|| format!("cannot read {folder}"))?;
+        return Ok(found.len() as u32);
+    }
     let mb = session.status(folder, "(UNSEEN)").await.with_context(|| format!("cannot read {folder}"))?;
     Ok(mb.unseen.unwrap_or(0))
 }

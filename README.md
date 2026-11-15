@@ -90,8 +90,9 @@ accounts and data. Internal names such as the `kanbanmail-core` crate and the
 - Fewer waits: pointing at an email for a moment starts downloading it, so the
   click opens it at once. Optionally (Settings → Reading), archiving, deleting,
   moving or snoozing the open email opens the next one instead of the list.
-- Quick reply: a field under the open email answers its sender without opening
-  the editor (⌘↵ sends, with signature, quote and the usual Undo); "Open in
+- Quick reply: the Quick reply button (or ⌘↓) opens a field under the open
+  email that answers its sender without opening the editor; it stays closed
+  until asked for, and Esc puts it away (⌘↵ sends, with signature, quote and the usual Undo); "Open in
   editor" carries on with formatting, attachments and recipients.
 - Saved replies: texts written once in Settings → Writing and put in an email
   with "Saved replies" while writing, or in a quick reply.

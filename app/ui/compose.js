@@ -667,15 +667,39 @@ function replyTo(all, text = "") {
 
 // ---------- quick reply ----------
 
-/// The quick reply under the open email: only for emails someone else sent.
+/// The quick reply under the open email, only for emails someone else sent.
+/// It stays closed until asked for, so reading is not an invitation to answer.
 function showQuickReply() {
   const msg = readerMessage;
   const kind = readerCard && folderKind(readerCard.folder);
-  const show = !!msg?.reply_address && !["drafts", "sent"].includes(kind) && !myAddresses().has(msg.reply_address.toLowerCase());
-  $("quick-reply").hidden = !show;
-  $("quick-reply-text").value = "";
-  if (show) $("quick-reply-text").placeholder = `Quick reply to ${shortName(msg.from) || msg.reply_address}…  (⌘↵ sends)`;
+  const can = !!msg?.reply_address && !["drafts", "sent"].includes(kind) && !myAddresses().has(msg.reply_address.toLowerCase());
+  $("reader-quick").hidden = !can;
+  closeQuickReply();
 }
+
+function openQuickReply() {
+  const msg = readerMessage;
+  if ($("reader-quick").hidden || !msg) return;
+  $("quick-reply-text").placeholder = `Quick reply to ${shortName(msg.from) || msg.reply_address}…  (⌘↵ sends, Esc closes)`;
+  $("quick-reply").hidden = false;
+  $("quick-reply").scrollIntoView({ block: "nearest" });
+  $("quick-reply-text").focus();
+}
+
+function closeQuickReply() {
+  $("quick-reply").hidden = true;
+  $("quick-reply-text").value = "";
+}
+
+$("reader-quick").addEventListener("click", openQuickReply);
+document.addEventListener("keydown", (ev) => {
+  if (ev.key !== "ArrowDown" || !(ev.metaKey || ev.ctrlKey) || ev.shiftKey || ev.altKey) return;
+  // Only with an email open and visible, and not while typing elsewhere.
+  if (ev.target.closest?.("input, textarea, [contenteditable='true']") || !$("reader-quick").offsetParent) return;
+  if (!$("composer").hidden && !composerMinimized()) return;
+  ev.preventDefault();
+  openQuickReply();
+});
 
 /// Sends what was typed as a plain reply, with signature and quote, through
 /// the usual way (Undo brings it back in the full editor).
@@ -698,7 +722,7 @@ async function quickReply() {
     markdown: false,
     attachments: [],
   };
-  $("quick-reply-text").value = "";
+  closeQuickReply();
   queueSend({ draft, reply: f.reply, context: f.context, title: "Reply", rich: false, markdown: false, hasDraft: false, attachments: [], saved: true });
 }
 
@@ -707,12 +731,16 @@ $("quick-reply-text").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
     ev.preventDefault();
     quickReply();
+  } else if (ev.key === "Escape") {
+    // Hidden, not emptied: ⌘↓ brings back what was typed.
+    ev.stopPropagation();
+    $("quick-reply").hidden = true;
   }
 });
 $("quick-reply-open").addEventListener("click", () => {
   const text = $("quick-reply-text").value.trim();
   replyTo(false, text);
-  $("quick-reply-text").value = "";
+  closeQuickReply();
 });
 $("quick-reply-templates").addEventListener("click", (ev) => {
   ev.stopPropagation();
