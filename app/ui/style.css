@@ -449,7 +449,7 @@ span.draft-tag { cursor: default; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 .reader {
   width: min(900px, 100%);
-  height: 100%;
+  max-height: 100%;
   background: var(--card);
   border: var(--hairline) solid var(--edge);
   border-radius: var(--r-xl);
@@ -967,7 +967,10 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* Conversation rows inside the reader */
 .thread { display: flex; flex-direction: column; gap: 6px; padding: 0 12px; overflow-y: auto; }
 /* Whole conversation in one scrolling column */
-.reader-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px 16px; display: flex; flex-direction: column; gap: 6px; overflow-anchor: none; }
+.reader.tall { height: 100%; }
+/* A short email starts where a full-height one does: at the top. */
+#reader { align-items: flex-start; }
+.reader-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 12px 16px; display: flex; flex-direction: column; gap: 6px; overflow-anchor: none; }
 .reader-scroll .thread { padding: 0; overflow: visible; }
 .message-card {
   flex-shrink: 0;
@@ -985,6 +988,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .message-card .reader-meta { padding: 2px 12px 8px 50px; }
 .message-card .reader-actions, .message-card .reader-sender, .message-card .attachments { padding-left: 12px; padding-right: 12px; }
 .message-card .reader-tools { padding-left: 12px; padding-right: 12px; }
+/* In a long email the actions stay in view while the text scrolls under them. */
+.message-card .reader-actions { position: sticky; top: -4px; z-index: 2; padding-top: 6px; background: var(--card); }
+.message-card .reader-actions.stuck { box-shadow: 0 6px 8px -6px rgba(0, 0, 0, 0.35); border-bottom: var(--hairline) solid var(--edge); }
 .thread-row {
   display: grid;
   grid-template-columns: 28px minmax(80px, 160px) 1fr auto auto auto;

@@ -550,17 +550,20 @@ function avatar(name) {
   return setAvatar(el("span", "avatar"), name);
 }
 
-/// When there are earlier emails above, keeps at least one screen of content
-/// from the open email down, so it can sit at the top without the view jumping
-/// (a short email gets some empty space below it).
+/// The popup is as tall as its email, up to the window. Only when a long
+/// conversation does not fit, and there are earlier emails above, it takes
+/// the whole height and keeps one screen from the open email down, so that
+/// email can sit at the top without the view jumping.
 function ensureRoomBelow() {
   const scroller = $("reader-scroll");
   const spacer = $("reader-spacer");
   const card = $("message-card");
-  if ($("thread-before").hidden) {
-    spacer.style.height = "0px";
-    return;
-  }
+  const reader = $("reader-article");
+  const inPane = reader.classList.contains("in-pane");
+  spacer.style.height = "0px";
+  reader.classList.remove("tall");
+  if ($("thread-before").hidden || (!inPane && scroller.scrollHeight <= scroller.clientHeight)) return;
+  reader.classList.add("tall");
   const below = scroller.scrollHeight - spacer.offsetHeight - (card.offsetTop - scroller.firstElementChild.offsetTop);
   spacer.style.height = Math.max(0, scroller.clientHeight - below) + "px";
 }
@@ -571,6 +574,15 @@ function scrollToMessage(smooth = false) {
   const card = $("message-card");
   scroller.scrollTo({ top: Math.max(0, card.offsetTop - scroller.offsetTop - 4), behavior: smooth ? "smooth" : "auto" });
 }
+
+// The actions get a line under them once the text scrolls below them.
+$("reader-scroll").addEventListener("scroll", () => {
+  const bar = document.querySelector("#message-card .reader-actions");
+  bar.classList.toggle("stuck", bar.getBoundingClientRect().top - $("reader-scroll").getBoundingClientRect().top < 1 && $("reader-scroll").scrollTop > 0);
+}, { passive: true });
+
+// The email may grow after it opens (its text, attachments, the quick reply).
+new ResizeObserver(() => ensureRoomBelow()).observe($("message-card"));
 
 $("reader-earlier").addEventListener("click", () => $("reader-scroll").scrollTo({ top: 0, behavior: "smooth" }));
 
