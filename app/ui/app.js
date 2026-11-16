@@ -173,7 +173,7 @@ async function markMany(members, seen) {
   const byFolder = new Map();
   for (const m of members) {
     if (m.card.seen !== seen) changeUnseen(m.folder, seen ? -1 : 1);
-    m.card.seen = seen;
+    seenEverywhere(m.folder, m.card, seen);
     if (!byFolder.has(m.folder)) byFolder.set(m.folder, []);
     byFolder.get(m.folder).push(m.card.uid);
   }

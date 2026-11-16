@@ -3,6 +3,6 @@ resolver = "2"
 members = ["crates/kanbanmail-core", "crates/kanbanmail-cli", "app/src-tauri"]
 
 [workspace.package]
-version = "2.11.1"
+version = "2.11.2"
 edition = "2021"
 license = "MIT"

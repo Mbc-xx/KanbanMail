@@ -248,17 +248,7 @@ $("reader-load-images").addEventListener("click", () => {
 async function setSeen(folder, card, seen) {
   stopSeenTimer();
   if (card.seen !== seen) changeUnseen(folder, seen ? -1 : 1);
-  card.seen = seen;
-  // The column may have been reloaded meanwhile: update the current copy too.
-  const live = (state.cards[folder] || []).find((c) => c.uid === card.uid);
-  if (live) live.seen = seen;
-  for (const key of MULTI_KEYS) {
-    const copy = (state.cards[key] || []).find((c) => c.uid === card.uid && c.__folder === folder);
-    if (copy) {
-      copy.seen = seen;
-      renderCards(key);
-    }
-  }
+  seenEverywhere(folder, card, seen);
   paintFolderCounts();
   scheduleFolderCounts();
   if (readerCard?.card === card) updateSeenButton();
@@ -271,11 +261,41 @@ async function setSeen(folder, card, seen) {
   }
 }
 
+/// The same email can be held by the column, by search or All Mail, and by
+/// the conversation of the open email (a copy from the server): all of them
+/// change together, or a card stays bold after it was read.
+function seenEverywhere(folder, card, seen) {
+  card.seen = seen;
+  const live = (state.cards[folder] || []).find((c) => c.uid === card.uid);
+  if (live) live.seen = seen;
+  const inThread = (readerThread || []).find((e) => e.folder === folder && e.card.uid === card.uid);
+  if (inThread) inThread.card.seen = seen;
+  for (const key of MULTI_KEYS) {
+    const copy = (state.cards[key] || []).find((c) => c.uid === card.uid && c.__folder === folder);
+    if (copy) {
+      copy.seen = seen;
+      renderCards(key);
+    }
+  }
+}
+
+/// The open email is read; with conversations grouped, the card stood for
+/// the whole conversation, so its other unread emails are read too.
+function markOpenRead(folder, card) {
+  const others = state.groupThreads && readerCard?.card === card ? convMembers().filter((m) => m.card !== card && !m.card.seen) : [];
+  setSeen(folder, card, true);
+  fillThread();
+  if (others.length) markMany(others, true).then(() => {
+    updateConvBar();
+    fillThread();
+  });
+}
+
 function startSeenTimer(folder, card) {
   stopSeenTimer();
   const secs = state.markReadAfter;
   if (card.seen || secs < 0) return;
-  if (secs === 0) return void setSeen(folder, card, true);
+  if (secs === 0) return void markOpenRead(folder, card);
   let left = secs;
   const hint = () => ($("reader-seen-hint").textContent = `Will be marked as read in ${left} s`);
   hint();
@@ -283,7 +303,7 @@ function startSeenTimer(folder, card) {
     left -= 1;
     if (left > 0) hint();
   }, 1000);
-  seenTimer = setTimeout(() => setSeen(folder, card, true), secs * 1000);
+  seenTimer = setTimeout(() => markOpenRead(folder, card), secs * 1000);
 }
 
 function folderKind(folder) {
