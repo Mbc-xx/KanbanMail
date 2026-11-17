@@ -415,6 +415,19 @@ function markSelectedRow() {
   }
 }
 
+const FILE_FOLDER = "\u0001file"; // the folder of .eml files opened with the app (see the backend)
+
+/// Shows the .eml files opened from Finder or Explorer (the last one, when several).
+async function showOpenedFiles() {
+  const files = await invoke("take_opened_files").catch(() => []);
+  const last = files?.at(-1);
+  if (!last) return;
+  const [uid, name] = last;
+  if (!$("composer").hidden) minimizeComposer(true);
+  openReader(FILE_FOLDER, { uid, subject: name.replace(/\.eml$/i, ""), from: "", from_address: "", date: 0, seen: true, flagged: false, thread_refs: [] });
+}
+listen("files-opened", showOpenedFiles);
+
 async function openReader(folder, card, opts = {}) {
   dropMinimized(folder, card);
   readerCard = { folder, card };
@@ -433,8 +446,11 @@ async function openReader(folder, card, opts = {}) {
   markSelectedRow();
   updateSeenButton();
   $("reader-reply").disabled = $("reader-reply-all").disabled = true;
-  $("reader-trash").hidden = folderKind(folder) === "trash";
-  $("reader-archive").hidden = folderKind(folder) === "archive";
+  // An .eml file opened from Finder is in no folder: it can only be read and answered.
+  const fromFile = folder === FILE_FOLDER;
+  $("reader-trash").hidden = fromFile || folderKind(folder) === "trash";
+  $("reader-archive").hidden = fromFile || folderKind(folder) === "archive";
+  for (const id of ["reader-pin", "reader-seen", "reader-spam", "reader-move", "reader-snooze", "reader-task"]) $(id).hidden = fromFile;
   const inJunk = folderKind(folder) === "junk";
   $("reader-spam").querySelector("span").textContent = inJunk ? "Not spam" : "Spam";
   $("reader-spam").title = inJunk ? "Move back to the Inbox" : "Move to Junk";
@@ -471,7 +487,7 @@ async function openReader(folder, card, opts = {}) {
     showQuickReply();
     $("reader-cc").hidden = $("reader-cc-label").hidden = !msg.cc;
     $("reader-reply").disabled = $("reader-reply-all").disabled = false;
-    if (readerCard?.card === card) startSeenTimer(folder, card);
+    if (readerCard?.card === card && !fromFile) startSeenTimer(folder, card);
     if (msg.date) $("reader-date").textContent = formatDate(msg.date, true);
     readerMode = msg.html ? "html" : "text";
     readerRemoteAllowed = state.loadRemoteImages;
@@ -480,7 +496,7 @@ async function openReader(folder, card, opts = {}) {
     renderInvite(msg.invite);
     renderReaderBody();
     ({ reply: () => replyTo(false), "reply-all": () => replyTo(true), forward }[opts.then])?.();
-    if (!opts.thread) loadThread(folder, card, msg);
+    if (!opts.thread && !fromFile) loadThread(folder, card, msg);
   } catch (e) {
     $("reader-body").replaceChildren(
       isOfflineError(e)

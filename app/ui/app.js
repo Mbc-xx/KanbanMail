@@ -531,6 +531,7 @@ async function start() {
       setAccount(status);
       flashAccountAfterSwitch();
       const fromCache = showCachedBoard();
+      showOpenedFiles();
       await openBoard({ fromCache });
     } else {
       prepareLogin(status);

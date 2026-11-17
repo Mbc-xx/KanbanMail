@@ -697,7 +697,8 @@ function replyFields(msg, all) {
       .join(", ");
   }
   const subject = /^re:/i.test(msg.subject.trim()) ? msg.subject : "Re: " + msg.subject;
-  return { to, cc, subject, from, reply: { folder: readerCard.folder, uid: readerCard.card.uid }, context: { in_reply_to: msg.message_id, references: msg.references } };
+  const reply = readerCard.folder === FILE_FOLDER ? null : { folder: readerCard.folder, uid: readerCard.card.uid };
+  return { to, cc, subject, from, reply, context: { in_reply_to: msg.message_id, references: msg.references } };
 }
 
 function replyTo(all, text = "") {

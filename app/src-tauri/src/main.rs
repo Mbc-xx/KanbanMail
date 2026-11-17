@@ -92,6 +92,41 @@ struct AppState {
     /// ones whose unread emails were counted), kept a while so that moving
     /// to them needs no new login. One per account.
     parked: std::sync::Mutex<HashMap<String, Parked>>,
+    /// `.eml` files opened from Finder or Explorer, read as emails of the
+    /// folder [`FILE_FOLDER`] whose uid is their place here.
+    files: std::sync::Mutex<Vec<std::path::PathBuf>>,
+    /// How many of `files` the window has already been given.
+    files_given: std::sync::Mutex<usize>,
+}
+
+/// The folder name of `.eml` files opened with the app (no IMAP folder has it).
+const FILE_FOLDER: &str = "\u{1}file";
+
+/// Keeps the `.eml` files among `paths` and tells the window to show them.
+fn open_files(app: &AppHandle, paths: impl IntoIterator<Item = std::path::PathBuf>) {
+    let state = app.state::<AppState>();
+    let mut files = state.files.lock().unwrap();
+    let before = files.len();
+    files.extend(paths.into_iter().filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("eml"))));
+    if files.len() == before {
+        return;
+    }
+    drop(files);
+    app.emit("files-opened", ()).ok();
+    if let Some(window) = app.get_webview_window("main") {
+        window.unminimize().ok();
+        window.set_focus().ok();
+    }
+}
+
+/// The opened `.eml` files the window has not shown yet, as uids of [`FILE_FOLDER`].
+#[tauri::command]
+fn take_opened_files(state: State<'_, AppState>) -> Vec<(u32, String)> {
+    let files = state.files.lock().unwrap();
+    let mut given = state.files_given.lock().unwrap();
+    let new = (*given..files.len()).map(|i| (i as u32, files[i].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())).collect();
+    *given = files.len();
+    new
 }
 
 struct Parked {
@@ -972,6 +1007,10 @@ fn cached_all_mail(state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
 /// The full email: from the local copy if it is there, otherwise from the
 /// server (and then kept).
 async fn raw_email(state: &AppState, folder: &str, uid: u32) -> CmdResult<Vec<u8>> {
+    if folder == FILE_FOLDER {
+        let path = state.files.lock().unwrap().get(uid as usize).cloned().ok_or("file not found")?;
+        return std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()));
+    }
     if let Some(Some(raw)) = state.with_store(|st| st.raw(folder, uid)) {
         return Ok(raw);
     }
@@ -2087,7 +2126,14 @@ fn open_contacts_privacy() {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // On Windows and Linux opening a file starts the app again: the running
+    // one gets the file instead.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        open_files(app, args.into_iter().skip(1).map(std::path::PathBuf::from));
+    }));
+    builder
         .plugin(tauri_plugin_notification::init())
         .plugin(external_links())
         .manage(AppState::default())
@@ -2095,6 +2141,8 @@ fn main() {
             notifications::init(app.handle());
             // Attachments dragged out last time are not needed any more.
             std::fs::remove_dir_all(drag_dir()).ok();
+            // Windows and Linux pass the files to open on the command line.
+            open_files(app.handle(), std::env::args_os().skip(1).map(std::path::PathBuf::from));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2173,10 +2221,18 @@ fn main() {
             attachment_data,
             export_settings,
             import_settings,
-            system_contacts
+            system_contacts,
+            take_opened_files
         ])
-        .run(tauri::generate_context!())
-        .expect("error while starting Pigeonhole");
+        .build(tauri::generate_context!())
+        .expect("error while starting Pigeonhole")
+        .run(|_app, _event| {
+            // macOS hands over the files to open as an event, also while running.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                open_files(_app, urls.into_iter().filter_map(|u| u.to_file_path().ok()));
+            }
+        });
 }
 
 #[cfg(test)]

@@ -179,6 +179,13 @@ any color (every tone is worked out from it, text stays readable). Emails can be
 read on a light or dark background whatever the theme. Four interface sizes,
 0–2 lines of preview, compact icon-only actions.
 
+### Opening .eml files
+
+Pigeonhole can open `.eml` files from Finder or Explorer (Open With, or as the
+default app: in Finder, Get Info → Open with → Change All). The email opens in
+the reader to read, reply, forward and save its attachments; it is in no
+folder, so it cannot be archived or moved.
+
 ### Notifications
 
 New Inbox emails (all, important only, or off) and answers to emails you wait

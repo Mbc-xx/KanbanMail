@@ -256,7 +256,7 @@ document.addEventListener("keydown", (ev) => {
             advance();
             moveMany(members, to);
           }, folder),
-    z: () => popMenu(readerCard ? $("reader-snooze") : cardEl, (menu) => fillSnoozeMenu(menu, members, [])),
+    z: () => (!readerCard || !$("reader-snooze").hidden) && popMenu(readerCard ? $("reader-snooze") : cardEl, (menu) => fillSnoozeMenu(menu, members, [])),
   };
   const run = actions[key];
   if (!run) return;
