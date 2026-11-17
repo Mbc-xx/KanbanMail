@@ -1484,7 +1484,10 @@ function updateSenderPanel() {
   const card = readerCard?.card;
   if (!card) return;
   const info = importance(card);
-  $("sender-why").textContent = (info.important ? "Important — " : "Not important — ") + info.why;
+  $("sender-why").textContent = info.why;
+  $("importance-label").textContent = info.important ? "Important" : "Not important";
+  $("reader-importance").classList.toggle("important", info.important);
+  $("reader-importance").querySelector("use").setAttribute("href", info.important ? "#i-important" : "#i-important-off");
   const rule = senderRule(card.from_address || "");
   $("rule-allow").classList.toggle("active", rule?.rule === "allow");
   $("rule-block").classList.toggle("active", rule?.rule === "block");
@@ -1502,6 +1505,7 @@ async function setSenderRule(kind, card = readerCard?.card, scope = $("rule-scop
   try {
     [state.allow, state.block] = await invoke("set_sender_rule", { pattern, rule });
     updateSenderPanel();
+    showImportanceMenu(false);
     paintFolderCounts();
     renderSoon();
     toast(rule === "none" ? `Rule removed for ${pattern}` : `${pattern} is now ${kind === "allow" ? "always" : "never"} important`, "info");
@@ -1510,6 +1514,23 @@ async function setSenderRule(kind, card = readerCard?.card, scope = $("rule-scop
   }
 }
 
+/// The menu of the importance chip: why, and the rules for this sender.
+function showImportanceMenu(open) {
+  $("importance-menu").hidden = !open;
+  $("reader-importance").setAttribute("aria-expanded", String(open));
+}
+$("reader-importance").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  showImportanceMenu($("importance-menu").hidden);
+});
+$("importance-menu").addEventListener("click", (ev) => ev.stopPropagation());
+document.addEventListener("click", () => showImportanceMenu(false));
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !$("importance-menu").hidden) {
+    ev.stopPropagation();
+    showImportanceMenu(false);
+  }
+}, true);
 $("rule-allow").addEventListener("click", () => setSenderRule("allow"));
 $("rule-block").addEventListener("click", () => setSenderRule("block"));
 

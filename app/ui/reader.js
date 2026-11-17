@@ -297,7 +297,7 @@ function startSeenTimer(folder, card) {
   if (card.seen || secs < 0) return;
   if (secs === 0) return void markOpenRead(folder, card);
   let left = secs;
-  const hint = () => ($("reader-seen-hint").textContent = `Will be marked as read in ${left} s`);
+  const hint = () => ($("reader-seen-hint").textContent = `Read in ${left} s`);
   hint();
   seenCountdown = setInterval(() => {
     left -= 1;
@@ -428,6 +428,13 @@ async function showOpenedFiles() {
 }
 listen("files-opened", showOpenedFiles);
 
+/// The date of the open email, short; the long form when pointing at it.
+function showReaderDate(t) {
+  const d = new Date(t * 1000);
+  $("reader-date").textContent = t ? d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+  $("reader-date").title = t ? formatDate(t, true) : "";
+}
+
 async function openReader(folder, card, opts = {}) {
   dropMinimized(folder, card);
   readerCard = { folder, card };
@@ -455,6 +462,7 @@ async function openReader(folder, card, opts = {}) {
   $("reader-spam").querySelector("span").textContent = inJunk ? "Not spam" : "Spam";
   $("reader-spam").title = inJunk ? "Move back to the Inbox" : "Move to Junk";
   $("rule-scope").value = "address";
+  showImportanceMenu(false);
   updateSenderPanel();
   $("reader-subject").textContent = card.subject || "(no subject)";
   renderReaderTasks();
@@ -468,7 +476,7 @@ async function openReader(folder, card, opts = {}) {
   $("reader-unsubscribe").hidden = true;
   $("quick-reply").hidden = $("reader-quick").hidden = true;
   $("reader-cc").hidden = $("reader-cc-label").hidden = true;
-  $("reader-date").textContent = formatDate(card.date, true);
+  showReaderDate(card.date);
   $("reader-toggle").hidden = true;
   $("reader-attachments").hidden = true;
   $("reader-invite").hidden = true;
@@ -488,7 +496,7 @@ async function openReader(folder, card, opts = {}) {
     $("reader-cc").hidden = $("reader-cc-label").hidden = !msg.cc;
     $("reader-reply").disabled = $("reader-reply-all").disabled = false;
     if (readerCard?.card === card && !fromFile) startSeenTimer(folder, card);
-    if (msg.date) $("reader-date").textContent = formatDate(msg.date, true);
+    if (msg.date) showReaderDate(msg.date);
     readerMode = msg.html ? "html" : "text";
     readerRemoteAllowed = state.loadRemoteImages;
     $("reader-toggle").hidden = !(msg.html && msg.text);

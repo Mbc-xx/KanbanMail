@@ -608,7 +608,7 @@ function escapeHtml(text) {
 
 function loadSignatureEditor(text, html) {
   showSignatureSource(false);
-  $("sig-link-row").hidden = true;
+  closeSigLink();
   sigEditor.innerHTML = html || escapeHtml(text || "").replace(/\n/g, "<br>");
   checkSignatureImages();
 }
@@ -713,30 +713,7 @@ $("sig-clear").addEventListener("click", () => {
   document.execCommand("unlink");
 });
 
-$("sig-link").addEventListener("mousedown", (ev) => ev.preventDefault());
-$("sig-link").addEventListener("click", () => {
-  rememberSelection();
-  $("sig-link-row").hidden = false;
-  $("sig-link-url").focus();
-});
-
-$("sig-link-add").addEventListener("click", () => {
-  let url = $("sig-link-url").value.trim();
-  if (url && !/^(https?:|mailto:)/i.test(url)) url = (url.includes("@") ? "mailto:" : "https://") + url;
-  $("sig-link-row").hidden = true;
-  $("sig-link-url").value = "";
-  if (!url) return;
-  restoreSelection();
-  const sel = window.getSelection();
-  if (sel.isCollapsed) document.execCommand("insertHTML", false, `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`);
-  else document.execCommand("createLink", false, url);
-});
-$("sig-link-url").addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") {
-    ev.preventDefault();
-    $("sig-link-add").click();
-  }
-});
+const closeSigLink = linkTool("sig-link", sigEditor, rememberSelection, restoreSelection);
 
 $("sig-image").addEventListener("mousedown", (ev) => ev.preventDefault());
 $("sig-image").addEventListener("click", () => {

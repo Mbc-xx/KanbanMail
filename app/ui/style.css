@@ -548,20 +548,29 @@ body:has(#composer.minimized:not([hidden])) .reader-dock { right: 352px; max-wid
 }
 .reader-tools button { font-size: 12px; padding: 3px 8px; }
 .reader-tools, .reader-actions { flex-wrap: wrap; row-gap: 6px; }
-.reader-tools button, .reader-actions button, .reader-sender button, .reader-sender select { white-space: nowrap; }
+.reader-tools button, .reader-actions button, .importance-menu button { white-space: nowrap; }
 .reader-tools .spacer { flex: 1; }
-.reader-sender {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 16px 8px;
-  font-size: 12px;
-  flex-wrap: wrap;
+/* Important or not: a chip at the end of the actions, its reason and rules in a menu. */
+.reader-actions .spacer { flex: 1; }
+/* The "marked as read in…" countdown gives way instead of pushing the chip down. */
+#reader-seen-hint { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.importance-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+.importance-chip b { font-weight: normal; }
+/* In a narrow reading pane the chip keeps its icon only (its menu says the rest). */
+.message-card { container-type: inline-size; }
+@container (max-width: 760px) { .importance-chip b { display: none; } }
+.importance-chip.important { color: var(--accent-ink); border-color: var(--accent); }
+:root[data-compact-actions="true"] .reader-actions .importance-chip { padding: 4px 10px; }
+.reader-actions .text-btn { font-size: 12px; }
+.importance-menu {
+  position: absolute; right: 12px; top: calc(100% + 2px); z-index: 30;
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: 12px;
+  background: var(--card); border: var(--hairline) solid var(--edge); border-radius: var(--r-m); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
-.reader-sender .spacer { flex: 1; }
-.reader-sender button, .reader-sender select { font-size: 12px; padding: 3px 8px; }
-.reader-sender select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
-.reader-sender button.active { border-color: var(--accent); background: var(--drop); }
+.importance-rules { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.importance-menu button, .importance-menu select { font-size: 12px; padding: 3px 8px; }
+.importance-menu select { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
+.importance-menu button.active { border-color: var(--accent); background: var(--drop); }
 .rules { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .rules label { font-weight: normal; font-size: 12px; }
 .rules textarea { font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace !important; }
@@ -659,6 +668,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .thread-count.unread-count { background: var(--accent); color: #fff; border-color: var(--accent); }
 
 .reader-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -787,7 +797,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .sig-toolbar .spacer { flex: 1; }
 .sig-toolbar button { min-width: 30px; justify-content: center; border-color: transparent; background: transparent; }
 .sig-toolbar button:hover { border-color: var(--border); background: var(--panel); }
-.sig-toolbar button.active { border-color: var(--accent); }
+.sig-toolbar button.active { border-color: var(--accent); color: var(--accent-ink); }
 .sig-editor {
   min-height: 90px;
   max-height: 220px;
@@ -980,13 +990,14 @@ body.resizing { cursor: col-resize; user-select: none; }
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.12);
 }
 .message-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 4px; }
-.message-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.message-from { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Name and address on one line: the address gives way first. */
+.message-who { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+.message-from { flex: 0 1 auto; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-who .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #reader-spacer { flex-shrink: 0; }
 .earlier-pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; }
 .message-card .reader-meta { padding: 2px 12px 8px 50px; }
-.message-card .reader-actions, .message-card .reader-sender, .message-card .attachments { padding-left: 12px; padding-right: 12px; }
+.message-card .reader-actions, .message-card .attachments { padding-left: 12px; padding-right: 12px; }
 .message-card .reader-tools { padding-left: 12px; padding-right: 12px; }
 /* In a long email the actions stay in view while the text scrolls under them. */
 .message-card .reader-actions { position: sticky; top: -4px; z-index: 2; padding-top: 6px; background: var(--card); }

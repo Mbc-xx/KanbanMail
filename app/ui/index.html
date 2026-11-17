@@ -184,18 +184,21 @@
             <button id="reader-move" title="Move this email to a folder…"><svg class="icon"><use href="#i-folder"/></svg><span>Move</span></button>
             <button id="reader-snooze" title="Snooze: put it aside until later (Z)"><svg class="icon"><use href="#i-calendar"/></svg><span>Snooze</span></button>
             <button id="reader-task" title="Link this email to a task (Jira and the like)…"><svg class="icon"><use href="#i-link"/></svg><span>Task</span></button>
-            <span id="reader-seen-hint" class="muted"></span>
-          </div>
-          <div class="reader-sender">
-            <span id="sender-why" class="muted"></span>
+            <span id="reader-seen-hint" class="muted" title="Marked as read automatically after the time chosen in Settings → Reading"></span>
             <span class="spacer"></span>
-            <button id="reader-unsubscribe" hidden title="Leave this mailing list or newsletter">Unsubscribe</button>
-            <button id="rule-allow" title="Always show this sender with Important only">Always important</button>
-            <button id="rule-block" title="Never show this sender with Important only">Never important</button>
-            <select id="rule-scope" title="Apply the rule to the address or to the whole domain">
-              <option value="address">this address</option>
-              <option value="domain">whole domain</option>
-            </select>
+            <button id="reader-unsubscribe" class="text-btn" hidden title="Leave this mailing list or newsletter">Unsubscribe</button>
+            <button id="reader-importance" class="importance-chip" aria-haspopup="true" aria-expanded="false" title="Why this email is or is not important"><svg class="icon"><use href="#i-important-off"/></svg><b id="importance-label">Not important</b> ▾</button>
+            <div id="importance-menu" class="importance-menu" hidden>
+              <span id="sender-why"></span>
+              <div class="importance-rules">
+                <button id="rule-allow" title="Always show this sender with Important only">Always important</button>
+                <button id="rule-block" title="Never show this sender with Important only">Never important</button>
+                <select id="rule-scope" title="Apply the rule to the address or to the whole domain">
+                  <option value="address">this address</option>
+                  <option value="domain">whole domain</option>
+                </select>
+              </div>
+            </div>
           </div>
           <div id="reader-invite" class="invite" hidden>
             <div class="invite-icon"><svg class="icon"><use href="#i-calendar"/></svg></div>
@@ -288,6 +291,8 @@
         <span id="rich-link-row" class="sig-link-row" hidden>
           <input id="rich-link-url" type="url" placeholder="https://example.com">
           <button type="button" id="rich-link-add">Add link</button>
+          <button type="button" id="rich-link-remove" hidden>Remove link</button>
+          <button type="button" id="rich-link-cancel" class="icon-btn" title="Close (Esc)"><svg class="icon"><use href="#i-close"/></svg></button>
         </span>
       </div>
         <button type="button" id="compose-preview" title="Preview the formatted email"><svg class="icon"><use href="#i-eye"/></svg><span>Preview</span></button>
@@ -473,6 +478,8 @@
             <div id="sig-link-row" class="sig-link-row" hidden>
               <input id="sig-link-url" type="url" placeholder="https://example.com">
               <button type="button" id="sig-link-add">Add link</button>
+              <button type="button" id="sig-link-remove" hidden>Remove link</button>
+              <button type="button" id="sig-link-cancel" class="icon-btn" title="Close (Esc)"><svg class="icon"><use href="#i-close"/></svg></button>
             </div>
             <div id="sig-editor" class="sig-editor" contenteditable="true" aria-label="Signature"></div>
             <textarea id="sig-source" class="sig-source" rows="7" spellcheck="false" hidden></textarea>

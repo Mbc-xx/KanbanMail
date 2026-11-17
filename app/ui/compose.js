@@ -78,6 +78,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
     minimizeComposer(false);
     return toast("Finish or close the email you are writing first.", "info");
   }
+  closeRichLink();
   compose.attachments = attachments;
   compose.from = senderNamed(from)?.email || "";
   compose.quote = quote;
@@ -379,6 +380,7 @@ async function setFormat(fmt) {
   }
   compose.markdown = fmt === "markdown";
   compose.rich = fmt === "rich";
+  closeRichLink();
   local.set("composeFormat", fmt);
   if (fmt !== "markdown") await setPreview(false);
   renderFormat();
@@ -484,28 +486,74 @@ function startList(node) {
   document.execCommand(cmd);
   return true;
 }
-$("rich-link").addEventListener("mousedown", (ev) => ev.preventDefault());
-$("rich-link").addEventListener("click", () => {
-  rememberRich();
-  $("rich-link-row").hidden = false;
-  $("rich-link-url").focus();
-});
-$("rich-link-add").addEventListener("click", () => {
-  let url = $("rich-link-url").value.trim();
-  if (url && !/^(https?:|mailto:)/i.test(url)) url = (url.includes("@") ? "mailto:" : "https://") + url;
-  $("rich-link-row").hidden = true;
-  $("rich-link-url").value = "";
-  if (!url) return;
-  restoreRich();
-  if (window.getSelection().isCollapsed) document.execCommand("insertHTML", false, `<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`);
-  else document.execCommand("createLink", false, url);
-});
-$("rich-link-url").addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") {
-    ev.preventDefault();
-    $("rich-link-add").click();
-  }
-});
+/// The link button of a visual editor (email and signature): links the
+/// selected text, or changes or removes the link the cursor is in. Returns
+/// the function that closes its address field.
+function linkTool(prefix, editor, remember, restore) {
+  const [button, row, input, add, remove, cancel] = ["", "-row", "-url", "-add", "-remove", "-cancel"].map((s) => $(prefix + s));
+  const linkAtCursor = () => {
+    const n = window.getSelection().anchorNode;
+    const a = (n?.nodeType === Node.ELEMENT_NODE ? n : n?.parentElement)?.closest("a");
+    return a && editor.contains(a) ? a : null;
+  };
+  const close = () => {
+    row.hidden = true;
+    input.value = "";
+  };
+  const open = () => {
+    const link = linkAtCursor();
+    // Changing a link acts on all of it, not only where the cursor is.
+    if (link) window.getSelection().selectAllChildren(link);
+    remember();
+    input.value = link?.getAttribute("href") || "";
+    add.textContent = link ? "Change link" : "Add link";
+    remove.hidden = !link;
+    row.hidden = false;
+    input.focus();
+    input.select();
+  };
+  const done = (run) => {
+    close();
+    restore();
+    run();
+  };
+  for (const b of [button, add, remove, cancel]) b.addEventListener("mousedown", (ev) => ev.preventDefault());
+  button.addEventListener("click", () => (row.hidden ? open() : done(() => {})));
+  add.addEventListener("click", () => {
+    let url = input.value.trim();
+    if (url && !/^(https?:|mailto:)/i.test(url)) url = (url.includes("@") ? "mailto:" : "https://") + url;
+    done(() => {
+      if (!url) return;
+      if (!window.getSelection().isCollapsed) return document.execCommand("createLink", false, url);
+      const a = document.createElement("a");
+      a.href = url;
+      a.textContent = url;
+      document.execCommand("insertHTML", false, a.outerHTML);
+    });
+  });
+  remove.addEventListener("click", () => done(() => document.execCommand("unlink")));
+  cancel.addEventListener("click", () => done(() => {}));
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      add.click();
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      ev.stopPropagation();
+      done(() => {});
+    }
+  });
+  // Going back to the text puts the field away.
+  editor.addEventListener("mousedown", close);
+  // The button lights up while the cursor is in a link.
+  document.addEventListener("selectionchange", () => {
+    const inLink = !!linkAtCursor();
+    button.classList.toggle("active", inLink);
+    button.title = inLink ? "Change or remove this link" : "Add a link";
+  });
+  return close;
+}
+const closeRichLink = linkTool("rich-link", $("compose-rich"), rememberRich, restoreRich);
 // Pasted text keeps bold, lists and links but not its colors and fonts: text copied from a
 // dark window would otherwise arrive white on the white editor. The paste itself is left to
 // the system (it also converts RTF from Word, Pages or Notes); the nodes it adds are cleaned.
