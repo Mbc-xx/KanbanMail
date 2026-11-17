@@ -849,7 +849,12 @@ function fillThread() {
   const after = $("thread-after");
   before.replaceChildren();
   after.replaceChildren();
-  const entries = readerThread || [];
+  // A draft sent or discarded since the conversation was looked up is gone
+  // from the Drafts list (when it has been read): it is no longer shown.
+  const drafts = draftsFolder();
+  const draftList = state.cards[drafts];
+  const gone = (e) => e.folder === drafts && draftList && !draftList.some((d) => d.uid === e.card.uid || (d.message_id && d.message_id === e.card.message_id));
+  const entries = (readerThread || []).filter((e) => !gone(e));
   const current = readerCard;
   const isCurrent = (e) =>
     current && ((e.folder === current.folder && e.card.uid === current.card.uid) || (e.card.message_id && e.card.message_id === current.card.message_id));
@@ -862,7 +867,6 @@ function fillThread() {
   const pos = idx >= 0 ? idx : entries.filter((e) => e.card.date <= current.card.date).length;
   const older = entries.slice(0, pos).filter((e) => !isCurrent(e));
   const newer = entries.slice(pos).filter((e) => !isCurrent(e));
-  const drafts = draftsFolder();
   const row = (e) => {
     if (e.folder === drafts) {
       // Not an email of the conversation yet: a reply not sent.

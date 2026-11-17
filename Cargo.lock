@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "kanbanmail"
-version = "2.12.1"
+version = "2.12.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "kanbanmail-cli"
-version = "2.12.1"
+version = "2.12.2"
 dependencies = [
  "anyhow",
  "kanbanmail-core",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "kanbanmail-core"
-version = "2.12.1"
+version = "2.12.2"
 dependencies = [
  "ammonia",
  "anyhow",

@@ -466,6 +466,8 @@ function indexDrafts() {
     f.unseen = state.cards[drafts].length;
     paintFolderCounts();
   }
+  // A draft sent or discarded leaves the open conversation.
+  if (readerCard && (readerThread || []).some((e) => e.folder === drafts)) renderThread({ anchor: true });
   if (same) return;
   for (const c of visibleColumns()) if (c.folder !== drafts) renderCards(c.folder);
   if (readerCard) renderReaderDraft();

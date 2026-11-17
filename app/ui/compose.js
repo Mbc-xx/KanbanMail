@@ -72,7 +72,7 @@ async function saveDraft() {
   return compose.saving;
 }
 
-async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", html = null, format = null, reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [], from = "" } = {}) {
+async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject = "", body = "", html = null, format = null, reply = null, context = null, title = "New email", messageId = null, fromDraft = false, attachments = [], from = "", quote = null } = {}) {
   if (!$("composer").hidden) {
     // One email at a time: the one being written (maybe minimized) comes back.
     minimizeComposer(false);
@@ -80,6 +80,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   }
   compose.attachments = attachments;
   compose.from = senderNamed(from)?.email || "";
+  compose.quote = quote;
   // A draft opens in the editor it was written in; a new email in the usual one.
   const fmt = format || local.get("composeFormat");
   compose.markdown = fmt === "markdown";
@@ -94,7 +95,7 @@ async function openComposer({ to = "", cc = "", bcc = state.defaultBcc, subject 
   setRecipients("compose-bcc", bcc);
   $("compose-subject").value = subject;
   $("compose-body").value = body;
-  if (compose.rich) $("compose-rich").innerHTML = html ?? textToRichHtml(body);
+  if (compose.rich) $("compose-rich").innerHTML = html ?? richFromText(body);
   renderComposeSender();
   setComposeStatus("");
   compose.reply = reply;
@@ -372,7 +373,7 @@ async function setFormat(fmt) {
   if (fmt === "rich") {
     const text = $("compose-body").value;
     $("compose-rich").innerHTML =
-      was === "markdown" ? await invoke("render_markdown", { text }).catch(() => textToRichHtml(text)) : textToRichHtml(text);
+      was === "markdown" ? await invoke("render_markdown", { text }).catch(() => textToRichHtml(text)) : richFromText(text);
   } else if (was === "rich") {
     $("compose-body").value = richText();
   }
@@ -385,6 +386,14 @@ async function setFormat(fmt) {
 }
 
 const textToHtml = (t) => escapeHtml(t).replace(/\n/g, "<br>");
+
+/// Plain text to editor HTML, with the quoted email of a reply or forward
+/// in its own formatting when it is still there unchanged.
+function richFromText(text) {
+  const q = compose.quote;
+  if (q?.html && text.endsWith(q.text)) return textToRichHtml(text.slice(0, -q.text.length)) + q.html;
+  return textToRichHtml(text);
+}
 
 /// Plain text to editor HTML. The signature block becomes the rich signature
 /// when there is one, in a block found again when the sender changes.
@@ -574,10 +583,13 @@ async function forward() {
   ].filter(Boolean);
   const subject = /^(fwd?|i|inoltra):/i.test(msg.subject.trim()) ? msg.subject : "Fwd: " + msg.subject;
   const from = senderAmong(msg.all_recipients);
+  const text = "\n\n" + header.join("\n") + "\n\n" + (msg.text || "");
+  const html = msg.html ? `<br><div>${header.map(escapeHtml).join("<br>")}</div><br>${emailBodyHtml(msg)}` : null;
   await openComposer({
     subject,
     from,
-    body: signatureBlock(from) + "\n\n" + header.join("\n") + "\n\n" + (msg.text || ""),
+    body: signatureBlock(from) + text,
+    quote: { text, html },
     title: "Forward",
   });
   $("compose-to").focus();
@@ -644,11 +656,27 @@ function signatureBlock(from = "") {
   return sig ? `\n\n-- \n${sig}` : "";
 }
 
+const quoteIntro = (msg) => `${msg.date ? "On " + formatDate(msg.date, true) + ", " : ""}${msg.from} wrote:`;
+
+/// The earlier email quoted under a reply: as text, and as HTML keeping its
+/// formatting when it has some.
 function quote(msg) {
   const text = msg.text || "";
-  const when = msg.date ? formatDate(msg.date, true) : "";
   const quoted = text.replace(/\s+$/, "").split("\n").map((l) => "> " + l).join("\n");
-  return `\n\n${when ? "On " + when + ", " : ""}${msg.from} wrote:\n${quoted}\n`;
+  return `\n\n${quoteIntro(msg)}\n${quoted}\n`;
+}
+function replyQuote(msg) {
+  const html = `<br><div>${escapeHtml(quoteIntro(msg))}</div><blockquote type="cite" style="margin:0 0 0 0.8ex; border-left:2px solid #ccc; padding-left:1ex">${emailBodyHtml(msg)}</blockquote>`;
+  return { text: quote(msg), html: msg.html ? html : null };
+}
+
+/// The body of an email for quoting in the visual editor: without its styles
+/// and head, which would change the whole app once inside the editor.
+function emailBodyHtml(msg) {
+  if (!msg.html) return textToHtml(msg.text || "");
+  const doc = new DOMParser().parseFromString(msg.html, "text/html");
+  for (const n of doc.querySelectorAll("style, link, meta, title, base, script")) n.remove();
+  return doc.body.innerHTML;
 }
 
 /// Who and what a reply to `msg` goes to (from the open email).
@@ -676,7 +704,8 @@ function replyTo(all, text = "") {
   const msg = readerMessage;
   if (!msg) return;
   const f = replyFields(msg, all);
-  openComposer({ ...f, body: text + signatureBlock(f.from) + quote(msg), title: all ? "Reply all" : "Reply" });
+  const q = replyQuote(msg);
+  openComposer({ ...f, body: text + signatureBlock(f.from) + q.text, quote: q, title: all ? "Reply all" : "Reply" });
 }
 
 // ---------- quick reply ----------
@@ -722,13 +751,17 @@ async function quickReply() {
   if (!text || !readerMessage) return;
   const f = replyFields(readerMessage, false);
   const id = await invoke("new_message_id").catch(() => null);
+  // With an HTML email, the reply is HTML too, so the quote keeps its look.
+  const q = replyQuote(readerMessage);
+  const sig = signatureFor(f.from) ? `<br><div data-signature>-- <br>${signatureHtml(f.from)}</div>` : "";
+  const html = q.html ? textToHtml(text) + sig + q.html : null;
   const draft = {
     to: f.to,
     cc: "",
     bcc: state.defaultBcc || "",
     subject: f.subject,
-    body: text + signatureBlock(f.from) + quote(readerMessage),
-    html: null,
+    body: text + signatureBlock(f.from) + q.text,
+    html,
     in_reply_to: f.context.in_reply_to,
     references: f.context.references,
     message_id: id,
@@ -737,7 +770,7 @@ async function quickReply() {
     attachments: [],
   };
   closeQuickReply();
-  queueSend({ draft, reply: f.reply, context: f.context, title: "Reply", rich: false, markdown: false, hasDraft: false, attachments: [], saved: true });
+  queueSend({ draft, reply: f.reply, context: f.context, title: "Reply", rich: !!html, markdown: false, hasDraft: false, attachments: [], saved: true });
 }
 
 $("quick-reply-send").addEventListener("click", quickReply);
