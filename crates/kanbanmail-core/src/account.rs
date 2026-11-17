@@ -240,6 +240,16 @@ pub fn all_dirs() -> Result<Vec<PathBuf>> {
     Ok(dirs_in(&root_dir()?))
 }
 
+/// The configuration folder of the account with this [`Account::key`].
+pub fn dir_of(key: &str) -> Result<Option<PathBuf>> {
+    for dir in all_dirs()? {
+        if read_account(&dir)?.is_some_and(|a| a.key() == key) {
+            return Ok(Some(dir));
+        }
+    }
+    Ok(None)
+}
+
 /// Every account, the first one first.
 pub fn list() -> Result<Vec<Account>> {
     let mut accounts = Vec::new();

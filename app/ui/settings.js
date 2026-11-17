@@ -8,7 +8,7 @@ function showSettingsTab(name) {
     t.setAttribute("aria-selected", t.dataset.tab === name ? "true" : "false");
   }
   for (const p of document.querySelectorAll(".tab-panel")) p.hidden = p.dataset.panel !== name;
-  if (name === "signatures") renderSignatureOwners(); // addresses typed in Account
+  if (name === "writing") renderSignatureOwners(); // addresses typed in Account
 }
 for (const t of document.querySelectorAll(".tabs .tab")) t.addEventListener("click", () => showSettingsTab(t.dataset.tab));
 
@@ -55,6 +55,9 @@ async function openSettings(lookOf = null) {
     $("set-prefetch").checked = s.prefetch ?? true;
     showCacheStats();
     $("set-notify").value = s.notify || "important";
+    $("set-only-to-me").checked = !!s.only_to_me;
+    $("set-my-addresses").value = (s.my_addresses || []).join("\n");
+    showMyAddresses();
     $("set-undo").value = String(s.undo_seconds ?? 8);
     $("set-undo-send").value = String(s.undo_send_seconds ?? 10);
     rulesDraft = (s.rules || []).map((r) => ({ ...r }));
@@ -154,6 +157,8 @@ $("settings-form").addEventListener("submit", async (ev) => {
         senders: sendersDraft.map(senderOf),
         sender_passwords: Object.fromEntries(sendersDraft.filter((x) => x.password).map((x) => [x.email.trim(), x.password])),
         notify: $("set-notify").value,
+        only_to_me: $("set-only-to-me").checked,
+        my_addresses: $("set-my-addresses").value.split(/[\s,;]+/).filter((a) => a.includes("@")),
         undo_seconds: parseInt($("set-undo").value, 10),
         undo_send_seconds: parseInt($("set-undo-send").value, 10),
         ...appearanceFromForm(),
@@ -174,8 +179,14 @@ $("settings-form").addEventListener("submit", async (ev) => {
     state.allow = saved.important_allow;
     state.block = saved.important_block;
     state.sameDomain = saved.important_same_domain;
+    const countsChanged = state.onlyToMe !== !!saved.only_to_me || String(state.myAddresses) !== String(saved.my_addresses || []);
     applySettingsState(saved);
     cacheSet("settings", saved);
+    if (countsChanged) {
+      state.unreadChecked = {};
+      loadFolders();
+      checkOtherAccounts();
+    }
     if (columnsChanged) {
       await invoke("save_board", { columns: columnsDraft.filter((c) => c.folder.trim()) });
       $("settings").hidden = true;
@@ -410,7 +421,7 @@ function renderSenderPrefs() {
     signature.type = "button";
     signature.title = "Edit the signature of this mailbox";
     signature.addEventListener("click", () => {
-      showSettingsTab("signatures");
+      showSettingsTab("writing");
       editSignatureOf(s);
     });
     const status = el("span", "muted");
@@ -509,6 +520,12 @@ function addRule(text = "") {
   $("rule-prefs").lastElementChild?.querySelector(text ? "select:last-of-type" : "input")?.focus();
 }
 $("add-rule").addEventListener("click", () => addRule());
+
+/// The extra addresses only matter when "Only emails sent to me" is on.
+function showMyAddresses() {
+  $("my-addresses-row").hidden = $("my-addresses-hint").hidden = !$("set-only-to-me").checked;
+}
+$("set-only-to-me").addEventListener("change", showMyAddresses);
 
 $("run-rules").addEventListener("click", async () => {
   state.rules = rulesDraft.filter((r) => r.contains.trim() && r.folder.trim());

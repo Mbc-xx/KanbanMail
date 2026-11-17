@@ -48,6 +48,13 @@ pub struct Settings {
     /// Desktop notifications for new Inbox emails: "off", "important" or "all".
     #[serde(default = "default_notify")]
     pub notify: String,
+    /// Notifications and the Inbox unread counts only for emails that have
+    /// the account's address in To (not those where it is only in Cc).
+    #[serde(default)]
+    pub only_to_me: bool,
+    /// Other addresses of this account that count as "sent to me" (aliases).
+    #[serde(default)]
+    pub my_addresses: Vec<String>,
     /// "system", "light" or "dark".
     #[serde(default = "default_theme")]
     pub theme: String,
@@ -295,6 +302,8 @@ impl Default for Settings {
             folders: Vec::new(),
             rules: Vec::new(),
             notify: default_notify(),
+            only_to_me: false,
+            my_addresses: Vec::new(),
             theme: default_theme(),
             zoom: default_zoom(),
             undo_seconds: default_undo(),
@@ -354,6 +363,17 @@ impl Settings {
         rich_signature(&self.signature, &self.signature_html)
     }
 
+    /// The addresses an email must have in To to count as sent to you, or
+    /// none when every email counts.
+    pub fn to_me(&self, main: &str) -> Vec<String> {
+        if !self.only_to_me {
+            return Vec::new();
+        }
+        let mut out = vec![main.to_string()];
+        out.extend(self.my_addresses.iter().map(|a| a.trim().to_string()).filter(|a| a.contains('@') && !a.eq_ignore_ascii_case(main)));
+        out
+    }
+
     pub fn load() -> Result<Settings> {
         Settings::load_from(&config_dir()?)
     }
@@ -397,6 +417,7 @@ impl Settings {
             load_remote_images: from.load_remote_images,
             group_threads: from.group_threads,
             notify: from.notify.clone(),
+            only_to_me: from.only_to_me,
             theme: if from.theme_per_account { self.theme.clone() } else { from.theme.clone() },
             zoom: from.zoom,
             undo_seconds: from.undo_seconds,

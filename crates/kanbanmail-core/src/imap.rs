@@ -857,6 +857,15 @@ async fn search_folders(
     Ok(out)
 }
 
+/// A search for emails with any of these addresses in To (OR takes two keys).
+fn to_any(addresses: &[String]) -> String {
+    match addresses {
+        [one] => format!("TO {}", imap_quote(one)),
+        [first, rest @ ..] => format!("OR TO {} {}", imap_quote(first), to_any(rest)),
+        [] => String::new(),
+    }
+}
+
 /// An IMAP quoted string (backslashes and quotes escaped).
 fn imap_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
@@ -1011,7 +1020,13 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
 
 /// Unread emails of a folder. On a big one this is slow, Gmail's All Mail above all:
 /// the folder list leaves it out so that it never stands in the way of the board.
-pub async fn folder_unseen(session: &mut Session, folder: &str) -> Result<u32> {
+/// With addresses in `to`, only the unread emails that have one of them in To.
+pub async fn folder_unseen(session: &mut Session, folder: &str, to: &[String]) -> Result<u32> {
+    if !to.is_empty() {
+        session.open(folder).await?;
+        let found = session.conn.uid_search(format!("UNSEEN {}", to_any(to))).await.with_context(|| format!("cannot read {folder}"))?;
+        return Ok(found.len() as u32);
+    }
     // STATUS on the open folder may give old numbers (RFC 3501 6.3.10, and
     // Outlook and iCloud do): a kept connection usually has the Inbox open.
     if session.open.as_ref().is_some_and(|(f, _)| f == folder || (f.eq_ignore_ascii_case("INBOX") && folder.eq_ignore_ascii_case("INBOX"))) {
@@ -1177,6 +1192,13 @@ pub async fn empty_folder(session: &mut Session, kind: &str) -> Result<(String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_for_any_address_in_to() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(to_any(&a(&["me@example.com"])), "TO \"me@example.com\"");
+        assert_eq!(to_any(&a(&["a@x.io", "b@x.io", "c@x.io"])), "OR TO \"a@x.io\" OR TO \"b@x.io\" TO \"c@x.io\"");
+    }
 
     #[test]
     fn the_folder_of_every_email_is_searched_last() {

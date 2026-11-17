@@ -476,7 +476,15 @@ async fn count_other_account(id: &str, state: &AppState) -> Option<u32> {
                 (s, caps)
             }
         };
-        let unread = imap::folder_unseen(&mut session, "INBOX").await?;
+        // Shared preference from these settings, addresses from that account's.
+        let to = match Settings::load() {
+            Ok(s) if s.only_to_me => {
+                let own = account::dir_of(&id).ok().flatten().and_then(|d| Settings::load_from(&d).ok()).unwrap_or_default();
+                Settings { only_to_me: true, ..own }.to_me(&account.email)
+            }
+            _ => Vec::new(),
+        };
+        let unread = imap::folder_unseen(&mut session, "INBOX", &to).await?;
         Ok::<_, anyhow::Error>((unread, session, caps))
     };
     let (unread, session, caps) = tokio::time::timeout(OPERATION_TIMEOUT, check).await.ok()?.ok()?;
@@ -1689,14 +1697,19 @@ async fn list_folders(state: State<'_, AppState>) -> CmdResult<Vec<imap::FolderI
 #[tauri::command]
 async fn folder_unseen(folders: Vec<String>, state: State<'_, AppState>) -> CmdResult<HashMap<String, u32>> {
     let mut counts = HashMap::new();
+    let settings = Settings::load().unwrap_or_default();
     for folder in folders {
         let mut inner = state.inner.lock().await;
+        let to = match &inner.account {
+            Some(a) if folder.eq_ignore_ascii_case("INBOX") => settings.to_me(&a.email),
+            _ => Vec::new(),
+        };
         // Drafts are saved as read, yet each one is something not sent: they all count.
         let count = read_retry!(inner, |s, _caps| async {
             if imap::find_special_folder(s, "drafts").await?.as_deref() == Some(folder.as_str()) {
                 imap::folder_total(s, &folder).await
             } else {
-                imap::folder_unseen(s, &folder).await
+                imap::folder_unseen(s, &folder, &to).await
             }
         })?;
         counts.insert(folder, count);

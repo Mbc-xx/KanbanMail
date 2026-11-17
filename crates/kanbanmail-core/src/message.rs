@@ -26,6 +26,9 @@ pub struct Card {
     pub thread_refs: Vec<String>,
     /// To and Cc addresses, comma-separated (used by the automatic rules).
     pub to: String,
+    /// Only the To addresses, comma-separated.
+    #[serde(default)]
+    pub to_only: String,
 }
 
 /// An attachment that can be downloaded from the reader.
@@ -182,18 +185,9 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
     let message_id = parsed.as_ref().and_then(|m| m.message_id()).map(str::to_string);
     let automated = parsed.as_ref().is_some_and(|m| is_automated(m, &from_address));
     let thread_refs = parsed.as_ref().map(thread_refs).unwrap_or_default();
-    let to = parsed
-        .as_ref()
-        .map(|m| {
-            [m.to(), m.cc()]
-                .into_iter()
-                .flatten()
-                .flat_map(|l| l.mailboxes().filter_map(|mb| mb.address().map(str::to_string)).collect::<Vec<_>>())
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
-    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated, thread_refs, to }
+    let to = parsed.as_ref().map(|m| [m.to(), m.cc()].into_iter().flatten().flat_map(|l| l.mailboxes().filter_map(|mb| mb.address().map(str::to_string)).collect::<Vec<_>>()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    let to_only = parsed.as_ref().and_then(|m| m.to()).map(|l| l.mailboxes().filter_map(|mb| mb.address().map(str::to_string)).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated, thread_refs, to, to_only }
 }
 
 /// In-Reply-To plus the first and the last few References (enough to link a
@@ -689,6 +683,14 @@ JVBERi0xLjQ=\r\n\
         assert_eq!(name, "report.pdf");
         assert_eq!(bytes, b"%PDF-1.4");
         assert!(parse_card(1, SAMPLE, false, false, 0).has_attachments);
+    }
+
+    #[test]
+    fn card_keeps_to_apart_from_cc() {
+        let raw = b"From: a@example.com\r\nTo: Me <me@example.com>, b@example.com\r\nCc: c@example.com\r\nSubject: x\r\n\r\nhi";
+        let card = parse_card(1, raw, false, false, 0);
+        assert_eq!(card.to, "me@example.com, b@example.com, c@example.com");
+        assert_eq!(card.to_only, "me@example.com, b@example.com");
     }
 
     #[test]

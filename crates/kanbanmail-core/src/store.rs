@@ -632,6 +632,7 @@ mod tests {
             automated: false,
             thread_refs: refs.iter().map(|r| format!("<{r}>")).collect(),
             to: "me@example.com".into(),
+            to_only: "me@example.com".into(),
         }
     }
 

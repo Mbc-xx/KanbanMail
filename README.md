@@ -47,7 +47,7 @@ variables come from there.
 ### A board for your work
 
 - **Columns are folders.** Add, rename, reorder or remove them in Settings →
-  Columns; a new name creates the folder. Drag cards between columns, or onto a
+  Board; a new name creates the folder. Drag cards between columns, or onto a
   folder in the sidebar. Columns resize by dragging their edge and fill the
   window.
 - **Waiting.** In the column of emails you wait on, a card shows "↩ Replied" as
@@ -105,7 +105,8 @@ variables come from there.
 ### Writing
 
 - **Plain text, Markdown** (with a preview) **or Rich**, a visual editor that
-  keeps pasted formatting and images. Drafts reopen in the editor they were
+  keeps pasted formatting and images; "- " or "1. " at the start of a line
+  begins a list. Drafts reopen in the editor they were
   written in.
 - **Recipients as chips**: drag them between To, Cc and Bcc, copy them with ⌘C,
   edit one as "Name <address>", or paste a whole list from a spreadsheet or
@@ -183,7 +184,11 @@ read on a light or dark background whatever the theme. Four interface sizes,
 New Inbox emails (all, important only, or off) and answers to emails you wait
 on. On macOS, clicking a notification opens that email, and a Focus mode can
 hold notifications back: add Pigeonhole to the Focus's allowed apps. Settings →
-Reading can send a test notification.
+Notifications can send a test notification.
+
+With "Only emails sent to me", notifications and the Inbox unread counts skip
+emails where you are only in Cc, as well as mailing lists. Aliases of an account
+can be added so that emails sent to them still count.
 
 ## Mail services
 
@@ -214,22 +219,22 @@ SMTP may be off, or the app may need approval.
 From the settings button, grouped in tabs:
 
 - **Account**: label, icon and color, sender name, SMTP server, extra send-only
-  mailboxes, export and import of the settings, the copy on this computer,
-  disconnecting the account.
-- **Writing**: "Always Bcc", undo send delay, address book suggestions, saved
-  replies.
-- **Signatures**: one rich signature for each mailbox.
-- **Columns**: the board columns, and the Waiting, Todo and Done columns with
-  their days.
-- **Reading**: undo time, "only this email or the whole conversation", what
-  happens after an action, notifications, marking as read, grouping by
-  conversation, remote images, where attachments are saved.
-- **Important**: colleagues of your domain, "always" and "never important" lists.
+  mailboxes, disconnecting the account.
+- **Board**: the board columns, the Waiting, Todo and Done columns with their
+  days, grouping by conversation.
+- **Reading**: marking as read, undo time, what happens after an action, "only
+  this email or the whole conversation", remote images.
+- **Writing**: one rich signature for each mailbox, "Always Bcc", undo send
+  delay, saved replies, address book suggestions.
+- **Notifications**: which new emails notify, "Only emails sent to me" with the
+  account's aliases, and who is important (colleagues of your domain, "always"
+  and "never important" lists).
 - **Folders**: which folders the sidebar and the Move to… list show, their order
-  and colors.
-- **Rules**: automatic rules for new Inbox emails.
+  and colors, and the automatic rules for new Inbox emails.
 - **Appearance**: theme (shared or per account), interface size, preview lines
   and compact actions, previewed while you choose.
+- **Storage**: where attachments are saved, the copy on this computer, export
+  and import of the settings.
 
 They are stored as TOML files in the configuration folder
 (`~/Library/Application Support/Pigeonhole` on macOS), one folder per account.
@@ -245,7 +250,7 @@ The local copy is a SQLite database in the cache folder
 of the folders you opened, the emails you read or that were downloaded in the
 background (those over 3 MB only when opened), a full-text index for search and
 the changes waiting for the connection. The server always stays the reference:
-the copy can be cleared from Settings → Account and is rebuilt as you use the
+the copy can be cleared from Settings → Storage and is rebuilt as you use the
 app, and it is deleted when you disconnect the account. Emails are stored
 unencrypted, like in other mail apps (FileVault or BitLocker encrypt the whole
 disk); passwords are never stored there.

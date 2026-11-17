@@ -87,6 +87,8 @@ function applySettingsState(settings) {
   state.rules = settings.rules || [];
   state.templates = settings.templates || [];
   state.notify = settings.notify || "important";
+  state.onlyToMe = !!settings.only_to_me;
+  state.myAddresses = settings.my_addresses || [];
   state.undoSeconds = settings.undo_seconds ?? 8;
   state.undoSendSeconds = settings.undo_send_seconds ?? 10;
   state.appearance = { theme: settings.theme, zoom: settings.zoom, preview_board: settings.preview_board, preview_list: settings.preview_list, compact_actions: settings.compact_actions, mail_surface: settings.mail_surface, theme_per_account: !!settings.theme_per_account };
@@ -456,7 +458,7 @@ async function afterInboxLoaded(cards) {
   // No notifications for the emails that arrived while the app was closed.
   if (first) return;
   const toNotify = fresh.filter(
-    (c) => !c.seen && !moved.has(c.message_id) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
+    (c) => !c.seen && !moved.has(c.message_id) && sentToMe(c) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
   );
   if (!toNotify.length) return;
   const target = toNotify.length === 1 ? { folder: "INBOX", uid: toNotify[0].uid } : { folder: "INBOX" };
@@ -1230,7 +1232,7 @@ function openCardMenu(c, x, y) {
           menuButton("star", `Always important: ${who}`, run(() => setSenderRule("allow", card, "address"))),
           menuButton("star-off", `Never important: ${who}`, run(() => setSenderRule("block", card, "address"))),
           menuButton("search", `Emails from ${who}`, run(() => startSearch(card.from_address))),
-          menuButton("rule", `New rule for ${card.from_address}…`, run(async () => (await openSettings()) && (showSettingsTab("rules"), addRule(card.from_address)))),
+          menuButton("rule", `New rule for ${card.from_address}…`, run(async () => (await openSettings()) && (showSettingsTab("folders"), addRule(card.from_address)))),
         );
       }
     }
@@ -1458,6 +1460,14 @@ function senderRule(address) {
 }
 
 /// Whether a card passes "Important only", and why (shown in the reader).
+/// With "only emails sent to me" on: is the address in To, not only in Cc?
+/// Cards saved before To was kept apart count as sent to you.
+function sentToMe(card) {
+  if (!state.onlyToMe) return true;
+  const to = (card.to_only || card.to || "").toLowerCase().split(/,\s*/);
+  return [state.email, ...state.myAddresses].some((a) => to.includes(a.toLowerCase()));
+}
+
 function importance(card) {
   const a = (card.from_address || "").toLowerCase();
   const rule = senderRule(a);
@@ -1595,7 +1605,7 @@ function updateBadge() {
   const inbox = state.cards.INBOX;
   const count =
     state.onlyImportant && inbox
-      ? inbox.filter((c) => !c.seen && importance(c).important).length
+      ? inbox.filter((c) => !c.seen && sentToMe(c) && importance(c).important).length
       : state.folders.find((f) => f.kind === "inbox")?.unseen || 0;
   invoke("set_unread_badge", { count }).catch(() => {});
 }

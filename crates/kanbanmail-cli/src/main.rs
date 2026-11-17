@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("folders") {
         println!("\nTrash: {}", imap::trash_folder(&mut session).await?);
         for f in imap::folder_tree(&mut session).await? {
-            let unseen = imap::folder_unseen(&mut session, &f.name).await.ok().filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
+            let unseen = imap::folder_unseen(&mut session, &f.name, &[]).await.ok().filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
             println!("{}{} [{}]{unseen}", "  ".repeat(f.depth + 1), f.label, f.kind);
         }
     }

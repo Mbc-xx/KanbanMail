@@ -457,10 +457,24 @@ $("compose-rich").addEventListener("keydown", (ev) => {
   }
   const node = window.getSelection().anchorNode;
   const inList = (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)?.closest("li");
+  if (ev.key === " " && !inList && startList(node)) ev.preventDefault();
   if (ev.key !== "Tab" || !inList) return;
   ev.preventDefault();
   document.execCommand(ev.shiftKey ? "outdent" : "indent");
 });
+/// "- " or "* " at the start of a line begins a bulleted list, "1. " a numbered one.
+function startList(node) {
+  const sel = window.getSelection();
+  if (!sel.isCollapsed || node?.nodeType !== Node.TEXT_NODE) return false;
+  const typed = node.data.slice(0, sel.anchorOffset);
+  const cmd = /^[-*]$/.test(typed) ? "insertUnorderedList" : typed === "1." ? "insertOrderedList" : null;
+  const prev = node.previousSibling;
+  if (!cmd || (prev && prev.nodeName !== "BR") || !/^(DIV|P)$/.test(node.parentElement.nodeName)) return false;
+  sel.setBaseAndExtent(node, 0, node, typed.length);
+  document.execCommand("delete");
+  document.execCommand(cmd);
+  return true;
+}
 $("rich-link").addEventListener("mousedown", (ev) => ev.preventDefault());
 $("rich-link").addEventListener("click", () => {
   rememberRich();
