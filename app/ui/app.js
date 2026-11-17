@@ -611,7 +611,7 @@ async function switchAccount(id) {
   // The count of the account left is right as it is: asking its server again
   // at once would only risk an older number.
   state.unreadChecked[state.accountId] = Date.now();
-  setAccountUnread(state.accountId, state.folders.find((f) => f.kind === "inbox")?.unseen || 0);
+  setAccountUnread(state.accountId, inboxUnread());
   // The next account's look from the first frame, when it has its own.
   const look = local.get("appearance:" + id);
   if (look && state.appearance?.theme_per_account) local.set("appearance", look);

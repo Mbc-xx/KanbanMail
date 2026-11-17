@@ -88,6 +88,7 @@ function applySettingsState(settings) {
   state.templates = settings.templates || [];
   state.notify = settings.notify || "important";
   state.onlyToMe = !!settings.only_to_me;
+  state.countImportant = settings.count_unread === "important";
   state.myAddresses = settings.my_addresses || [];
   state.undoSeconds = settings.undo_seconds ?? 8;
   state.undoSendSeconds = settings.undo_send_seconds ?? 10;
@@ -383,7 +384,7 @@ async function loadColumn(folder) {
     }
     if (folder.toUpperCase() === "INBOX") {
       afterInboxLoaded(state.cards[folder]);
-      updateBadge();
+      paintFolderCounts();
     }
     if (folder === draftsFolder()) indexDrafts();
   } catch (e) {
@@ -458,7 +459,7 @@ async function afterInboxLoaded(cards) {
   // No notifications for the emails that arrived while the app was closed.
   if (first) return;
   const toNotify = fresh.filter(
-    (c) => !c.seen && !moved.has(c.message_id) && sentToMe(c) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
+    (c) => !c.seen && !moved.has(c.message_id) && (state.notify === "all" || (state.notify === "important" && importance(c).important)),
   );
   if (!toNotify.length) return;
   const target = toNotify.length === 1 ? { folder: "INBOX", uid: toNotify[0].uid } : { folder: "INBOX" };
@@ -475,7 +476,7 @@ async function checkInbox() {
     const cards = await invoke("load_column", { folder: "INBOX", limit: null });
     state.cards.INBOX = cards;
     afterInboxLoaded(cards);
-    updateBadge();
+    paintFolderCounts();
   } catch (e) {
     console.error(e);
   }
@@ -1229,8 +1230,8 @@ function openCardMenu(c, x, y) {
         const who = shortName(card.from) || card.from_address;
         sep();
         menu.append(
-          menuButton("star", `Always important: ${who}`, run(() => setSenderRule("allow", card, "address"))),
-          menuButton("star-off", `Never important: ${who}`, run(() => setSenderRule("block", card, "address"))),
+          menuButton("important", `Always important: ${who}`, run(() => setSenderRule("allow", card, "address"))),
+          menuButton("important-off", `Never important: ${who}`, run(() => setSenderRule("block", card, "address"))),
           menuButton("search", `Emails from ${who}`, run(() => startSearch(card.from_address))),
           menuButton("rule", `New rule for ${card.from_address}…`, run(async () => (await openSettings()) && (showSettingsTab("folders"), addRule(card.from_address)))),
         );
@@ -1404,7 +1405,6 @@ $("only-important").addEventListener("click", (ev) => {
   state.onlyImportant = !state.onlyImportant;
   ev.currentTarget.setAttribute("aria-pressed", state.onlyImportant);
   local.set("onlyImportant", state.onlyImportant ? "1" : "");
-  updateBadge();
   renderSoon();
 });
 
@@ -1424,7 +1424,7 @@ function rememberKnownSenders(at = cacheGet("known")?.at || 0) {
 async function loadKnownSenders() {
   const saved = cacheGet("known");
   const show = () => {
-    updateBadge();
+    paintFolderCounts();
     renderSoon();
     if (readerCard) updateSenderPanel();
   };
@@ -1460,10 +1460,9 @@ function senderRule(address) {
 }
 
 /// Whether a card passes "Important only", and why (shown in the reader).
-/// With "only emails sent to me" on: is the address in To, not only in Cc?
-/// Cards saved before To was kept apart count as sent to you.
+/// Is your address (or an alias) in To, not only in Cc? Cards saved before
+/// To was kept apart count as sent to you.
 function sentToMe(card) {
-  if (!state.onlyToMe) return true;
   const to = (card.to_only || card.to || "").toLowerCase().split(/,\s*/);
   return [state.email, ...state.myAddresses].some((a) => to.includes(a.toLowerCase()));
 }
@@ -1474,6 +1473,7 @@ function importance(card) {
   if (rule) return { important: rule.rule === "allow", why: rule.rule === "allow" ? `Your rule: ${rule.pattern} is always important` : `Your rule: ${rule.pattern} is never important` };
   if (card.automated) return { important: false, why: "Automated email (notification, newsletter or mailing list)" };
   if (a && a === state.email.toLowerCase()) return { important: true, why: "Sent by you" };
+  if (state.onlyToMe && !sentToMe(card)) return { important: false, why: "You are only in Cc, or not among the recipients" };
   if (state.known.has(a)) return { important: true, why: "You have written to this person" };
   if (state.contacts.some((c) => c.email.toLowerCase() === a)) return { important: true, why: "In your contacts" };
   if (state.sameDomain && a && domainOf(a) === domainOf(state.email)) return { important: true, why: "Colleague (same domain as you)" };
@@ -1484,7 +1484,7 @@ function updateSenderPanel() {
   const card = readerCard?.card;
   if (!card) return;
   const info = importance(card);
-  $("sender-why").textContent = (info.important ? "★ Important — " : "Not important — ") + info.why;
+  $("sender-why").textContent = (info.important ? "Important — " : "Not important — ") + info.why;
   const rule = senderRule(card.from_address || "");
   $("rule-allow").classList.toggle("active", rule?.rule === "allow");
   $("rule-block").classList.toggle("active", rule?.rule === "block");
@@ -1502,7 +1502,7 @@ async function setSenderRule(kind, card = readerCard?.card, scope = $("rule-scop
   try {
     [state.allow, state.block] = await invoke("set_sender_rule", { pattern, rule });
     updateSenderPanel();
-    updateBadge();
+    paintFolderCounts();
     renderSoon();
     toast(rule === "none" ? `Rule removed for ${pattern}` : `${pattern} is now ${kind === "allow" ? "always" : "never"} important`, "info");
   } catch (e) {
@@ -1596,18 +1596,19 @@ function moveUnseen(from, to) {
 function paintFolderCounts() {
   renderFolders();
   updateBadge();
-  setAccountUnread(state.accountId, state.folders.find((f) => f.kind === "inbox")?.unseen || 0);
+  setAccountUnread(state.accountId, inboxUnread());
 }
 
-/// The Dock badge: unread Inbox emails, or only the important ones when
-/// "Important only" is on (counted among the loaded Inbox emails).
-function updateBadge() {
+/// The Inbox number of the sidebar, the account rail and the Dock: every
+/// unread email, or only the important ones (counted among the loaded emails).
+function inboxUnread() {
   const inbox = state.cards.INBOX;
-  const count =
-    state.onlyImportant && inbox
-      ? inbox.filter((c) => !c.seen && sentToMe(c) && importance(c).important).length
-      : state.folders.find((f) => f.kind === "inbox")?.unseen || 0;
-  invoke("set_unread_badge", { count }).catch(() => {});
+  if (state.countImportant && inbox) return inbox.filter((c) => !c.seen && importance(c).important).length;
+  return state.folders.find((f) => f.kind === "inbox")?.unseen || 0;
+}
+
+function updateBadge() {
+  invoke("set_unread_badge", { count: inboxUnread() }).catch(() => {});
 }
 
 /// After a change only the folders concerned are asked, not all of them.

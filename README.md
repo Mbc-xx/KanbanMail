@@ -186,9 +186,11 @@ on. On macOS, clicking a notification opens that email, and a Focus mode can
 hold notifications back: add Pigeonhole to the Focus's allowed apps. Settings →
 Notifications can send a test notification.
 
-With "Only emails sent to me", notifications and the Inbox unread counts skip
-emails where you are only in Cc, as well as mailing lists. Aliases of an account
-can be added so that emails sent to them still count.
+The Inbox unread counts (sidebar, account badges, Dock) can show all unread
+emails or only the important ones. "Important" is one choice used everywhere:
+the Important filter, notifications and counts. It means people you wrote to,
+your contacts and optionally your colleagues, and optionally only emails with
+you in To, not just in Cc (aliases of an account can be added).
 
 ## Mail services
 
@@ -226,9 +228,9 @@ From the settings button, grouped in tabs:
   this email or the whole conversation", remote images.
 - **Writing**: one rich signature for each mailbox, "Always Bcc", undo send
   delay, saved replies, address book suggestions.
-- **Notifications**: which new emails notify, "Only emails sent to me" with the
-  account's aliases, and who is important (colleagues of your domain, "always"
-  and "never important" lists).
+- **Notifications**: which new emails notify and what the unread counts show,
+  and what is important (colleagues of your domain, only emails with you in To,
+  with the account's aliases, "always" and "never important" lists).
 - **Folders**: which folders the sidebar and the Move to… list show, their order
   and colors, and the automatic rules for new Inbox emails.
 - **Appearance**: theme (shared or per account), interface size, preview lines

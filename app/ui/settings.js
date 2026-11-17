@@ -56,6 +56,7 @@ async function openSettings(lookOf = null) {
     showCacheStats();
     $("set-notify").value = s.notify || "important";
     $("set-only-to-me").checked = !!s.only_to_me;
+    $("set-count").value = s.count_unread || "all";
     $("set-my-addresses").value = (s.my_addresses || []).join("\n");
     showMyAddresses();
     $("set-undo").value = String(s.undo_seconds ?? 8);
@@ -158,6 +159,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
         sender_passwords: Object.fromEntries(sendersDraft.filter((x) => x.password).map((x) => [x.email.trim(), x.password])),
         notify: $("set-notify").value,
         only_to_me: $("set-only-to-me").checked,
+        count_unread: $("set-count").value,
         my_addresses: $("set-my-addresses").value.split(/[\s,;]+/).filter((a) => a.includes("@")),
         undo_seconds: parseInt($("set-undo").value, 10),
         undo_send_seconds: parseInt($("set-undo-send").value, 10),
@@ -179,7 +181,7 @@ $("settings-form").addEventListener("submit", async (ev) => {
     state.allow = saved.important_allow;
     state.block = saved.important_block;
     state.sameDomain = saved.important_same_domain;
-    const countsChanged = state.onlyToMe !== !!saved.only_to_me || String(state.myAddresses) !== String(saved.my_addresses || []);
+    const countsChanged = state.onlyToMe !== !!saved.only_to_me || state.countImportant !== (saved.count_unread === "important") || String(state.myAddresses) !== String(saved.my_addresses || []);
     applySettingsState(saved);
     cacheSet("settings", saved);
     if (countsChanged) {

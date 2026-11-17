@@ -97,7 +97,8 @@ function renderFolders() {
     const color = folderColor(f.name);
     if (color) ic.style.color = color;
     item.append(ic, el("span", "label", f.label));
-    if (f.unseen) item.append(el("span", "badge", String(f.unseen)));
+    const unseen = f.kind === "inbox" ? inboxUnread() : f.unseen;
+    if (unseen) item.append(el("span", "badge", String(unseen)));
     if (!f.selectable) {
       item.classList.add("disabled");
     } else {

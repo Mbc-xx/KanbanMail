@@ -48,10 +48,13 @@ pub struct Settings {
     /// Desktop notifications for new Inbox emails: "off", "important" or "all".
     #[serde(default = "default_notify")]
     pub notify: String,
-    /// Notifications and the Inbox unread counts only for emails that have
-    /// the account's address in To (not those where it is only in Cc).
+    /// An email is important only when the account's address (or one of
+    /// `my_addresses`) is in To, not only in Cc.
     #[serde(default)]
     pub only_to_me: bool,
+    /// Inbox unread counts: "all" or "important".
+    #[serde(default = "default_count")]
+    pub count_unread: String,
     /// Other addresses of this account that count as "sent to me" (aliases).
     #[serde(default)]
     pub my_addresses: Vec<String>,
@@ -220,6 +223,10 @@ fn default_undo() -> u32 {
     8
 }
 
+fn default_count() -> String {
+    "all".into()
+}
+
 fn default_notify() -> String {
     "important".into()
 }
@@ -303,6 +310,7 @@ impl Default for Settings {
             rules: Vec::new(),
             notify: default_notify(),
             only_to_me: false,
+            count_unread: default_count(),
             my_addresses: Vec::new(),
             theme: default_theme(),
             zoom: default_zoom(),
@@ -418,6 +426,7 @@ impl Settings {
             group_threads: from.group_threads,
             notify: from.notify.clone(),
             only_to_me: from.only_to_me,
+            count_unread: from.count_unread.clone(),
             theme: if from.theme_per_account { self.theme.clone() } else { from.theme.clone() },
             zoom: from.zoom,
             undo_seconds: from.undo_seconds,

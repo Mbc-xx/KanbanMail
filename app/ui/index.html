@@ -22,8 +22,8 @@
     <symbol id="i-snippet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H10l-5 4v-4H4z"/><path d="M8 9h8M8 12.5h5"/></symbol>
     <symbol id="i-quote" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14M10 8h9M10 12h9M10 16h6"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></symbol>
-    <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z"/></symbol>
-    <symbol id="i-star-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z"/><path d="M4 20L20 4"/></symbol>
+    <symbol id="i-important" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="3.5"/><path d="M3.5 20v-1a5.5 5.5 0 0 1 9.2-4.1"/><path d="M15 17.5l2.2 2.2 4.3-4.7"/></symbol>
+    <symbol id="i-important-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="3.5"/><path d="M3.5 20v-1a5.5 5.5 0 0 1 9.2-4.1"/><path d="M16 15.5l4.5 4.5M20.5 15.5L16 20"/></symbol>
     <symbol id="i-rule" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h10M4 12h7M4 18h10"/><path d="M15 12h6M18 9l3 3-3 3"/></symbol>
     <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
@@ -105,7 +105,7 @@
       <aside id="sidebar" class="sidebar">
         <button id="compose" class="primary compose-btn" title="Write a new email"><svg class="icon"><use href="#i-compose"/></svg><span class="label">New email</span></button>
         <div class="filters">
-          <button id="only-important" class="filter-btn" aria-pressed="false" title="Important only: emails from people you know; notifications and newsletters are hidden"><svg class="icon"><use href="#i-star"/></svg><span id="count-important" class="filter-count"></span></button>
+          <button id="only-important" class="filter-btn" aria-pressed="false" title="Important only: emails from people you know; newsletters and notifications are hidden"><svg class="icon"><use href="#i-important"/></svg><span id="count-important" class="filter-count"></span></button>
           <button id="only-unread" class="filter-btn" aria-pressed="false" title="Unread only"><svg class="icon"><use href="#i-envelope"/></svg><span id="count-unread" class="filter-count"></span></button>
         </div>
         <button id="nav-board" class="nav-item active" title="Board"><svg class="icon"><use href="#i-board"/></svg><span class="label">Board</span></button>
@@ -514,16 +514,21 @@
               <option value="off">Off</option>
             </select>
           </label>
-          <label class="toggle"><input id="set-only-to-me" type="checkbox"> Only emails sent to me</label>
-          <p class="muted small">Notifications and the Inbox unread counts skip the emails where your address is only in Cc (or not there at all, as in mailing lists).</p>
+          <label>Unread counts in the sidebar, the account badges and the Dock
+            <select id="set-count">
+              <option value="all">All unread emails</option>
+              <option value="important">Only important emails</option>
+            </select>
+          </label>
+          <div class="settings-buttons"><button type="button" id="test-notification">Send a test notification</button><span id="notify-state" class="muted small"></span></div>
+          <h3 class="settings-sub">Important emails</h3>
+          <p class="muted small">Important emails come from people you wrote to, your contacts and (optionally) your colleagues; newsletters and automatic notifications are left out. The same choice drives the Important filter, notifications and counts. Your lists below win over everything: one address or <code>@domain</code> per line.</p>
+          <label class="toggle"><input id="set-same-domain" type="checkbox"> People of my own email domain are important</label>
+          <label class="toggle"><input id="set-only-to-me" type="checkbox"> Only when I am in To, not just in Cc</label>
           <label id="my-addresses-row">My other addresses in this account
             <textarea id="set-my-addresses" rows="2" spellcheck="false" placeholder="alias@example.com"></textarea>
           </label>
-          <p class="muted small" id="my-addresses-hint">Aliases and old addresses that reach this mailbox, one per line: emails sent to them count as sent to you.</p>
-          <div class="settings-buttons"><button type="button" id="test-notification">Send a test notification</button><span id="notify-state" class="muted small"></span></div>
-          <h3 class="settings-sub">Important emails</h3>
-          <p class="muted small">"Important only" shows emails from people you wrote to, your contacts and (optionally) your colleagues. Notifications, newsletters and mailing lists are left out. Your rules below win over everything: one address or <code>@domain</code> per line.</p>
-          <label class="toggle"><input id="set-same-domain" type="checkbox"> People of my own email domain are important</label>
+          <p class="muted small" id="my-addresses-hint">Aliases and old addresses that reach this mailbox, one per line. For the other accounts in the top bar, "only important" counts the unread emails with you in To.</p>
           <div class="rules">
             <label>Always important<textarea id="set-allow" rows="6" spellcheck="false" placeholder="boss@example.com&#10;@client.example"></textarea></label>
             <label>Never important<textarea id="set-block" rows="6" spellcheck="false" placeholder="@github.com&#10;news@shop.example"></textarea></label>
