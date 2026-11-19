@@ -1178,6 +1178,7 @@ document.addEventListener("keydown", (ev) => {
   if (!$("dialog").hidden) closeDialog(null);
   else if (!$("composer").hidden && !composerMinimized()) closeComposer();
   else if (!$("settings").hidden) closeSettingsWithoutSaving();
+  else if (!$("security").hidden) closeSecurity();
   else if (!$("reader").hidden) closeReader();
   else if (focusKey) setFocus(null);
 });

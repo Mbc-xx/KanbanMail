@@ -1,6 +1,7 @@
 //! Shared Pigeonhole logic: configuration, credentials, IMAP and SMTP.
 
 pub mod account;
+pub mod advisories;
 pub mod board;
 pub mod imap;
 pub mod message;

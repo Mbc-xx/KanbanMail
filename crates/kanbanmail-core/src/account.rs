@@ -116,7 +116,7 @@ fn default_smtp_port() -> u16 {
 pub(crate) const APP_NAME: &str = "Pigeonhole";
 
 /// Main configuration folder, e.g. `~/Library/Application Support/Pigeonhole` on macOS.
-fn root_dir() -> Result<PathBuf> {
+pub(crate) fn root_dir() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", APP_NAME)
         .context("cannot determine the configuration folder")?;
     Ok(dirs.config_dir().to_path_buf())

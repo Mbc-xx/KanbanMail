@@ -3,6 +3,7 @@
 
 mod contacts;
 mod notifications;
+mod security;
 
 use kanbanmail_core::{
     account::{self, Account, Provider, SentCopy},
@@ -2212,6 +2213,10 @@ fn main() {
             empty_folder,
             save_board,
             notify,
+            security::security_status,
+            security::security_check,
+            security::security_seen,
+            security::security_auto,
             prepare_notifications,
             open_contact,
             open_notification_settings,
