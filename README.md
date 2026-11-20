@@ -328,8 +328,9 @@ cd app && npm test       # the interface, run in jsdom against a fake backend
 The IMAP tests start a small server in memory (`crates/kanbanmail-core/src/imap/fake_server.rs`)
 and check what moving, marking and loading leave on it; the interface tests load
 the real `app/ui` with fake emails (`app/tests/harness.mjs`). Neither needs a
-network or a real mailbox. GitHub Actions runs both, clippy and `cargo audit` on
-every push (`.github/workflows/ci.yml`).
+network or a real mailbox. GitHub Actions runs both, `cargo fmt --check`, clippy
+and `cargo audit` on every push (`.github/workflows/ci.yml`). Format with
+`cargo fmt --all` before committing.
 
 ### Browser sign-in
 
