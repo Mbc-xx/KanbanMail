@@ -84,7 +84,11 @@ async fn main() -> Result<()> {
 
     if std::env::args().nth(1).as_deref() == Some("smtp") {
         println!("\nSent folder: {}", imap::sent_folder(&mut session).await?);
-        println!("Testing SMTP login on {}:{} ...", account.smtp_host(), account.smtp_port);
+        println!(
+            "Testing SMTP login on {}:{} ...",
+            account.smtp_host(),
+            account.smtp_port
+        );
         kanbanmail_core::smtp::test_login(&account, &password).await?;
         println!("SMTP login successful (no email sent).");
     }
@@ -92,7 +96,12 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("folders") {
         println!("\nTrash: {}", imap::trash_folder(&mut session).await?);
         for f in imap::folder_tree(&mut session).await? {
-            let unseen = imap::folder_unseen(&mut session, &f.name, &[]).await.ok().filter(|n| *n > 0).map(|n| format!(" ({n})")).unwrap_or_default();
+            let unseen = imap::folder_unseen(&mut session, &f.name, &[])
+                .await
+                .ok()
+                .filter(|n| *n > 0)
+                .map(|n| format!(" ({n})"))
+                .unwrap_or_default();
             println!("{}{} [{}]{unseen}", "  ".repeat(f.depth + 1), f.label, f.kind);
         }
     }
@@ -108,7 +117,12 @@ async fn main() -> Result<()> {
             for e in &all {
                 *per_folder.entry(e.folder.as_str()).or_default() += 1;
             }
-            println!("\n{round}: {} emails from {} folders in {:?} -> {per_folder:?}", all.len(), folders.len(), started.elapsed());
+            println!(
+                "\n{round}: {} emails from {} folders in {:?} -> {per_folder:?}",
+                all.len(),
+                folders.len(),
+                started.elapsed()
+            );
         }
     }
 
@@ -127,7 +141,12 @@ async fn main() -> Result<()> {
         }
         let started = std::time::Instant::now();
         let found = imap::search(&mut session, &imap::SearchQuery::words(&text), false, &folders, 100).await?;
-        println!("\n\"{text}\" in {} folders: {} results in {:?}", folders.len(), found.len(), started.elapsed());
+        println!(
+            "\n\"{text}\" in {} folders: {} results in {:?}",
+            folders.len(),
+            found.len(),
+            started.elapsed()
+        );
         for e in found.iter().take(5) {
             println!("  [{}] {} | {}", e.folder, e.card.from, e.card.subject);
         }
@@ -136,7 +155,11 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("known") {
         let started = std::time::Instant::now();
         let known = imap::sent_recipients(&mut session, 2000).await?;
-        println!("\nPeople you wrote to: {} (read in {:?})", known.len(), started.elapsed());
+        println!(
+            "\nPeople you wrote to: {} (read in {:?})",
+            known.len(),
+            started.elapsed()
+        );
         let mut cache = imap::FolderCache::default();
         let cards = imap::load_cards(&mut session, "INBOX", &mut cache, 40).await?;
         let (mut important, mut automated, mut unknown) = (0, 0, 0);
@@ -153,7 +176,10 @@ async fn main() -> Result<()> {
             };
             println!("  {label:<9} {}", c.from_address);
         }
-        println!("Newest {}: {important} from people you wrote to, {automated} automated, {unknown} other", cards.len());
+        println!(
+            "Newest {}: {important} from people you wrote to, {automated} automated, {unknown} other",
+            cards.len()
+        );
     }
 
     if std::env::args().nth(1).as_deref() == Some("thread") {
@@ -189,11 +215,24 @@ async fn test_thread(session: &mut imap::Session) -> Result<()> {
     }
     let started = std::time::Instant::now();
     let thread = imap::load_thread(session, view.message_id.as_deref(), &view.references, &folders).await?;
-    println!("\nConversation of \"{}\" ({} references), searched {:?} in {:?}:", view.subject, view.references.len(), folders, started.elapsed());
+    println!(
+        "\nConversation of \"{}\" ({} references), searched {:?} in {:?}:",
+        view.subject,
+        view.references.len(),
+        folders,
+        started.elapsed()
+    );
     for e in &thread {
-        println!("  [{} uid {}] {} | {}", e.folder, e.card.uid, e.card.from, e.card.subject);
+        println!(
+            "  [{} uid {}] {} | {}",
+            e.folder, e.card.uid, e.card.from, e.card.subject
+        );
     }
-    println!("Quoted text found: html {} / text {}", view.html_main.is_some(), view.text_main.is_some());
+    println!(
+        "Quoted text found: html {} / text {}",
+        view.html_main.is_some(),
+        view.text_main.is_some()
+    );
     Ok(())
 }
 
@@ -215,9 +254,21 @@ async fn test_drafts(session: &mut imap::Session, account: &Account) -> Result<(
         html: None,
         from: None,
     };
-    let folder = imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
+    let folder = imap::save_draft(
+        session,
+        caps,
+        &smtp::build_draft(account, &draft, None)?.formatted(),
+        &id,
+    )
+    .await?;
     draft.body = "second version".into();
-    imap::save_draft(session, caps, &smtp::build_draft(account, &draft, None)?.formatted(), &id).await?;
+    imap::save_draft(
+        session,
+        caps,
+        &smtp::build_draft(account, &draft, None)?.formatted(),
+        &id,
+    )
+    .await?;
     let mut cache = imap::FolderCache::default();
     let copies = imap::load_cards(session, &folder, &mut cache, 50)
         .await?
@@ -225,7 +276,11 @@ async fn test_drafts(session: &mut imap::Session, account: &Account) -> Result<(
         .filter(|c| c.subject == "KanbanMail draft test")
         .collect::<Vec<_>>();
     println!("\nDrafts folder: {folder}");
-    println!("Copies after two saves: {} (expected 1), preview: {:?}", copies.len(), copies.first().map(|c| &c.preview));
+    println!(
+        "Copies after two saves: {} (expected 1), preview: {:?}",
+        copies.len(),
+        copies.first().map(|c| &c.preview)
+    );
     imap::delete_draft(session, caps, &id).await?;
     let mut cache = imap::FolderCache::default();
     let left = imap::load_cards(session, &folder, &mut cache, 50)
@@ -257,8 +312,12 @@ async fn print_board(session: &mut imap::Session) -> Result<()> {
     }
     if let Some((folder, uid)) = first {
         let m = imap::load_message(session, &folder, uid).await?;
-        println!("\nTest read ({folder} uid {uid}): subject {:?}, text {} chars, html {}",
-            m.subject, m.text.map_or(0, |t| t.len()), m.html.map_or("none".into(), |h| format!("{} chars", h.len())));
+        println!(
+            "\nTest read ({folder} uid {uid}): subject {:?}, text {} chars, html {}",
+            m.subject,
+            m.text.map_or(0, |t| t.len()),
+            m.html.map_or("none".into(), |h| format!("{} chars", h.len()))
+        );
     }
     Ok(())
 }

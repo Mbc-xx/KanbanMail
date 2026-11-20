@@ -49,9 +49,22 @@ impl Mailbox {
     pub fn new(caps: &[&'static str], folders: &[&str]) -> Self {
         let folders = folders
             .iter()
-            .map(|name| (name.to_string(), Folder { uid_validity: 1, uid_next: 1, mails: Vec::new() }))
+            .map(|name| {
+                (
+                    name.to_string(),
+                    Folder {
+                        uid_validity: 1,
+                        uid_next: 1,
+                        mails: Vec::new(),
+                    },
+                )
+            })
             .collect();
-        Mailbox { caps: caps.to_vec(), folders, log: Vec::new() }
+        Mailbox {
+            caps: caps.to_vec(),
+            folders,
+            log: Vec::new(),
+        }
     }
 
     /// Adds an email written and received on `day` of November 2026; returns its UID.
@@ -67,7 +80,11 @@ impl Mailbox {
     }
 
     pub fn flags(&self, folder: &str, uid: u32) -> Vec<String> {
-        let mail = self.folders[folder].mails.iter().find(|m| m.uid == uid).expect("no such email");
+        let mail = self.folders[folder]
+            .mails
+            .iter()
+            .find(|m| m.uid == uid)
+            .expect("no such email");
         mail.flags.iter().cloned().collect()
     }
 
@@ -78,14 +95,20 @@ impl Mailbox {
             .iter()
             .map(|m| {
                 let text = String::from_utf8_lossy(&m.raw);
-                text.lines().find_map(|l| l.strip_prefix("Subject: ")).unwrap_or_default().to_string()
+                text.lines()
+                    .find_map(|l| l.strip_prefix("Subject: "))
+                    .unwrap_or_default()
+                    .to_string()
             })
             .collect()
     }
 
     /// How many commands started with `prefix` (e.g. "UID FETCH").
     pub fn count(&self, prefix: &str) -> usize {
-        self.log.iter().filter(|l| l.to_ascii_uppercase().starts_with(prefix)).count()
+        self.log
+            .iter()
+            .filter(|l| l.to_ascii_uppercase().starts_with(prefix))
+            .count()
     }
 }
 
@@ -136,7 +159,11 @@ pub async fn start(mailbox: Mailbox) -> (Shared, Session) {
         .unwrap();
     let mut client = async_imap::Client::new(tls);
     client.read_response().await.unwrap();
-    let conn = client.login("me@example.com", "secret").await.map_err(|(e, _)| e).unwrap();
+    let conn = client
+        .login("me@example.com", "secret")
+        .await
+        .map_err(|(e, _)| e)
+        .unwrap();
     (shared, Session::new(conn))
 }
 
@@ -222,7 +249,11 @@ fn fetch_line(seq: usize, mail: &Mail, items: &str) -> Vec<u8> {
         out.extend(format!(" INTERNALDATE \"{}\"", mail.internal).bytes());
     }
     if items.contains("BODY.PEEK[]") || items.contains("BODY[]") {
-        let len = if items.contains("<0.") { mail.raw.len().min(32768) } else { mail.raw.len() };
+        let len = if items.contains("<0.") {
+            mail.raw.len().min(32768)
+        } else {
+            mail.raw.len()
+        };
         out.extend(format!(" BODY[] {{{len}}}\r\n").bytes());
         out.extend(&mail.raw[..len]);
     }
@@ -254,12 +285,24 @@ fn answer(mailbox: &mut Mailbox, selected: &mut Option<String>, tag: &str, comma
         }
         Some("SELECT") | Some("EXAMINE") => {
             let name = &args[1];
-            let Some(folder) = mailbox.folders.get(name) else { return no("no such folder") };
+            let Some(folder) = mailbox.folders.get(name) else {
+                return no("no such folder");
+            };
             *selected = Some(name.clone());
             out.extend(b"* FLAGS (\\Seen \\Flagged \\Deleted \\Answered \\Draft)\r\n");
             out.extend(format!("* {} EXISTS\r\n* 0 RECENT\r\n", folder.mails.len()).bytes());
-            out.extend(format!("* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n", folder.uid_validity, folder.uid_next).bytes());
-            let mode = if upper[0] == "SELECT" { "[READ-WRITE]" } else { "[READ-ONLY]" };
+            out.extend(
+                format!(
+                    "* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n",
+                    folder.uid_validity, folder.uid_next
+                )
+                .bytes(),
+            );
+            let mode = if upper[0] == "SELECT" {
+                "[READ-WRITE]"
+            } else {
+                "[READ-ONLY]"
+            };
             out.extend(ok(&format!("{mode} done")));
         }
         Some(_) if selected.is_none() => return no("no folder selected"),
@@ -281,7 +324,11 @@ fn answer(mailbox: &mut Mailbox, selected: &mut Option<String>, tag: &str, comma
         Some("UID") => {
             let name = selected.clone().unwrap();
             let max = mailbox.folders[&name].uid_next.saturating_sub(1).max(1);
-            let uids = if upper[1] == "SEARCH" { BTreeSet::new() } else { set(&args[2], max) };
+            let uids = if upper[1] == "SEARCH" {
+                BTreeSet::new()
+            } else {
+                set(&args[2], max)
+            };
             match upper[1].as_str() {
                 "FETCH" => {
                     for (i, mail) in mailbox.folders[&name].mails.iter().enumerate() {
@@ -292,7 +339,11 @@ fn answer(mailbox: &mut Mailbox, selected: &mut Option<String>, tag: &str, comma
                 }
                 "STORE" => {
                     let op = &upper[3];
-                    let flags: Vec<String> = args[4].trim_matches(|c| c == '(' || c == ')').split_whitespace().map(String::from).collect();
+                    let flags: Vec<String> = args[4]
+                        .trim_matches(|c| c == '(' || c == ')')
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect();
                     let folder = mailbox.folders.get_mut(&name).unwrap();
                     for (i, mail) in folder.mails.iter_mut().enumerate() {
                         if !uids.contains(&mail.uid) {
@@ -313,17 +364,26 @@ fn answer(mailbox: &mut Mailbox, selected: &mut Option<String>, tag: &str, comma
                     if !mailbox.folders.contains_key(to) {
                         return no("[TRYCREATE] no such folder");
                     }
-                    let picked: Vec<Mail> = mailbox.folders[&name].mails.iter().filter(|m| uids.contains(&m.uid)).cloned().collect();
+                    let picked: Vec<Mail> = mailbox.folders[&name]
+                        .mails
+                        .iter()
+                        .filter(|m| uids.contains(&m.uid))
+                        .cloned()
+                        .collect();
                     let target = mailbox.folders.get_mut(to).unwrap();
                     for mail in picked {
                         target.add(mail);
                     }
                     if upper[1] == "MOVE" {
-                        out.extend(expunge(mailbox.folders.get_mut(&name).unwrap(), |m| uids.contains(&m.uid)));
+                        out.extend(expunge(mailbox.folders.get_mut(&name).unwrap(), |m| {
+                            uids.contains(&m.uid)
+                        }));
                     }
                 }
                 "EXPUNGE" => {
-                    out.extend(expunge(mailbox.folders.get_mut(&name).unwrap(), |m| uids.contains(&m.uid) && m.flags.contains("\\Deleted")));
+                    out.extend(expunge(mailbox.folders.get_mut(&name).unwrap(), |m| {
+                        uids.contains(&m.uid) && m.flags.contains("\\Deleted")
+                    }));
                 }
                 "SEARCH" => {
                     // Only HEADER Message-ID "<id>" is understood.

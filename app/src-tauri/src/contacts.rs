@@ -21,9 +21,8 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
     use objc2::runtime::{Bool, ProtocolObject};
     use objc2::AllocAnyThread;
     use objc2_contacts::{
-        CNAuthorizationStatus, CNContact, CNContactEmailAddressesKey, CNContactFamilyNameKey,
-        CNContactFetchRequest, CNContactGivenNameKey, CNContactOrganizationNameKey, CNContactStore,
-        CNEntityType, CNKeyDescriptor,
+        CNAuthorizationStatus, CNContact, CNContactEmailAddressesKey, CNContactFamilyNameKey, CNContactFetchRequest,
+        CNContactGivenNameKey, CNContactOrganizationNameKey, CNContactStore, CNEntityType, CNKeyDescriptor,
     };
     use objc2_foundation::{NSArray, NSError};
     use std::cell::RefCell;
@@ -34,7 +33,9 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
         // The first time, ask explicitly: this shows the macOS dialog and adds the app to
         // Privacy & Security. No other status check up front: on ad-hoc signed builds macOS
         // can report "denied" while reading works, so try to read and look at it only on failure.
-        if CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts) == CNAuthorizationStatus::NotDetermined {
+        if CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts)
+            == CNAuthorizationStatus::NotDetermined
+        {
             let (answered, answer) = std::sync::mpsc::channel();
             let done = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
                 let _ = answered.send(());
@@ -56,11 +57,18 @@ pub fn system_contacts() -> Result<Vec<Contact>, String> {
         let block = RcBlock::new(|contact: NonNull<CNContact>, _stop: NonNull<Bool>| {
             let c = contact.as_ref();
             let full = format!("{} {}", c.givenName(), c.familyName()).trim().to_string();
-            let name = if full.is_empty() { c.organizationName().to_string() } else { full };
+            let name = if full.is_empty() {
+                c.organizationName().to_string()
+            } else {
+                full
+            };
             for labeled in c.emailAddresses().iter() {
                 let email = labeled.value().to_string();
                 if !email.is_empty() {
-                    out.borrow_mut().push(Contact { name: name.clone(), email });
+                    out.borrow_mut().push(Contact {
+                        name: name.clone(),
+                        email,
+                    });
                 }
             }
         });
@@ -87,8 +95,8 @@ pub fn open_contact(name: &str, email: &str) -> Result<bool, String> {
     use block2::RcBlock;
     use objc2::runtime::{Bool, ProtocolObject};
     use objc2_contacts::{
-        CNAuthorizationStatus, CNContact, CNContactEmailAddressesKey, CNContactStore, CNEntityType, CNKeyDescriptor, CNLabelWork, CNLabeledValue,
-        CNMutableContact, CNSaveRequest,
+        CNAuthorizationStatus, CNContact, CNContactEmailAddressesKey, CNContactStore, CNEntityType, CNKeyDescriptor,
+        CNLabelWork, CNLabeledValue, CNMutableContact, CNSaveRequest,
     };
     use objc2_foundation::{NSArray, NSError, NSString};
 
@@ -98,7 +106,9 @@ pub fn open_contact(name: &str, email: &str) -> Result<bool, String> {
     }
     unsafe {
         let store = CNContactStore::new();
-        if CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts) == CNAuthorizationStatus::NotDetermined {
+        if CNContactStore::authorizationStatusForEntityType(CNEntityType::Contacts)
+            == CNAuthorizationStatus::NotDetermined
+        {
             let (answered, answer) = std::sync::mpsc::channel();
             let done = RcBlock::new(move |_granted: Bool, _error: *mut NSError| {
                 let _ = answered.send(());
@@ -144,7 +154,9 @@ pub fn open_contact(name: &str, email: &str) -> Result<bool, String> {
                 }
             }
         };
-        let _ = std::process::Command::new("open").arg(format!("addressbook://{identifier}")).spawn();
+        let _ = std::process::Command::new("open")
+            .arg(format!("addressbook://{identifier}"))
+            .spawn();
         Ok(created)
     }
 }

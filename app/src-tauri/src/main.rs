@@ -13,8 +13,8 @@ use kanbanmail_core::{
     oauth, secret,
     settings::{Sender, Settings},
     smtp::{self, Draft},
-    store::Store,
     snooze::{self, Snoozed},
+    store::Store,
     tasks::{self, Task},
 };
 use serde::Deserialize;
@@ -108,7 +108,11 @@ fn open_files(app: &AppHandle, paths: impl IntoIterator<Item = std::path::PathBu
     let state = app.state::<AppState>();
     let mut files = state.files.lock().unwrap();
     let before = files.len();
-    files.extend(paths.into_iter().filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("eml"))));
+    files.extend(
+        paths
+            .into_iter()
+            .filter(|p| p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("eml"))),
+    );
     if files.len() == before {
         return;
     }
@@ -125,7 +129,17 @@ fn open_files(app: &AppHandle, paths: impl IntoIterator<Item = std::path::PathBu
 fn take_opened_files(state: State<'_, AppState>) -> Vec<(u32, String)> {
     let files = state.files.lock().unwrap();
     let mut given = state.files_given.lock().unwrap();
-    let new = (*given..files.len()).map(|i| (i as u32, files[i].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())).collect();
+    let new = (*given..files.len())
+        .map(|i| {
+            (
+                i as u32,
+                files[i]
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
     *given = files.len();
     new
 }
@@ -177,9 +191,24 @@ impl AppState {
     /// Keeps a logged-in connection for later; ones kept too long are closed.
     fn park(&self, key: &str, session: Session, caps: ServerCaps) {
         let Ok(mut parked) = self.parked.lock() else { return };
-        let stale: Vec<String> = parked.iter().filter(|(_, p)| p.since.elapsed() > PARK_FOR).map(|(k, _)| k.clone()).collect();
-        let mut closing: Vec<Session> = stale.iter().filter_map(|k| parked.remove(k)).map(|p| p.session).collect();
-        if let Some(old) = parked.insert(key.to_string(), Parked { session, caps, since: std::time::Instant::now() }) {
+        let stale: Vec<String> = parked
+            .iter()
+            .filter(|(_, p)| p.since.elapsed() > PARK_FOR)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let mut closing: Vec<Session> = stale
+            .iter()
+            .filter_map(|k| parked.remove(k))
+            .map(|p| p.session)
+            .collect();
+        if let Some(old) = parked.insert(
+            key.to_string(),
+            Parked {
+                session,
+                caps,
+                since: std::time::Instant::now(),
+            },
+        ) {
             closing.push(old.session);
         }
         drop(parked);
@@ -199,7 +228,9 @@ impl AppState {
     }
 
     fn open_store(&self, key: &str) {
-        let opened = Store::open(key).map_err(|e| eprintln!("local copy unavailable: {e:#}")).ok();
+        let opened = Store::open(key)
+            .map_err(|e| eprintln!("local copy unavailable: {e:#}"))
+            .ok();
         if let Ok(mut guard) = self.store.lock() {
             *guard = opened;
         }
@@ -363,7 +394,9 @@ fn prepare_login(account: &mut Account, add: bool) -> CmdResult<()> {
         account.set_id_beside(&others);
         return Ok(());
     }
-    let saved = Account::load().map_err(err)?.filter(|a| a.email.eq_ignore_ascii_case(&account.email));
+    let saved = Account::load()
+        .map_err(err)?
+        .filter(|a| a.email.eq_ignore_ascii_case(&account.email));
     if account::is_extra() && saved.is_none() {
         return Err("To use another address, add it as a new account".into());
     }
@@ -383,7 +416,10 @@ async fn finish_login(
     let mut account = account;
     let caps = imap::server_caps(&mut session).await.map_err(err)?;
     // Logging in again must not lose the name set in the settings.
-    if let Some(saved) = Account::load().map_err(err)?.filter(|a| !add && a.email.eq_ignore_ascii_case(&account.email)) {
+    if let Some(saved) = Account::load()
+        .map_err(err)?
+        .filter(|a| !add && a.email.eq_ignore_ascii_case(&account.email))
+    {
         account.display_name = saved.display_name;
     }
     if add {
@@ -396,14 +432,27 @@ async fn finish_login(
     save_secret(account.key()).map_err(err)?;
     state.open_store(account.key());
     let mut inner = state.inner.lock().await;
-    *inner = Inner { account: Some(account), password: Some(password), session: Some(session), caps, ..Default::default() };
+    *inner = Inner {
+        account: Some(account),
+        password: Some(password),
+        session: Some(session),
+        caps,
+        ..Default::default()
+    };
     Ok(())
 }
 
 /// Tries to log in; on success saves server and email to file and the password to the keychain.
 /// With `add` the mailbox becomes a new account, next to the existing ones.
 #[tauri::command]
-async fn login(server: String, email: String, username: Option<String>, password: String, add: bool, state: State<'_, AppState>) -> CmdResult<()> {
+async fn login(
+    server: String,
+    email: String,
+    username: Option<String>,
+    password: String,
+    add: bool,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
     let mut account = Account::new(server.trim().to_string(), email.trim().to_string());
     account.username = username.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
     prepare_login(&mut account, add)?;
@@ -422,7 +471,15 @@ async fn login(server: String, email: String, username: Option<String>, password
         Err(e) => return Err(err(e)),
     };
     let keep = password.clone();
-    finish_login(account, session, password, add, move |key| secret::set_password(key, &keep), &state).await
+    finish_login(
+        account,
+        session,
+        password,
+        add,
+        move |key| secret::set_password(key, &keep),
+        &state,
+    )
+    .await
 }
 
 /// The services this build can sign in to with the browser.
@@ -453,12 +510,27 @@ async fn oauth_sign_in(provider: Provider, email: String, add: bool, state: Stat
     let mut account = Account::new(imap_server.to_string(), email.clone());
     account.oauth = true;
     account.username = Some(signed.email.clone()).filter(|u| !u.is_empty() && !u.eq_ignore_ascii_case(&email));
-    account.smtp_server = Some(if signed.personal { MICROSOFT_PERSONAL_SMTP } else { smtp_server }.to_string());
+    account.smtp_server = Some(
+        if signed.personal {
+            MICROSOFT_PERSONAL_SMTP
+        } else {
+            smtp_server
+        }
+        .to_string(),
+    );
     prepare_login(&mut account, add)?;
     oauth::assign(&email, account.key()).await;
     let session = imap::connect(&account, "").await.map_err(err)?;
     let refresh = signed.refresh_token;
-    finish_login(account, session, String::new(), add, |key| secret::set_refresh_token(key, &refresh), &state).await
+    finish_login(
+        account,
+        session,
+        String::new(),
+        add,
+        |key| secret::set_refresh_token(key, &refresh),
+        &state,
+    )
+    .await
 }
 
 /// Gives up on the sign-in waiting for the browser.
@@ -500,7 +572,11 @@ async fn account_unread(id: String, state: State<'_, AppState>) -> CmdResult<Opt
 async fn count_other_account(id: &str, state: &AppState) -> Option<u32> {
     let id = id.to_string();
     let account = account::list().ok()?.into_iter().find(|a| a.key() == id)?;
-    let password = if account.oauth { String::new() } else { secret::get_password(&id).ok()?? };
+    let password = if account.oauth {
+        String::new()
+    } else {
+        secret::get_password(&id).ok()??
+    };
     // The connection kept from last time when there is one, so counting
     // logs in once and moving to this account later needs no login at all.
     let check = async {
@@ -517,8 +593,16 @@ async fn count_other_account(id: &str, state: &AppState) -> Option<u32> {
         // Shared preferences from these settings, addresses from that account's.
         let to = match Settings::load() {
             Ok(s) if s.only_to_me && s.count_unread == "important" => {
-                let own = account::dir_of(&id).ok().flatten().and_then(|d| Settings::load_from(&d).ok()).unwrap_or_default();
-                Settings { only_to_me: true, ..own }.to_me(&account.email)
+                let own = account::dir_of(&id)
+                    .ok()
+                    .flatten()
+                    .and_then(|d| Settings::load_from(&d).ok())
+                    .unwrap_or_default();
+                Settings {
+                    only_to_me: true,
+                    ..own
+                }
+                .to_me(&account.email)
             }
             _ => Vec::new(),
         };
@@ -547,16 +631,19 @@ async fn switch_account(id: String, state: State<'_, AppState>) -> CmdResult<()>
 fn password_in_use(key: &str) -> bool {
     let same = |other: &str| other.eq_ignore_ascii_case(key);
     account::list().unwrap_or_default().iter().any(|a| same(a.key()))
-        || account::all_dirs().unwrap_or_default().iter().any(|dir| {
-            Settings::load_from(dir).is_ok_and(|s| s.senders.iter().any(|x| same(&x.email)))
-        })
+        || account::all_dirs()
+            .unwrap_or_default()
+            .iter()
+            .any(|dir| Settings::load_from(dir).is_ok_and(|s| s.senders.iter().any(|x| same(&x.email))))
 }
 
 /// Forgets the account in use with its password and local copy; the next account, if any, takes over.
 #[tauri::command]
 async fn forget_account(state: State<'_, AppState>) -> CmdResult<()> {
     state.stop_account().await;
-    let Some(acc) = Account::load().map_err(err)? else { return Ok(()) };
+    let Some(acc) = Account::load().map_err(err)? else {
+        return Ok(());
+    };
     if let Some((mut s, _)) = state.unpark(acc.key()) {
         tauri::async_runtime::spawn(async move {
             tokio::time::timeout(Duration::from_secs(3), s.logout()).await.ok();
@@ -605,11 +692,18 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
         .columns
         .iter()
         .zip(folders)
-        .map(|(c, folder)| ColumnInfo { name: c.name.clone(), folder })
+        .map(|(c, folder)| ColumnInfo {
+            name: c.name.clone(),
+            folder,
+        })
         .collect();
 
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let (account, password, caps) = (inner.account.clone().unwrap(), inner.password.clone().unwrap(), inner.caps);
+    let (account, password, caps) = (
+        inner.account.clone().unwrap(),
+        inner.password.clone().unwrap(),
+        inner.caps,
+    );
     // Few connections: mail servers limit them per user (SiteGround: 30, shared
     // with every other client and device). The Inbox is watched live with IDLE on
     // one extra connection; the other columns are checked every 60 seconds on
@@ -631,7 +725,12 @@ async fn open_board(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boa
         .collect();
     tauri::async_runtime::spawn(poll_folders(app.clone(), state.generation.clone(), generation, polled));
     let mut prefetched: Vec<String> = vec!["INBOX".to_string()];
-    prefetched.extend(columns.iter().map(|c| c.folder.clone()).filter(|f| !f.eq_ignore_ascii_case("INBOX")));
+    prefetched.extend(
+        columns
+            .iter()
+            .map(|c| c.folder.clone())
+            .filter(|f| !f.eq_ignore_ascii_case("INBOX")),
+    );
     tauri::async_runtime::spawn(prefetch_bodies(
         app.clone(),
         state.generation.clone(),
@@ -699,14 +798,41 @@ async fn watch_folder(
 #[serde(tag = "op", rename_all = "snake_case")]
 enum QueuedOp {
     // One email: written by older versions, still found in their queues.
-    Move { from: String, uid: u32, to: String },
-    File { folder: String, uid: u32, kind: String },
+    Move {
+        from: String,
+        uid: u32,
+        to: String,
+    },
+    File {
+        folder: String,
+        uid: u32,
+        kind: String,
+    },
     /// Several emails of one folder, moved with a single request.
-    MoveMany { from: String, uids: Vec<u32>, to: String },
-    FileMany { folder: String, uids: Vec<u32>, kind: String },
-    Pin { folder: String, uid: u32, pinned: bool },
-    Seen { folder: String, uids: Vec<u32>, seen: bool },
-    Send { draft: Box<Draft>, reply: Option<ReplyTarget> },
+    MoveMany {
+        from: String,
+        uids: Vec<u32>,
+        to: String,
+    },
+    FileMany {
+        folder: String,
+        uids: Vec<u32>,
+        kind: String,
+    },
+    Pin {
+        folder: String,
+        uid: u32,
+        pinned: bool,
+    },
+    Seen {
+        folder: String,
+        uids: Vec<u32>,
+        seen: bool,
+    },
+    Send {
+        draft: Box<Draft>,
+        reply: Option<ReplyTarget>,
+    },
 }
 
 impl QueuedOp {
@@ -751,15 +877,21 @@ async fn run_op(state: &AppState, op: &QueuedOp) -> CmdResult<Option<String>> {
         QueuedOp::Move { from, to, .. } | QueuedOp::MoveMany { from, to, .. } => {
             with_retry!(inner, |s, caps| imap::move_messages(s, caps, from, uids, to)).map(|_| None)
         }
-        QueuedOp::File { folder, kind, .. } | QueuedOp::FileMany { folder, kind, .. } => with_retry!(inner, |s, caps| async {
-            let target = imap::special_folder(s, kind).await?;
-            anyhow::ensure!(target != *folder, "the email is already in {target}");
-            imap::move_messages(s, caps, folder, uids, &target).await?;
-            Ok(target)
-        })
-        .map(Some),
-        QueuedOp::Pin { folder, uid, pinned } => with_retry!(inner, |s, _caps| imap::set_flagged(s, folder, *uid, *pinned)).map(|_| None),
-        QueuedOp::Seen { folder, uids, seen } => with_retry!(inner, |s, _caps| imap::set_seen_many(s, folder, uids, *seen)).map(|_| None),
+        QueuedOp::File { folder, kind, .. } | QueuedOp::FileMany { folder, kind, .. } => {
+            with_retry!(inner, |s, caps| async {
+                let target = imap::special_folder(s, kind).await?;
+                anyhow::ensure!(target != *folder, "the email is already in {target}");
+                imap::move_messages(s, caps, folder, uids, &target).await?;
+                Ok(target)
+            })
+            .map(Some)
+        }
+        QueuedOp::Pin { folder, uid, pinned } => {
+            with_retry!(inner, |s, _caps| imap::set_flagged(s, folder, *uid, *pinned)).map(|_| None)
+        }
+        QueuedOp::Seen { folder, uids, seen } => {
+            with_retry!(inner, |s, _caps| imap::set_seen_many(s, folder, uids, *seen)).map(|_| None)
+        }
         QueuedOp::Send { .. } => unreachable!(),
     }
 }
@@ -787,7 +919,10 @@ enum Outcome {
 /// Does it now, or keeps it for later when the server cannot be reached.
 async fn perform_or_queue(app: &AppHandle, state: &AppState, op: QueuedOp) -> CmdResult<Outcome> {
     // Changes keep their order: while older ones wait, new ones wait too.
-    let waiting = state.with_store(|st| st.queue()).map(|q| !q.is_empty()).unwrap_or(false);
+    let waiting = state
+        .with_store(|st| st.queue())
+        .map(|q| !q.is_empty())
+        .unwrap_or(false);
     if !waiting {
         match run_op(state, &op).await {
             Err(e) if is_offline(&e) => {}
@@ -825,7 +960,8 @@ async fn replay_queue(app: &AppHandle) {
             Err(e) => {
                 state.with_store(|st| st.dequeue(item.id));
                 changed = true;
-                app.emit("queue-error", format!("Could not finish {}: {e}", op.describe())).ok();
+                app.emit("queue-error", format!("Could not finish {}: {e}", op.describe()))
+                    .ok();
             }
         }
     }
@@ -885,7 +1021,9 @@ async fn prefetch_bodies(
         let state = app.state::<AppState>();
         let mut downloaded = 0;
         if settings.prefetch {
-            let missing = state.with_store(|st| st.missing_bodies(&folders, 6)).unwrap_or_default();
+            let missing = state
+                .with_store(|st| st.missing_bodies(&folders, 6))
+                .unwrap_or_default();
             let mut by_folder: Vec<(String, Vec<u32>)> = Vec::new();
             for (folder, uid) in missing {
                 match by_folder.iter_mut().find(|(f, _)| *f == folder) {
@@ -902,7 +1040,9 @@ async fn prefetch_bodies(
                     },
                 };
                 let fetch = imap::fetch_raws(&mut s, &folder, &uids, PREFETCH_MAX_SIZE);
-                let Ok(Ok(list)) = tokio::time::timeout(OPERATION_TIMEOUT, fetch).await else { break };
+                let Ok(Ok(list)) = tokio::time::timeout(OPERATION_TIMEOUT, fetch).await else {
+                    break;
+                };
                 session = Some(s);
                 // The local copy may already be another account's.
                 if current.load(Ordering::SeqCst) != generation {
@@ -941,7 +1081,14 @@ fn cache_stats(state: State<'_, AppState>) -> kanbanmail_core::store::StoreStats
 /// Deletes the local copy (it is rebuilt as folders are opened again).
 #[tauri::command]
 async fn clear_cache(state: State<'_, AppState>) -> CmdResult<()> {
-    let key = state.inner.lock().await.account.as_ref().map(|a| a.key().to_string()).ok_or("no account configured")?;
+    let key = state
+        .inner
+        .lock()
+        .await
+        .account
+        .as_ref()
+        .map(|a| a.key().to_string())
+        .ok_or("no account configured")?;
     if let Ok(mut guard) = state.store.lock() {
         *guard = None;
     }
@@ -1009,7 +1156,13 @@ fn cached_all_mail(state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
 /// server (and then kept).
 async fn raw_email(state: &AppState, folder: &str, uid: u32) -> CmdResult<Vec<u8>> {
     if folder == FILE_FOLDER {
-        let path = state.files.lock().unwrap().get(uid as usize).cloned().ok_or("file not found")?;
+        let path = state
+            .files
+            .lock()
+            .unwrap()
+            .get(uid as usize)
+            .cloned()
+            .ok_or("file not found")?;
         return std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()));
     }
     if let Some(Some(raw)) = state.with_store(|st| st.raw(folder, uid)) {
@@ -1037,8 +1190,23 @@ async fn raw_email(state: &AppState, folder: &str, uid: u32) -> CmdResult<Vec<u8
 /// Moves several emails of one folder at once. true when moved now, false
 /// when the move waits for the connection.
 #[tauri::command]
-async fn move_cards(from: String, uids: Vec<u32>, to: String, app: AppHandle, state: State<'_, AppState>) -> CmdResult<bool> {
-    let outcome = perform_or_queue(&app, &state, QueuedOp::MoveMany { from: from.clone(), uids: uids.clone(), to }).await?;
+async fn move_cards(
+    from: String,
+    uids: Vec<u32>,
+    to: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<bool> {
+    let outcome = perform_or_queue(
+        &app,
+        &state,
+        QueuedOp::MoveMany {
+            from: from.clone(),
+            uids: uids.clone(),
+            to,
+        },
+    )
+    .await?;
     state.with_store(|st| st.remove(&from, &uids));
     Ok(matches!(outcome, Outcome::Done(_)))
 }
@@ -1046,8 +1214,23 @@ async fn move_cards(from: String, uids: Vec<u32>, to: String, app: AppHandle, st
 /// Files several emails of one folder at once (trash, archive, junk). Returns
 /// the destination folder, or "" when the move waits for the connection.
 #[tauri::command]
-async fn file_cards(folder: String, uids: Vec<u32>, kind: String, app: AppHandle, state: State<'_, AppState>) -> CmdResult<String> {
-    let outcome = perform_or_queue(&app, &state, QueuedOp::FileMany { folder: folder.clone(), uids: uids.clone(), kind }).await?;
+async fn file_cards(
+    folder: String,
+    uids: Vec<u32>,
+    kind: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<String> {
+    let outcome = perform_or_queue(
+        &app,
+        &state,
+        QueuedOp::FileMany {
+            folder: folder.clone(),
+            uids: uids.clone(),
+            kind,
+        },
+    )
+    .await?;
     state.with_store(|st| st.remove(&folder, &uids));
     Ok(match outcome {
         Outcome::Done(target) => target.unwrap_or_default(),
@@ -1057,7 +1240,16 @@ async fn file_cards(folder: String, uids: Vec<u32>, kind: String, app: AppHandle
 
 #[tauri::command]
 async fn set_pin(folder: String, uid: u32, pinned: bool, app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    perform_or_queue(&app, &state, QueuedOp::Pin { folder: folder.clone(), uid, pinned }).await?;
+    perform_or_queue(
+        &app,
+        &state,
+        QueuedOp::Pin {
+            folder: folder.clone(),
+            uid,
+            pinned,
+        },
+    )
+    .await?;
     state.with_store(|st| st.set_flags(&folder, &[uid], None, Some(pinned)));
     Ok(())
 }
@@ -1070,7 +1262,16 @@ async fn read_message(folder: String, uid: u32, state: State<'_, AppState>) -> C
 
 #[tauri::command]
 async fn set_seen(folder: String, uid: u32, seen: bool, app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    perform_or_queue(&app, &state, QueuedOp::Seen { folder: folder.clone(), uids: vec![uid], seen }).await?;
+    perform_or_queue(
+        &app,
+        &state,
+        QueuedOp::Seen {
+            folder: folder.clone(),
+            uids: vec![uid],
+            seen,
+        },
+    )
+    .await?;
     state.with_store(|st| st.set_flags(&folder, &[uid], Some(seen), None));
     Ok(())
 }
@@ -1130,12 +1331,23 @@ async fn save_settings(settings: SettingsView, state: State<'_, AppState>) -> Cm
         signature_html: kanbanmail_core::message::sanitize_signature(&s.signature_html),
         important_allow: kanbanmail_core::settings::normalize_rules(&s.important_allow),
         important_block: kanbanmail_core::settings::normalize_rules(&s.important_block),
-        rules: s.rules.into_iter().filter(|r| !r.contains.trim().is_empty() && !r.folder.is_empty()).collect(),
+        rules: s
+            .rules
+            .into_iter()
+            .filter(|r| !r.contains.trim().is_empty() && !r.folder.is_empty())
+            .collect(),
         templates: s
             .templates
             .into_iter()
             .filter(|t| !t.text.trim().is_empty())
-            .map(|t| kanbanmail_core::settings::Template { name: if t.name.trim().is_empty() { t.text.lines().next().unwrap_or_default().chars().take(40).collect() } else { t.name.trim().to_string() }, text: t.text.trim_end().to_string() })
+            .map(|t| kanbanmail_core::settings::Template {
+                name: if t.name.trim().is_empty() {
+                    t.text.lines().next().unwrap_or_default().chars().take(40).collect()
+                } else {
+                    t.name.trim().to_string()
+                },
+                text: t.text.trim_end().to_string(),
+            })
             .collect(),
         zoom: s.zoom.clamp(80, 150),
         undo_seconds: s.undo_seconds.min(60),
@@ -1176,10 +1388,22 @@ struct SendResult {
 }
 
 #[tauri::command]
-async fn send_mail(draft: Draft, reply: Option<ReplyTarget>, app: AppHandle, state: State<'_, AppState>) -> CmdResult<SendResult> {
+async fn send_mail(
+    draft: Draft,
+    reply: Option<ReplyTarget>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<SendResult> {
     match send_now(&state, draft.clone(), reply.clone()).await {
         Err(e) if is_offline(&e) => {
-            queue_op(&app, &state, &QueuedOp::Send { draft: Box::new(draft), reply })?;
+            queue_op(
+                &app,
+                &state,
+                &QueuedOp::Send {
+                    draft: Box::new(draft),
+                    reply,
+                },
+            )?;
             Ok(SendResult {
                 saved_to: None,
                 warning: Some("No connection: the email will be sent as soon as the server can be reached.".into()),
@@ -1194,7 +1418,11 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Who an email leaves from, with its rich signature: the main account, or the
 /// extra sender picked in the composer (the main signature when it has none).
-fn outgoing<'a>(main: &Account, settings: &'a Settings, from: Option<&str>) -> (Account, Option<&'a Sender>, Option<smtp::HtmlSignature>) {
+fn outgoing<'a>(
+    main: &Account,
+    settings: &'a Settings,
+    from: Option<&str>,
+) -> (Account, Option<&'a Sender>, Option<smtp::HtmlSignature>) {
     match settings.sender(from) {
         Some(s) if !s.signature.trim().is_empty() => (s.account(), Some(s), s.html_signature()),
         Some(s) => (s.account(), Some(s), settings.html_signature()),
@@ -1212,7 +1440,12 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
     };
     let settings = Settings::load().map_err(err)?;
     let (account, sender, signature) = outgoing(&main, &settings, draft.from.as_deref());
-    if let Some(from) = draft.from.as_deref().map(str::trim).filter(|f| sender.is_none() && !f.is_empty() && !f.eq_ignore_ascii_case(&main.email)) {
+    if let Some(from) = draft
+        .from
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| sender.is_none() && !f.is_empty() && !f.eq_ignore_ascii_case(&main.email))
+    {
         return Err(format!("{from} is no longer among the senders in Settings"));
     }
     let password = match sender {
@@ -1226,7 +1459,10 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
     let mut draft = draft;
     let draft_id = draft.message_id.clone().filter(|id| !id.is_empty());
     let domain = account.email.rsplit('@').next().unwrap_or_default().to_lowercase();
-    if !draft_id.as_deref().is_some_and(|id| id.to_lowercase().ends_with(&format!("@{domain}>"))) {
+    if !draft_id
+        .as_deref()
+        .is_some_and(|id| id.to_lowercase().ends_with(&format!("@{domain}>")))
+    {
         draft.message_id = Some(smtp::new_message_id(&account.email));
     }
     let message = smtp::build(&account, &draft, signature.as_ref()).map_err(err)?;
@@ -1240,7 +1476,11 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
         .map(|m| m.formatted())
         .unwrap_or_else(|_| message.formatted());
     // From an extra sender the mailbox's server never saw the email.
-    let copy = if sender.is_some() { SentCopy::App } else { main.provider().sent_copy() };
+    let copy = if sender.is_some() {
+        SentCopy::App
+    } else {
+        main.provider().sent_copy()
+    };
     if copy == SentCopy::Check {
         tokio::time::sleep(SENT_COPY_WAIT).await;
     }
@@ -1267,8 +1507,14 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
         }
     }
     Ok(match saved {
-        Ok(folder) => SendResult { saved_to: Some(folder), warning: None },
-        Err(e) => SendResult { saved_to: None, warning: Some(format!("Email sent, but the copy was not saved: {e}")) },
+        Ok(folder) => SendResult {
+            saved_to: Some(folder),
+            warning: None,
+        },
+        Err(e) => SendResult {
+            saved_to: None,
+            warning: Some(format!("Email sent, but the copy was not saved: {e}")),
+        },
     })
 }
 
@@ -1279,7 +1525,9 @@ async fn send_now(state: &AppState, draft: Draft, reply: Option<ReplyTarget>) ->
 async fn test_sender(sender: Sender, password: String) -> CmdResult<()> {
     let password = if password.is_empty() {
         let settings = Settings::load().map_err(err)?;
-        let known = settings.sender(Some(&sender.email)).filter(|x| x.smtp_server == sender.smtp_server.trim());
+        let known = settings
+            .sender(Some(&sender.email))
+            .filter(|x| x.smtp_server == sender.smtp_server.trim());
         match known {
             Some(x) => secret::get_password(&x.email).map_err(err)?,
             None => None,
@@ -1307,12 +1555,18 @@ async fn new_message_id(state: State<'_, AppState>) -> CmdResult<String> {
 /// Returns the Drafts folder name.
 #[tauri::command]
 async fn save_draft(draft: Draft, state: State<'_, AppState>) -> CmdResult<String> {
-    let id = draft.message_id.clone().filter(|s| !s.is_empty()).ok_or("draft without Message-ID")?;
+    let id = draft
+        .message_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or("draft without Message-ID")?;
     let mut inner = state.inner.lock().await;
     let main = inner.account.clone().ok_or("no account configured")?;
     let settings = Settings::load().map_err(err)?;
     let (account, _, signature) = outgoing(&main, &settings, draft.from.as_deref());
-    let raw = smtp::build_draft(&account, &draft, signature.as_ref()).map_err(err)?.formatted();
+    let raw = smtp::build_draft(&account, &draft, signature.as_ref())
+        .map_err(err)?
+        .formatted();
     with_retry!(inner, |s, caps| imap::save_draft(s, caps, &raw, &id))
 }
 
@@ -1350,8 +1604,14 @@ async fn load_thread(
 
 /// The conversation as far as the local copy knows it (instant, offline).
 #[tauri::command]
-fn local_thread(message_id: Option<String>, references: Vec<String>, state: State<'_, AppState>) -> Vec<imap::ThreadEntry> {
-    state.with_store(|st| st.thread(message_id.as_deref(), &references)).unwrap_or_default()
+fn local_thread(
+    message_id: Option<String>,
+    references: Vec<String>,
+    state: State<'_, AppState>,
+) -> Vec<imap::ThreadEntry> {
+    state
+        .with_store(|st| st.thread(message_id.as_deref(), &references))
+        .unwrap_or_default()
 }
 
 /// Searches the local copy: sender, recipients, subject and the text of the
@@ -1459,7 +1719,10 @@ fn set_sender_rule(pattern: String, rule: String) -> CmdResult<(Vec<String>, Vec
 async fn known_senders(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     let (account, password) = {
         let inner = state.inner.lock().await;
-        (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+        (
+            inner.account.clone().ok_or("no account configured")?,
+            inner.password.clone().unwrap_or_default(),
+        )
     };
     let mut session = imap::connect(&account, &password).await.map_err(err)?;
     let known = imap::sent_recipients(&mut session, 3000).await.map_err(err);
@@ -1481,7 +1744,13 @@ async fn search_emails(
     scope: String,
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<imap::ThreadEntry>> {
-    async fn run(s: &mut Session, query: &imap::SearchQuery, in_body: bool, extra: &[String], scope: &str) -> anyhow::Result<Vec<imap::ThreadEntry>> {
+    async fn run(
+        s: &mut Session,
+        query: &imap::SearchQuery,
+        in_body: bool,
+        extra: &[String],
+        scope: &str,
+    ) -> anyhow::Result<Vec<imap::ThreadEntry>> {
         // Just the folders asked for, with every email found there.
         if scope == "full" {
             return imap::search(s, query, in_body, extra, usize::MAX).await;
@@ -1498,7 +1767,11 @@ async fn search_emails(
             }
         }
         let folders: Vec<String> = if scope == "rest" {
-            imap::searchable_folders(s).await?.into_iter().filter(|f| !main.contains(f)).collect()
+            imap::searchable_folders(s)
+                .await?
+                .into_iter()
+                .filter(|f| !main.contains(f))
+                .collect()
         } else {
             main
         };
@@ -1507,7 +1780,10 @@ async fn search_emails(
 
     let (account, password) = {
         let inner = state.inner.lock().await;
-        (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+        (
+            inner.account.clone().ok_or("no account configured")?,
+            inner.password.clone().unwrap_or_default(),
+        )
     };
     let found = match imap::connect(&account, &password).await {
         Ok(mut session) => {
@@ -1546,17 +1822,27 @@ async fn save_file(window: &tauri::Window, name: &str, bytes: &[u8]) -> CmdResul
     let chosen = Settings::load().map_err(err)?.save_folder;
     let asked = chosen == "ask";
     let path = if asked {
-        let picked = rfd::AsyncFileDialog::new().set_title("Save").set_parent(window).set_file_name(name).save_file().await;
+        let picked = rfd::AsyncFileDialog::new()
+            .set_title("Save")
+            .set_parent(window)
+            .set_file_name(name)
+            .save_file()
+            .await;
         let Some(file) = picked else { return Ok(None) };
         file.path().to_path_buf()
     } else if chosen == "downloads" {
         let dirs = directories::UserDirs::new();
-        let dir = dirs.as_ref().and_then(|d| d.download_dir()).ok_or("cannot find the Downloads folder")?;
+        let dir = dirs
+            .as_ref()
+            .and_then(|d| d.download_dir())
+            .ok_or("cannot find the Downloads folder")?;
         unique_path(dir, name)
     } else {
         let dir = std::path::Path::new(&chosen);
         if !dir.is_dir() {
-            return Err(format!("the folder {chosen} is not there: choose another one in Settings → Reading"));
+            return Err(format!(
+                "the folder {chosen} is not there: choose another one in Settings → Reading"
+            ));
         }
         unique_path(dir, name)
     };
@@ -1568,13 +1854,23 @@ async fn save_file(window: &tauri::Window, name: &str, bytes: &[u8]) -> CmdResul
 /// The folder for saved files, from the system's panel.
 #[tauri::command]
 async fn pick_save_folder(window: tauri::Window) -> Option<String> {
-    let folder = rfd::AsyncFileDialog::new().set_title("Folder for saved files").set_parent(&window).pick_folder().await?;
+    let folder = rfd::AsyncFileDialog::new()
+        .set_title("Folder for saved files")
+        .set_parent(&window)
+        .pick_folder()
+        .await?;
     Some(folder.path().display().to_string())
 }
 
 /// Saves an attachment; see [`save_file`].
 #[tauri::command]
-async fn save_attachment(folder: String, uid: u32, index: usize, window: tauri::Window, state: State<'_, AppState>) -> CmdResult<Option<String>> {
+async fn save_attachment(
+    folder: String,
+    uid: u32,
+    index: usize,
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> CmdResult<Option<String>> {
     let raw = raw_email(&state, &folder, uid).await?;
     let (name, bytes) = kanbanmail_core::message::attachment(&raw, index).ok_or("attachment not found")?;
     save_file(&window, &safe_file_name(&name), &bytes).await
@@ -1584,10 +1880,20 @@ async fn save_attachment(folder: String, uid: u32, index: usize, window: tauri::
 fn safe_file_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().trim_start_matches('.').to_string();
-    if cleaned.is_empty() { "attachment".into() } else { cleaned }
+    if cleaned.is_empty() {
+        "attachment".into()
+    } else {
+        cleaned
+    }
 }
 
 /// `name.pdf`, or `name (1).pdf`, `name (2).pdf`... if it already exists.
@@ -1627,7 +1933,9 @@ fn drag_dir() -> std::path::PathBuf {
 /// returns its path. Copies older than an hour are removed meanwhile.
 #[tauri::command]
 async fn prepare_attachment(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<String> {
-    attachment_copy(&state, &folder, uid, index).await.map(|p| p.display().to_string())
+    attachment_copy(&state, &folder, uid, index)
+        .await
+        .map(|p| p.display().to_string())
 }
 
 /// A copy of an attachment in the temporary folder (see [`prepare_attachment`]).
@@ -1636,13 +1944,20 @@ async fn attachment_copy(state: &AppState, folder: &str, uid: u32, index: usize)
     let (name, bytes) = kanbanmail_core::message::attachment(&raw, index).ok_or("attachment not found")?;
     let root = drag_dir();
     if let Ok(list) = std::fs::read_dir(&root) {
-        let old = |e: &std::fs::DirEntry| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > Duration::from_secs(3600)));
+        let old = |e: &std::fs::DirEntry| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > Duration::from_secs(3600)))
+        };
         for entry in list.flatten().filter(old) {
             std::fs::remove_dir_all(entry.path()).ok();
         }
     }
     // A folder of its own, so two attachments with the same name do not clash.
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let dir = root.join(format!("{uid}-{index}-{stamp}"));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(safe_file_name(&name));
@@ -1656,9 +1971,17 @@ async fn attachment_copy(state: &AppState, folder: &str, uid: u32, index: usize)
 async fn preview_attachment(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<()> {
     let path = attachment_copy(&state, &folder, uid, index).await?;
     #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("qlmanage").arg("-p").arg(&path).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+    let r = std::process::Command::new("qlmanage")
+        .arg("-p")
+        .arg(&path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
     #[cfg(target_os = "windows")]
-    let r = std::process::Command::new("rundll32").arg("url.dll,FileProtocolHandler").arg(&path).spawn();
+    let r = std::process::Command::new("rundll32")
+        .arg("url.dll,FileProtocolHandler")
+        .arg(&path)
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let r = std::process::Command::new("xdg-open").arg(&path).spawn();
     r.map(|_| ()).map_err(|e| e.to_string())
@@ -1672,8 +1995,15 @@ async fn warm_message(folder: String, uid: u32, state: State<'_, AppState>) -> C
     if state.with_store(|st| st.raw(&folder, uid)).flatten().is_some() {
         return Ok(());
     }
-    let Ok(mut inner) = state.inner.try_lock() else { return Ok(()) };
-    let fetched = read_retry!(inner, |s, _caps| imap::fetch_raws(s, &folder, &[uid], PREFETCH_MAX_SIZE))?;
+    let Ok(mut inner) = state.inner.try_lock() else {
+        return Ok(());
+    };
+    let fetched = read_retry!(inner, |s, _caps| imap::fetch_raws(
+        s,
+        &folder,
+        &[uid],
+        PREFETCH_MAX_SIZE
+    ))?;
     drop(inner);
     for (uid, raw, size) in fetched {
         match raw {
@@ -1696,13 +2026,23 @@ async fn unsubscribe(url: String) -> CmdResult<()> {
 #[tauri::command]
 fn drag_attachment(path: String, window: tauri::WebviewWindow, app: AppHandle) -> CmdResult<()> {
     let path = std::path::PathBuf::from(path);
-    let inside = path.canonicalize().ok().zip(drag_dir().canonicalize().ok()).is_some_and(|(p, root)| p.starts_with(root));
+    let inside = path
+        .canonicalize()
+        .ok()
+        .zip(drag_dir().canonicalize().ok())
+        .is_some_and(|(p, root)| p.starts_with(root));
     if !inside || !path.is_file() {
         return Err("this file cannot be dragged".into());
     }
     let icon = include_bytes!("../icons/64x64.png").to_vec();
     app.run_on_main_thread(move || {
-        let result = drag::start_drag(&window, drag::DragItem::Files(vec![path]), drag::Image::Raw(icon), |_, _| {}, drag::Options::default());
+        let result = drag::start_drag(
+            &window,
+            drag::DragItem::Files(vec![path]),
+            drag::Image::Raw(icon),
+            |_, _| {},
+            drag::Options::default(),
+        );
         if let Err(e) = result {
             eprintln!("could not start dragging: {e}");
         }
@@ -1714,7 +2054,9 @@ fn reveal_in_file_manager(path: &std::path::Path) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    let _ = std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     if let Some(dir) = path.parent() {
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
@@ -1793,11 +2135,21 @@ fn render_markdown(text: String) -> String {
 /// An attachment of an existing email, ready to be attached again (forward,
 /// reopened draft).
 #[tauri::command]
-async fn attachment_data(folder: String, uid: u32, index: usize, state: State<'_, AppState>) -> CmdResult<smtp::OutgoingAttachment> {
+async fn attachment_data(
+    folder: String,
+    uid: u32,
+    index: usize,
+    state: State<'_, AppState>,
+) -> CmdResult<smtp::OutgoingAttachment> {
     use base64::Engine;
     let raw = raw_email(&state, &folder, uid).await?;
-    let (name, mime, bytes) = kanbanmail_core::message::attachment_with_mime(&raw, index).ok_or("attachment not found")?;
-    Ok(smtp::OutgoingAttachment { name, mime, data: base64::engine::general_purpose::STANDARD.encode(bytes) })
+    let (name, mime, bytes) =
+        kanbanmail_core::message::attachment_with_mime(&raw, index).ok_or("attachment not found")?;
+    Ok(smtp::OutgoingAttachment {
+        name,
+        mime,
+        data: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
 }
 
 /// A file chosen with the paperclip, read here rather than by the web view
@@ -1816,16 +2168,25 @@ struct PickedFile {
 #[tauri::command]
 async fn pick_attachments(window: tauri::Window) -> CmdResult<Vec<PickedFile>> {
     use base64::Engine;
-    let Some(files) = rfd::AsyncFileDialog::new().set_title("Attach files").set_parent(&window).pick_files().await else {
+    let Some(files) = rfd::AsyncFileDialog::new()
+        .set_title("Attach files")
+        .set_parent(&window)
+        .pick_files()
+        .await
+    else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
     for f in files {
         let path = f.path().to_path_buf();
         let name = f.file_name();
-        let bytes = tokio::fs::read(&path).await.map_err(|e| format!("could not read {name}: {e}"))?;
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| format!("could not read {name}: {e}"))?;
         if bytes.is_empty() {
-            return Err(format!("{name} is empty (if it is in the cloud, download it to this Mac first)"));
+            return Err(format!(
+                "{name} is empty (if it is in the cloud, download it to this Mac first)"
+            ));
         }
         out.push(PickedFile {
             mime: mime_for(&name).to_string(),
@@ -1839,7 +2200,10 @@ async fn pick_attachments(window: tauri::Window) -> CmdResult<Vec<PickedFile>> {
 
 /// The media type of a file from its extension (what mail clients use to pick an app).
 fn mime_for(name: &str) -> &'static str {
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
     match ext.as_str() {
         "pdf" => "application/pdf",
         "doc" => "application/msword",
@@ -1901,7 +2265,13 @@ struct ExportAccount {
 /// file; see [`save_file`].
 #[tauri::command]
 async fn export_settings(window: tauri::Window, state: State<'_, AppState>) -> CmdResult<Option<String>> {
-    let acc = state.inner.lock().await.account.clone().ok_or("no account configured")?;
+    let acc = state
+        .inner
+        .lock()
+        .await
+        .account
+        .clone()
+        .ok_or("no account configured")?;
     let file = ExportFile {
         app: "KanbanMail".into(),
         version: 1,
@@ -1930,13 +2300,17 @@ async fn import_settings(json: String, state: State<'_, AppState>) -> CmdResult<
         return Err("this is not a KanbanMail settings file".into());
     }
     if !file.board_toml.trim().is_empty() {
-        toml::from_str::<Board>(&file.board_toml).map_err(|e| format!("the board columns in the file are not valid: {e}"))?;
+        toml::from_str::<Board>(&file.board_toml)
+            .map_err(|e| format!("the board columns in the file are not valid: {e}"))?;
         std::fs::write(board_path().map_err(err)?, &file.board_toml).map_err(|e| e.to_string())?;
     }
     file.settings.save().map_err(err)?;
     file.settings.share_with_other_accounts().map_err(err)?;
     let mut inner = state.inner.lock().await;
-    let same = inner.account.as_ref().is_some_and(|a| a.email.eq_ignore_ascii_case(&file.account.email));
+    let same = inner
+        .account
+        .as_ref()
+        .is_some_and(|a| a.email.eq_ignore_ascii_case(&file.account.email));
     if same {
         let acc = inner.account.as_mut().unwrap();
         acc.display_name = file.account.display_name;
@@ -1972,7 +2346,9 @@ fn open_in_browser(url: &str) -> CmdResult<()> {
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(url.trim()).spawn();
     #[cfg(target_os = "windows")]
-    let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", url.trim()]).spawn();
+    let r = std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", url.trim()])
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let r = std::process::Command::new("xdg-open").arg(url.trim()).spawn();
     r.map(|_| ()).map_err(|e| e.to_string())
@@ -2009,12 +2385,33 @@ fn external_links<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 #[tauri::command]
 async fn undo_move(message_id: String, now_in: String, back_to: String, state: State<'_, AppState>) -> CmdResult<()> {
     let mut inner = state.inner.lock().await;
-    with_retry!(inner, |s, caps| imap::move_back(s, caps, &message_id, &now_in, &back_to))
+    with_retry!(inner, |s, caps| imap::move_back(
+        s,
+        caps,
+        &message_id,
+        &now_in,
+        &back_to
+    ))
 }
 
 #[tauri::command]
-async fn set_seen_many(folder: String, uids: Vec<u32>, seen: bool, app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    perform_or_queue(&app, &state, QueuedOp::Seen { folder: folder.clone(), uids: uids.clone(), seen }).await?;
+async fn set_seen_many(
+    folder: String,
+    uids: Vec<u32>,
+    seen: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CmdResult<()> {
+    perform_or_queue(
+        &app,
+        &state,
+        QueuedOp::Seen {
+            folder: folder.clone(),
+            uids: uids.clone(),
+            seen,
+        },
+    )
+    .await?;
     state.with_store(|st| st.set_flags(&folder, &uids, Some(seen), None));
     Ok(())
 }
@@ -2058,7 +2455,11 @@ fn save_board(columns: Vec<ColumnSpec>) -> CmdResult<()> {
         .into_iter()
         .filter(|c| !c.folder.trim().is_empty())
         .map(|c| kanbanmail_core::board::Column {
-            name: if c.name.trim().is_empty() { c.folder.clone() } else { c.name.trim().to_string() },
+            name: if c.name.trim().is_empty() {
+                c.folder.clone()
+            } else {
+                c.name.trim().to_string()
+            },
             folder: c.folder.trim().to_string(),
         })
         .collect();
@@ -2070,26 +2471,34 @@ fn save_board(columns: Vec<ColumnSpec>) -> CmdResult<()> {
 #[tauri::command]
 async fn notify(title: String, body: String, target: Option<String>, app: AppHandle) -> CmdResult<()> {
     let target = target.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || notifications::show(&app, &title, &body, &target)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || notifications::show(&app, &title, &body, &target))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Shows (or creates, then shows) the contact of an address in Contacts.
 #[tauri::command]
 async fn open_contact(name: String, email: String) -> CmdResult<bool> {
-    tauri::async_runtime::spawn_blocking(move || contacts::open_contact(&name, &email)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || contacts::open_contact(&name, &email))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Asks for permission to notify, when the app starts with notifications on.
 #[tauri::command]
 async fn prepare_notifications() -> bool {
-    tauri::async_runtime::spawn_blocking(notifications::prepare).await.unwrap_or(false)
+    tauri::async_runtime::spawn_blocking(notifications::prepare)
+        .await
+        .unwrap_or(false)
 }
 
 /// Opens System Settings → Notifications.
 #[tauri::command]
 fn open_notification_settings() {
     #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension").spawn();
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+        .spawn();
 }
 
 /// Answers a calendar invitation ("ACCEPTED", "DECLINED", "TENTATIVE") to its organizer.
@@ -2098,9 +2507,14 @@ async fn respond_invite(folder: String, uid: u32, response: String, state: State
     let raw = raw_email(&state, &folder, uid).await?;
     let (account, password) = {
         let inner = state.inner.lock().await;
-        (inner.account.clone().ok_or("no account configured")?, inner.password.clone().unwrap_or_default())
+        (
+            inner.account.clone().ok_or("no account configured")?,
+            inner.password.clone().unwrap_or_default(),
+        )
     };
-    let invite = kanbanmail_core::message::parse_view(&raw).invite.ok_or("this email has no invitation")?;
+    let invite = kanbanmail_core::message::parse_view(&raw)
+        .invite
+        .ok_or("this email has no invitation")?;
     let message = smtp::build_invite_reply(&account, &invite.ics, &response).map_err(err)?;
     smtp::send(&account, &password, &message).await.map_err(err)
 }
@@ -2109,13 +2523,18 @@ async fn respond_invite(folder: String, uid: u32, response: String, state: State
 #[tauri::command]
 async fn add_to_calendar(folder: String, uid: u32, state: State<'_, AppState>) -> CmdResult<()> {
     let raw = raw_email(&state, &folder, uid).await?;
-    let invite = kanbanmail_core::message::parse_view(&raw).invite.ok_or("this email has no invitation")?;
+    let invite = kanbanmail_core::message::parse_view(&raw)
+        .invite
+        .ok_or("this email has no invitation")?;
     let path = std::env::temp_dir().join(format!("kanbanmail-{}.ics", uid));
     std::fs::write(&path, invite.ics).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     let r = std::process::Command::new("open").arg(&path).spawn();
     #[cfg(target_os = "windows")]
-    let r = std::process::Command::new("cmd").args(["/C", "start", ""]).arg(&path).spawn();
+    let r = std::process::Command::new("cmd")
+        .args(["/C", "start", ""])
+        .arg(&path)
+        .spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let r = std::process::Command::new("xdg-open").arg(&path).spawn();
     r.map(|_| ()).map_err(|e| e.to_string())

@@ -157,7 +157,10 @@ pub struct Sender {
 
 /// The rich signature to send, when it has formatting.
 fn rich_signature(text: &str, html: &str) -> Option<crate::smtp::HtmlSignature> {
-    (!html.trim().is_empty()).then(|| crate::smtp::HtmlSignature { text: text.to_string(), html: html.to_string() })
+    (!html.trim().is_empty()).then(|| crate::smtp::HtmlSignature {
+        text: text.to_string(),
+        html: html.to_string(),
+    })
 }
 
 fn default_smtp_port() -> u16 {
@@ -283,7 +286,11 @@ fn default_true() -> bool {
 
 /// Lowercased, trimmed, without duplicates or empty entries.
 pub fn normalize_rules(rules: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = rules.iter().map(|r| r.trim().to_lowercase()).filter(|r| !r.is_empty()).collect();
+    let mut out: Vec<String> = rules
+        .iter()
+        .map(|r| r.trim().to_lowercase())
+        .filter(|r| !r.is_empty())
+        .collect();
     out.sort();
     out.dedup();
     out
@@ -359,7 +366,8 @@ impl Settings {
                 signature: s.signature.trim_end().to_string(),
                 signature_html: crate::message::sanitize_signature(&s.signature_html),
             };
-            let dup = s.email.eq_ignore_ascii_case(main_email) || out.iter().any(|o| o.email.eq_ignore_ascii_case(&s.email));
+            let dup =
+                s.email.eq_ignore_ascii_case(main_email) || out.iter().any(|o| o.email.eq_ignore_ascii_case(&s.email));
             if s.email.contains('@') && !s.smtp_server.is_empty() && !dup {
                 out.push(s);
             }
@@ -378,7 +386,12 @@ impl Settings {
             return Vec::new();
         }
         let mut out = vec![main.to_string()];
-        out.extend(self.my_addresses.iter().map(|a| a.trim().to_string()).filter(|a| a.contains('@') && !a.eq_ignore_ascii_case(main)));
+        out.extend(
+            self.my_addresses
+                .iter()
+                .map(|a| a.trim().to_string())
+                .filter(|a| a.contains('@') && !a.eq_ignore_ascii_case(main)),
+        );
         out
     }
 
@@ -388,7 +401,9 @@ impl Settings {
 
     pub fn load_from(dir: &Path) -> Result<Settings> {
         let path = dir.join("settings.toml");
-        let Ok(meta) = std::fs::metadata(&path) else { return Ok(Settings::default()) };
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return Ok(Settings::default());
+        };
         // Read often (every send, every background round): parsed again only
         // when the file changed.
         let stamp = (meta.modified().ok(), meta.len());
@@ -427,7 +442,11 @@ impl Settings {
             notify: from.notify.clone(),
             only_to_me: from.only_to_me,
             count_unread: from.count_unread.clone(),
-            theme: if from.theme_per_account { self.theme.clone() } else { from.theme.clone() },
+            theme: if from.theme_per_account {
+                self.theme.clone()
+            } else {
+                from.theme.clone()
+            },
             zoom: from.zoom,
             undo_seconds: from.undo_seconds,
             undo_send_seconds: from.undo_send_seconds,
@@ -436,7 +455,11 @@ impl Settings {
             cache_max_mb: from.cache_max_mb,
             prefetch: from.prefetch,
             compact_actions: from.compact_actions,
-            mail_surface: if from.theme_per_account { self.mail_surface.clone() } else { from.mail_surface.clone() },
+            mail_surface: if from.theme_per_account {
+                self.mail_surface.clone()
+            } else {
+                from.mail_surface.clone()
+            },
             theme_per_account: from.theme_per_account,
             save_folder: from.save_folder.clone(),
             ask_conversation: from.ask_conversation,
@@ -449,7 +472,12 @@ impl Settings {
     /// The settings of a new account: the shared preferences, and the look of
     /// the account it was added from as a start even when each has its own.
     pub fn for_new_account(from: &Settings) -> Settings {
-        Settings { theme: from.theme.clone(), mail_surface: from.mail_surface.clone(), ..Settings::default() }.with_shared_from(from)
+        Settings {
+            theme: from.theme.clone(),
+            mail_surface: from.mail_surface.clone(),
+            ..Settings::default()
+        }
+        .with_shared_from(from)
     }
 
     /// Passes the shared preferences on to the other accounts.
@@ -469,19 +497,39 @@ mod tests {
     fn older_settings_get_the_column_defaults() {
         let s: Settings = toml::from_str("theme = \"dark\"").unwrap();
         assert_eq!((s.todo_folder.as_str(), s.todo_days), ("", 5));
-        assert_eq!((s.done_folder.as_str(), s.done_days, s.done_target.as_str()), ("", 0, ""));
+        assert_eq!(
+            (s.done_folder.as_str(), s.done_days, s.done_target.as_str()),
+            ("", 0, "")
+        );
     }
 
     use super::*;
 
     fn sender(email: &str, server: &str) -> Sender {
-        Sender { email: email.into(), display_name: " Desk ".into(), smtp_server: server.into(), smtp_port: 587, signature: String::new(), signature_html: String::new() }
+        Sender {
+            email: email.into(),
+            display_name: " Desk ".into(),
+            smtp_server: server.into(),
+            smtp_port: 587,
+            signature: String::new(),
+            signature_html: String::new(),
+        }
     }
 
     #[test]
     fn a_new_account_shares_preferences_but_not_its_own_details() {
-        let from = Settings { theme: "dark".into(), zoom: 120, signature: "Mine".into(), waiting_folder: "Later".into(), ..Settings::default() };
-        let other = Settings { signature: "Theirs".into(), ..Settings::default() }.with_shared_from(&from);
+        let from = Settings {
+            theme: "dark".into(),
+            zoom: 120,
+            signature: "Mine".into(),
+            waiting_folder: "Later".into(),
+            ..Settings::default()
+        };
+        let other = Settings {
+            signature: "Theirs".into(),
+            ..Settings::default()
+        }
+        .with_shared_from(&from);
         assert_eq!((other.theme.as_str(), other.zoom), ("dark", 120));
         assert_eq!(other.signature, "Theirs");
         assert_eq!(other.waiting_folder, "");
@@ -489,13 +537,27 @@ mod tests {
 
     #[test]
     fn the_theme_is_shared_unless_each_account_has_its_own() {
-        let mine = Settings { theme: "ocean".into(), mail_surface: "dark".into(), zoom: 110, ..Settings::default() };
-        let other = Settings { theme: "rose".into(), ..Settings::default() };
+        let mine = Settings {
+            theme: "ocean".into(),
+            mail_surface: "dark".into(),
+            zoom: 110,
+            ..Settings::default()
+        };
+        let other = Settings {
+            theme: "rose".into(),
+            ..Settings::default()
+        };
         let shared = other.clone().with_shared_from(&mine);
         assert_eq!((shared.theme.as_str(), shared.mail_surface.as_str()), ("ocean", "dark"));
-        let own = Settings { theme_per_account: true, ..mine.clone() };
+        let own = Settings {
+            theme_per_account: true,
+            ..mine.clone()
+        };
         let kept = other.with_shared_from(&own);
-        assert_eq!((kept.theme.as_str(), kept.mail_surface.as_str(), kept.zoom), ("rose", "light", 110));
+        assert_eq!(
+            (kept.theme.as_str(), kept.mail_surface.as_str(), kept.zoom),
+            ("rose", "light", 110)
+        );
         assert!(kept.theme_per_account);
         // A new account starts with the look of the one it was added from.
         let new = Settings::for_new_account(&own);
@@ -515,7 +577,10 @@ mod tests {
             "Me@Example.com",
         );
         assert_eq!(senders.len(), 1);
-        let settings = Settings { senders, ..Settings::default() };
+        let settings = Settings {
+            senders,
+            ..Settings::default()
+        };
         let found = settings.sender(Some("Desk@Example.org")).unwrap();
         assert_eq!(found.email, "desk@example.org");
         let account = found.account();

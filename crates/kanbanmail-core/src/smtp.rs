@@ -60,7 +60,9 @@ fn parse_list(list: &str) -> Result<Vec<Mailbox>> {
 }
 
 fn parse_list_lenient(list: &str) -> Vec<Mailbox> {
-    list.split([',', ';']).filter_map(|s| s.trim().parse::<Mailbox>().ok()).collect()
+    list.split([',', ';'])
+        .filter_map(|s| s.trim().parse::<Mailbox>().ok())
+        .collect()
 }
 
 /// A new unique Message-ID on the account's domain.
@@ -74,7 +76,11 @@ pub fn new_message_id(email: &str) -> String {
 }
 
 fn angle(id: &str) -> String {
-    if id.starts_with('<') { id.to_string() } else { format!("<{id}>") }
+    if id.starts_with('<') {
+        id.to_string()
+    } else {
+        format!("<{id}>")
+    }
 }
 
 /// A rich signature. The composer shows `text` (after a "-- " line); when the
@@ -104,7 +110,10 @@ pub fn build_draft(account: &Account, draft: &Draft, signature: Option<&HtmlSign
 }
 
 fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn text_block(text: &str) -> String {
@@ -188,7 +197,11 @@ pub fn find_signature(body: &str, signature: &str) -> Option<(usize, usize)> {
     let end = crate::message::quote_start_text(rest).unwrap_or(rest.len());
     // Take as many lines as the signature has (loosely), so text written after it stays.
     let mut taken = 0;
-    for (i, _) in rest[..end].match_indices('\n').map(|(i, s)| (i + s.len(), s)).chain(std::iter::once((end, ""))) {
+    for (i, _) in rest[..end]
+        .match_indices('\n')
+        .map(|(i, s)| (i + s.len(), s))
+        .chain(std::iter::once((end, "")))
+    {
         if loose(&rest[..i]) == wanted {
             taken = i;
             break;
@@ -206,12 +219,26 @@ fn html_body(body: &str, markdown: bool, signature: Option<&HtmlSignature>) -> O
     if !markdown && split.is_none() {
         return None;
     }
-    let render = |text: &str| if markdown { markdown_to_html(text) } else { text_block(text) };
+    let render = |text: &str| {
+        if markdown {
+            markdown_to_html(text)
+        } else {
+            text_block(text)
+        }
+    };
     let (inner, images) = match (split, sig) {
         (Some((pos, len)), Some(sig)) => {
             let (sig_html, images) = extract_inline_images(&sig.html);
             let after = body[pos + len..].trim_start_matches('\n');
-            (format!("{}<div>-- <br>{}</div>{}", render(&body[..pos]), sig_html, render(after)), images)
+            (
+                format!(
+                    "{}<div>-- <br>{}</div>{}",
+                    render(&body[..pos]),
+                    sig_html,
+                    render(after)
+                ),
+                images,
+            )
         }
         _ => (render(&body), Vec::new()),
     };
@@ -223,7 +250,9 @@ fn html_body(body: &str, markdown: bool, signature: Option<&HtmlSignature>) -> O
     Some(if images.is_empty() {
         alternative.singlepart(html_part)
     } else {
-        let related = images.into_iter().fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p));
+        let related = images
+            .into_iter()
+            .fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p));
         alternative.multipart(related)
     })
 }
@@ -239,13 +268,20 @@ fn visual_body(text: &str, html: &str) -> MultiPart {
     if images.is_empty() {
         alternative.singlepart(html_part)
     } else {
-        alternative.multipart(images.into_iter().fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p)))
+        alternative.multipart(
+            images
+                .into_iter()
+                .fold(MultiPart::related().singlepart(html_part), |mp, p| mp.singlepart(p)),
+        )
     }
 }
 
 /// Today's date-time in UTC as a calendar value, e.g. 20261027T153000Z.
 fn ics_now() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
     // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
     let z = days + 719_468;
@@ -257,15 +293,26 @@ fn ics_now() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}{m:02}{d:02}T{:02}{:02}{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 /// The answer to a calendar invitation (iTIP REPLY), sent to the organizer.
 /// `response` is "ACCEPTED", "DECLINED" or "TENTATIVE".
 pub fn build_invite_reply(account: &Account, ics: &str, response: &str) -> Result<Message> {
     let invite = crate::message::parse_ics(ics).ok_or_else(|| anyhow!("this invitation cannot be read"))?;
-    anyhow::ensure!(["ACCEPTED", "DECLINED", "TENTATIVE"].contains(&response), "unknown answer: {response}");
-    anyhow::ensure!(!invite.organizer.is_empty(), "the invitation has no organizer to answer to");
+    anyhow::ensure!(
+        ["ACCEPTED", "DECLINED", "TENTATIVE"].contains(&response),
+        "unknown answer: {response}"
+    );
+    anyhow::ensure!(
+        !invite.organizer.is_empty(),
+        "the invitation has no organizer to answer to"
+    );
     // Copy the identifying properties of the event as they are.
     let mut event_lines = Vec::new();
     let mut in_event = false;
@@ -278,11 +325,26 @@ pub fn build_invite_reply(account: &Account, ics: &str, response: &str) -> Resul
             break;
         }
         let name = line.split([':', ';']).next().unwrap_or("").to_ascii_uppercase();
-        if in_event && ["UID", "SEQUENCE", "DTSTART", "DTEND", "SUMMARY", "ORGANIZER", "RECURRENCE-ID"].contains(&name.as_str()) {
+        if in_event
+            && [
+                "UID",
+                "SEQUENCE",
+                "DTSTART",
+                "DTEND",
+                "SUMMARY",
+                "ORGANIZER",
+                "RECURRENCE-ID",
+            ]
+            .contains(&name.as_str())
+        {
             event_lines.push(line.to_string());
         }
     }
-    let cn = account.display_name.as_deref().filter(|n| !n.trim().is_empty()).unwrap_or(&account.email);
+    let cn = account
+        .display_name
+        .as_deref()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or(&account.email);
     let reply = format!(
         "BEGIN:VCALENDAR\r\nPRODID:-//KanbanMail//EN\r\nVERSION:2.0\r\nMETHOD:REPLY\r\nBEGIN:VEVENT\r\n{}\r\nDTSTAMP:{}\r\nATTENDEE;PARTSTAT={response};CN=\"{}\":mailto:{}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
         event_lines.join("\r\n"),
@@ -300,7 +362,10 @@ pub fn build_invite_reply(account: &Account, ics: &str, response: &str) -> Resul
         None => account.email.parse(),
     }
     .map_err(|_| anyhow!("invalid sender address: {}", account.email))?;
-    let to: Mailbox = invite.organizer.parse().map_err(|_| anyhow!("invalid organizer address: {}", invite.organizer))?;
+    let to: Mailbox = invite
+        .organizer
+        .parse()
+        .map_err(|_| anyhow!("invalid organizer address: {}", invite.organizer))?;
     let text = format!("{cn} has {} the invitation: {}", verb.to_lowercase(), invite.summary);
     let calendar = SinglePart::builder()
         .header(ContentType::parse("text/calendar; method=REPLY; charset=UTF-8").unwrap())
@@ -311,7 +376,11 @@ pub fn build_invite_reply(account: &Account, ics: &str, response: &str) -> Resul
         .subject(format!("{verb}: {}", invite.summary))
         .date_now()
         .message_id(Some(new_message_id(&account.email)))
-        .multipart(MultiPart::alternative().singlepart(SinglePart::plain(text)).singlepart(calendar))
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(SinglePart::plain(text))
+                .singlepart(calendar),
+        )
         .context("building the answer failed")
 }
 
@@ -324,10 +393,17 @@ fn attachment_parts(list: &[OutgoingAttachment]) -> Result<Vec<SinglePart>> {
                 .decode(a.data.trim())
                 .map_err(|_| anyhow!("attachment {} is not valid", a.name))?;
             if bytes.is_empty() {
-                bail!("the attachment {} is empty: remove it and attach the file again", a.name);
+                bail!(
+                    "the attachment {} is empty: remove it and attach the file again",
+                    a.name
+                );
             }
-            let ctype = ContentType::parse(if a.mime.is_empty() { "application/octet-stream" } else { &a.mime })
-                .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
+            let ctype = ContentType::parse(if a.mime.is_empty() {
+                "application/octet-stream"
+            } else {
+                &a.mime
+            })
+            .unwrap_or_else(|_| ContentType::parse("application/octet-stream").unwrap());
             Ok(Attachment::new(a.name.clone()).body(bytes, ctype))
         })
         .collect()
@@ -350,16 +426,29 @@ fn build_message(
     .map_err(|_| anyhow!("invalid sender address: {}", account.email))?;
 
     let (to, cc, bcc) = if is_draft {
-        (parse_list_lenient(&draft.to), parse_list_lenient(&draft.cc), parse_list_lenient(&draft.bcc))
+        (
+            parse_list_lenient(&draft.to),
+            parse_list_lenient(&draft.cc),
+            parse_list_lenient(&draft.bcc),
+        )
     } else {
         (parse_list(&draft.to)?, parse_list(&draft.cc)?, parse_list(&draft.bcc)?)
     };
-    anyhow::ensure!(is_draft || !to.is_empty() || !cc.is_empty() || !bcc.is_empty(), "missing recipient");
+    anyhow::ensure!(
+        is_draft || !to.is_empty() || !cc.is_empty() || !bcc.is_empty(),
+        "missing recipient"
+    );
 
-    let mut builder = Message::builder().from(from.clone()).subject(draft.subject.trim()).date_now();
+    let mut builder = Message::builder()
+        .from(from.clone())
+        .subject(draft.subject.trim())
+        .date_now();
     if is_draft {
         // A draft is never sent, but lettre requires an envelope with a recipient.
-        builder = builder.envelope(lettre::address::Envelope::new(Some(from.email.clone()), vec![from.email.clone()])?);
+        builder = builder.envelope(lettre::address::Envelope::new(
+            Some(from.email.clone()),
+            vec![from.email.clone()],
+        )?);
     }
     for m in to {
         builder = builder.to(m);
@@ -386,7 +475,13 @@ fn build_message(
     builder = builder.message_id(Some(message_id));
     if is_draft {
         // So that reopening the draft gives back the editor it was written in.
-        let format = if draft.html.as_deref().is_some_and(|h| !h.trim().is_empty()) { "rich" } else if draft.markdown { "markdown" } else { "plain" };
+        let format = if draft.html.as_deref().is_some_and(|h| !h.trim().is_empty()) {
+            "rich"
+        } else if draft.markdown {
+            "markdown"
+        } else {
+            "plain"
+        };
         builder = builder.raw_header(lettre::message::header::HeaderValue::new(
             lettre::message::header::HeaderName::new_from_ascii_str(DRAFT_FORMAT_HEADER),
             format.to_string(),
@@ -422,13 +517,20 @@ async fn transport(account: &Account, password: &str) -> Result<AsyncSmtpTranspo
         AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
     }
     .with_context(|| format!("invalid SMTP server: {host}"))?;
-    let builder = builder.port(account.smtp_port).timeout(Some(std::time::Duration::from_secs(30)));
+    let builder = builder
+        .port(account.smtp_port)
+        .timeout(Some(std::time::Duration::from_secs(30)));
     let user = account.smtp_login().to_string();
     Ok(if account.oauth {
         let token = crate::oauth::access_token(account).await?;
-        builder.credentials(Credentials::new(user, token)).authentication(vec![Mechanism::Xoauth2]).build()
+        builder
+            .credentials(Credentials::new(user, token))
+            .authentication(vec![Mechanism::Xoauth2])
+            .build()
     } else {
-        builder.credentials(Credentials::new(user, password.to_string())).build()
+        builder
+            .credentials(Credentials::new(user, password.to_string()))
+            .build()
     })
 }
 
@@ -439,7 +541,10 @@ fn explain(account: &Account, error: anyhow::Error) -> anyhow::Error {
         return error.context("sending is turned off for this mailbox: the administrator must allow Authenticated SMTP (SMTP AUTH) for it");
     }
     if text.contains("535") || text.contains("534") || text.to_lowercase().contains("authentication") {
-        return error.context(format!("the SMTP server refused the login.{}", account.provider().login_help(account.oauth)));
+        return error.context(format!(
+            "the SMTP server refused the login.{}",
+            account.provider().login_help(account.oauth)
+        ));
     }
     error
 }
@@ -495,7 +600,10 @@ mod tests {
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("From: \"Mario Rossi\" <me@example.com>"), "{raw}");
         assert!(raw.contains("In-Reply-To: <orig@example.com>"), "{raw}");
-        assert!(raw.contains("References: <first@example.com> <orig@example.com>"), "{raw}");
+        assert!(
+            raw.contains("References: <first@example.com> <orig@example.com>"),
+            "{raw}"
+        );
         assert!(raw.contains("Cc: b@example.com, c@example.com"), "{raw}");
         assert!(raw.contains("Message-ID: <fixed@example.com>"), "{raw}");
         // Sent on the wire without Bcc header, but delivered to the Bcc recipient.
@@ -510,10 +618,26 @@ mod tests {
     #[test]
     fn draft_allows_missing_and_unfinished_recipients() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "a@example.com, mar".into(), cc: String::new(), subject: String::new(), body: "half written".into(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None, from: None };
+        let draft = Draft {
+            to: "a@example.com, mar".into(),
+            cc: String::new(),
+            subject: String::new(),
+            body: "half written".into(),
+            in_reply_to: None,
+            references: vec![],
+            message_id: None,
+            bcc: String::new(),
+            markdown: false,
+            attachments: vec![],
+            html: None,
+            from: None,
+        };
         let raw = String::from_utf8(build_draft(&acc, &draft, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("To: a@example.com"), "{raw}");
-        let empty = Draft { to: String::new(), ..draft };
+        let empty = Draft {
+            to: String::new(),
+            ..draft
+        };
         assert!(build_draft(&acc, &empty, None).is_ok());
         assert!(build(&acc, &empty, None).is_err());
     }
@@ -521,7 +645,20 @@ mod tests {
     #[test]
     fn rejects_bad_address() {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
-        let draft = Draft { to: "not-an-address".into(), cc: String::new(), subject: "x".into(), body: String::new(), in_reply_to: None, references: vec![], message_id: None, bcc: String::new(), markdown: false, attachments: vec![], html: None, from: None };
+        let draft = Draft {
+            to: "not-an-address".into(),
+            cc: String::new(),
+            subject: "x".into(),
+            body: String::new(),
+            in_reply_to: None,
+            references: vec![],
+            message_id: None,
+            bcc: String::new(),
+            markdown: false,
+            attachments: vec![],
+            html: None,
+            from: None,
+        };
         assert!(build(&acc, &draft, None).is_err());
     }
 
@@ -530,7 +667,8 @@ mod tests {
         let acc = Account::new("mail.example.com".into(), "me@example.com".into());
         let sig = HtmlSignature {
             text: "Jane Doe\nExample Inc.".into(),
-            html: "<b>Jane Doe</b><br><img src=\"data:image/png;base64,iVBORw0KGgo=\" width=\"80\"><br>Example Inc.".into(),
+            html: "<b>Jane Doe</b><br><img src=\"data:image/png;base64,iVBORw0KGgo=\" width=\"80\"><br>Example Inc."
+                .into(),
         };
         let draft = Draft {
             to: "a@example.com".into(),
@@ -550,11 +688,17 @@ mod tests {
         assert!(raw.contains("multipart/alternative"), "{raw}");
         assert!(raw.contains("multipart/related"), "{raw}");
         assert!(raw.contains("Content-ID: <sig1."), "{raw}");
-        assert!(raw.contains("src=3D\"cid:sig1.") || raw.contains("src=\"cid:sig1."), "{raw}");
+        assert!(
+            raw.contains("src=3D\"cid:sig1.") || raw.contains("src=\"cid:sig1."),
+            "{raw}"
+        );
         assert!(raw.contains("Hello &lt;there&gt;"), "{raw}");
 
         // Signature text edited by hand: plain text only.
-        let edited = Draft { body: "Hello\n\n-- \nJane".into(), ..draft };
+        let edited = Draft {
+            body: "Hello\n\n-- \nJane".into(),
+            ..draft
+        };
         let raw = String::from_utf8(build(&acc, &edited, Some(&sig)).unwrap().formatted()).unwrap();
         assert!(!raw.contains("multipart"), "{raw}");
     }
@@ -565,20 +709,42 @@ mod tests {
         acc.display_name = Some("Me Myself".into());
         let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:abc@example.com\r\nSEQUENCE:2\r\nDTSTART;TZID=Europe/Rome:20261028T100000\r\nSUMMARY:Kick-off\r\nORGANIZER;CN=Anna:mailto:anna@example.com\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
         let raw = String::from_utf8(build_invite_reply(&acc, ics, "ACCEPTED").unwrap().formatted()).unwrap();
-        assert!(raw.contains("To: anna@example.com") && raw.contains("Subject: Accepted: Kick-off"), "{raw}");
+        assert!(
+            raw.contains("To: anna@example.com") && raw.contains("Subject: Accepted: Kick-off"),
+            "{raw}"
+        );
         assert!(raw.contains("text/calendar; method=REPLY"), "{raw}");
-        assert!(raw.contains("METHOD:REPLY") && raw.contains("UID:abc@example.com") && raw.contains("SEQUENCE:2"), "{raw}");
-        assert!(raw.contains("PARTSTAT=ACCEPTED") && raw.contains("mailto:me@example.com"), "{raw}");
+        assert!(
+            raw.contains("METHOD:REPLY") && raw.contains("UID:abc@example.com") && raw.contains("SEQUENCE:2"),
+            "{raw}"
+        );
+        assert!(
+            raw.contains("PARTSTAT=ACCEPTED") && raw.contains("mailto:me@example.com"),
+            "{raw}"
+        );
         assert!(ics_now().len() == 16 && ics_now().ends_with('Z'));
 
         let draft = Draft {
-            to: "a@example.com".into(), cc: String::new(), bcc: String::new(), subject: "Hi".into(),
-            body: "Hello there".into(), in_reply_to: None, references: vec![], message_id: None, markdown: false,
-            attachments: vec![], html: Some("<p>Hello <b>there</b></p><img src=\"data:image/png;base64,iVBORw0KGgo=\"><script>x</script>".into()),
+            to: "a@example.com".into(),
+            cc: String::new(),
+            bcc: String::new(),
+            subject: "Hi".into(),
+            body: "Hello there".into(),
+            in_reply_to: None,
+            references: vec![],
+            message_id: None,
+            markdown: false,
+            attachments: vec![],
+            html: Some(
+                "<p>Hello <b>there</b></p><img src=\"data:image/png;base64,iVBORw0KGgo=\"><script>x</script>".into(),
+            ),
             from: None,
         };
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
-        assert!(raw.contains("multipart/related") && raw.contains("<b>there</b>") && !raw.contains("<script"), "{raw}");
+        assert!(
+            raw.contains("multipart/related") && raw.contains("<b>there</b>") && !raw.contains("<script"),
+            "{raw}"
+        );
     }
 
     #[test]
@@ -587,7 +753,11 @@ mod tests {
         let body = "Hello\n\n--\n\nJane Doe\nExample Inc.\n\nOn Monday, Bob wrote:\n> hi\n";
         let (start, len) = find_signature(body, sig).unwrap();
         assert_eq!(&body[..start], "Hello\n\n");
-        assert!(body[start + len..].trim_start().starts_with("On Monday"), "{:?}", &body[start + len..]);
+        assert!(
+            body[start + len..].trim_start().starts_with("On Monday"),
+            "{:?}",
+            &body[start + len..]
+        );
         assert!(find_signature("Hello\n\n-- \nSomeone else\n", sig).is_none());
         assert!(find_signature("No signature here", sig).is_none());
     }
@@ -605,23 +775,45 @@ mod tests {
             references: vec![],
             message_id: None,
             markdown: true,
-            attachments: vec![OutgoingAttachment { name: "notes.txt".into(), mime: "text/plain".into(), data: "aGVsbG8=".into() }],
+            attachments: vec![OutgoingAttachment {
+                name: "notes.txt".into(),
+                mime: "text/plain".into(),
+                data: "aGVsbG8=".into(),
+            }],
             html: None,
             from: None,
         };
         let html = markdown_to_html(&draft.body);
-        assert!(html.contains("<strong>team</strong>") && html.contains("<br") && html.contains("<li>one</li>"), "{html}");
+        assert!(
+            html.contains("<strong>team</strong>") && html.contains("<br") && html.contains("<li>one</li>"),
+            "{html}"
+        );
         assert!(!html.contains("<script"), "{html}");
         let raw = String::from_utf8(build(&acc, &draft, None).unwrap().formatted()).unwrap();
-        assert!(raw.contains("multipart/mixed") && raw.contains("multipart/alternative"), "{raw}");
+        assert!(
+            raw.contains("multipart/mixed") && raw.contains("multipart/alternative"),
+            "{raw}"
+        );
         assert!(raw.contains("filename=\"notes.txt\"") && raw.contains("hello"), "{raw}");
         // Plain text with an attachment: mixed, no HTML.
-        let plain = Draft { markdown: false, ..draft };
+        let plain = Draft {
+            markdown: false,
+            ..draft
+        };
         let raw = String::from_utf8(build(&acc, &plain, None).unwrap().formatted()).unwrap();
         assert!(raw.contains("multipart/mixed") && !raw.contains("text/html"), "{raw}");
         // An empty attachment is refused instead of being sent as 0 bytes.
-        let empty = Draft { attachments: vec![OutgoingAttachment { name: "a.xlsx".into(), mime: String::new(), data: String::new() }], ..plain };
-        assert!(build(&acc, &empty, None).unwrap_err().to_string().contains("a.xlsx is empty"));
+        let empty = Draft {
+            attachments: vec![OutgoingAttachment {
+                name: "a.xlsx".into(),
+                mime: String::new(),
+                data: String::new(),
+            }],
+            ..plain
+        };
+        assert!(build(&acc, &empty, None)
+            .unwrap_err()
+            .to_string()
+            .contains("a.xlsx is empty"));
     }
 }
-

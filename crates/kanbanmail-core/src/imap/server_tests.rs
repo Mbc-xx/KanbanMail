@@ -8,7 +8,11 @@ const ALL: &[&str] = &["MOVE", "UIDPLUS", "IDLE"];
 const FOLDERS: &[&str] = &["INBOX", "Todo", "Archive"];
 
 fn caps(r#move: bool, uidplus: bool) -> ServerCaps {
-    ServerCaps { r#move, uidplus, ..Default::default() }
+    ServerCaps {
+        r#move,
+        uidplus,
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
@@ -22,7 +26,10 @@ async fn cards_come_with_their_flags_pinned_first_then_newest() {
     let mut cache = FolderCache::default();
     let cards = load_cards(&mut s, "INBOX", &mut cache, 200).await.unwrap();
     let got: Vec<_> = cards.iter().map(|c| (c.subject.as_str(), c.flagged, c.seen)).collect();
-    assert_eq!(got, [("Pinned", true, false), ("New", false, false), ("Old", false, true)]);
+    assert_eq!(
+        got,
+        [("Pinned", true, false), ("New", false, false), ("Old", false, true)]
+    );
     assert_eq!(cards[1].thread_refs, ["a@x"]);
     assert_eq!(cards[2].date, 1_793_527_200, "1 Nov 2026, 10:00 UTC");
 }
@@ -31,10 +38,17 @@ async fn cards_come_with_their_flags_pinned_first_then_newest() {
 async fn the_limit_keeps_the_newest_emails() {
     let mut mb = Mailbox::new(ALL, FOLDERS);
     for day in 1..=5 {
-        mb.deliver("INBOX", &email(&format!("Day {day}"), &format!("{day}@x"), ""), &[], day);
+        mb.deliver(
+            "INBOX",
+            &email(&format!("Day {day}"), &format!("{day}@x"), ""),
+            &[],
+            day,
+        );
     }
     let (_server, mut s) = start(mb).await;
-    let cards = load_cards(&mut s, "INBOX", &mut FolderCache::default(), 2).await.unwrap();
+    let cards = load_cards(&mut s, "INBOX", &mut FolderCache::default(), 2)
+        .await
+        .unwrap();
     let subjects: Vec<_> = cards.iter().map(|c| c.subject.as_str()).collect();
     assert_eq!(subjects, ["Day 5", "Day 4"]);
 }
@@ -49,7 +63,9 @@ async fn known_emails_are_not_downloaded_again_until_the_folder_is_renumbered() 
     assert_eq!(server.lock().unwrap().count("UID FETCH"), 1);
 
     // Read elsewhere: only the flags are asked again.
-    server.lock().unwrap().folders.get_mut("INBOX").unwrap().mails[0].flags.insert("\\Seen".into());
+    server.lock().unwrap().folders.get_mut("INBOX").unwrap().mails[0]
+        .flags
+        .insert("\\Seen".into());
     let cards = load_cards(&mut s, "INBOX", &mut cache, 200).await.unwrap();
     assert!(cards[0].seen);
     assert_eq!(server.lock().unwrap().count("UID FETCH"), 1);
@@ -70,10 +86,17 @@ async fn move_two(r#move: bool, uidplus: bool) -> std::sync::Arc<std::sync::Mute
     };
     let mut mb = Mailbox::new(advertised, FOLDERS);
     for (i, flags) in [&["\\Flagged"][..], &[], &["\\Seen"], &[]].iter().enumerate() {
-        mb.deliver("INBOX", &email(&format!("Email {}", i + 1), &format!("{i}@x"), ""), flags, i as u32 + 1);
+        mb.deliver(
+            "INBOX",
+            &email(&format!("Email {}", i + 1), &format!("{i}@x"), ""),
+            flags,
+            i as u32 + 1,
+        );
     }
     let (server, mut s) = start(mb).await;
-    move_messages(&mut s, caps(r#move, uidplus), "INBOX", &[1, 3], "Todo").await.unwrap();
+    move_messages(&mut s, caps(r#move, uidplus), "INBOX", &[1, 3], "Todo")
+        .await
+        .unwrap();
     {
         let mb = server.lock().unwrap();
         assert_eq!(mb.subjects("INBOX"), ["Email 2", "Email 4"]);
@@ -95,7 +118,10 @@ async fn moving_uses_move_when_the_server_has_it() {
 async fn moving_without_move_copies_then_removes_only_those_emails() {
     let server = move_two(false, true).await;
     let mb = server.lock().unwrap();
-    assert_eq!((mb.count("UID COPY"), mb.count("UID EXPUNGE"), mb.count("EXPUNGE")), (1, 1, 0));
+    assert_eq!(
+        (mb.count("UID COPY"), mb.count("UID EXPUNGE"), mb.count("EXPUNGE")),
+        (1, 1, 0)
+    );
 }
 
 #[tokio::test]
@@ -112,7 +138,9 @@ async fn with_uidplus_a_move_leaves_other_deleted_emails_alone() {
     mb.deliver("INBOX", &email("Mine", "1@x", ""), &[], 1);
     mb.deliver("INBOX", &email("Theirs", "2@x", ""), &["\\Deleted"], 2);
     let (server, mut s) = start(mb).await;
-    move_messages(&mut s, caps(false, true), "INBOX", &[1], "Todo").await.unwrap();
+    move_messages(&mut s, caps(false, true), "INBOX", &[1], "Todo")
+        .await
+        .unwrap();
     assert_eq!(server.lock().unwrap().subjects("INBOX"), ["Theirs"]);
 }
 
@@ -141,12 +169,17 @@ async fn every_copy_of_an_email_is_found_by_its_message_id() {
     let (_server, mut s) = start(mb).await;
     s.open("INBOX").await.unwrap();
     assert_eq!(uids_by_message_id(&mut s, "<same@x>").await.unwrap(), [1, 3]);
-    assert!(uids_by_message_id(&mut s, "bad\"id").await.is_err(), "no quotes in a search");
+    assert!(
+        uids_by_message_id(&mut s, "bad\"id").await.is_err(),
+        "no quotes in a search"
+    );
 }
 
 #[tokio::test]
 async fn a_missing_folder_is_an_error_not_a_panic() {
     let (_server, mut s) = start(Mailbox::new(ALL, FOLDERS)).await;
-    let err = load_cards(&mut s, "Nope", &mut FolderCache::default(), 10).await.unwrap_err();
+    let err = load_cards(&mut s, "Nope", &mut FolderCache::default(), 10)
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("cannot open folder Nope"), "{err}");
 }

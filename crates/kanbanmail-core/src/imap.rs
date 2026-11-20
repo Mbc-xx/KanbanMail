@@ -6,7 +6,7 @@ use futures::TryStreamExt;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
+use tokio_rustls::rustls::{pki_types::ServerName, ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
 type Connection = async_imap::Session<TlsStream<TcpStream>>;
@@ -44,7 +44,12 @@ impl std::ops::DerefMut for Session {
 
 impl Session {
     fn new(conn: Connection) -> Self {
-        Session { conn, open: None, special: Default::default(), listed: None }
+        Session {
+            conn,
+            open: None,
+            special: Default::default(),
+            listed: None,
+        }
     }
 
     /// Every folder on the server (from the last minute's list when there is one).
@@ -54,7 +59,13 @@ impl Session {
                 return Ok(names.clone());
             }
         }
-        let names: Vec<_> = self.conn.list(Some(""), Some("*")).await.context("LIST command failed")?.try_collect().await?;
+        let names: Vec<_> = self
+            .conn
+            .list(Some(""), Some("*"))
+            .await
+            .context("LIST command failed")?
+            .try_collect()
+            .await?;
         let names = Arc::new(names);
         self.listed = Some((std::time::Instant::now(), names.clone()));
         Ok(names)
@@ -84,10 +95,16 @@ impl Session {
     /// Makes sure a folder is open for changes, without asking again when it
     /// already is. Returns true when the open folder was reused.
     async fn open(&mut self, folder: &str) -> Result<bool> {
-        if self.open.as_ref().is_some_and(|(name, writable)| *writable && name == folder) {
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|(name, writable)| *writable && name == folder)
+        {
             return Ok(true);
         }
-        self.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+        self.select(folder)
+            .await
+            .with_context(|| format!("cannot open {folder}"))?;
         Ok(false)
     }
 }
@@ -106,7 +123,9 @@ pub async fn connect(account: &Account, password: &str) -> Result<Session> {
 pub(crate) fn tls_config() -> ClientConfig {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
+    ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth()
 }
 
 async fn connect_now(account: &Account, password: &str) -> Result<Session> {
@@ -115,8 +134,8 @@ async fn connect_now(account: &Account, password: &str) -> Result<Session> {
     let tcp = TcpStream::connect((account.server.as_str(), account.port))
         .await
         .with_context(|| format!("cannot reach {}:{}", account.server, account.port))?;
-    let name = ServerName::try_from(account.server.clone())
-        .map_err(|_| anyhow!("invalid server name: {}", account.server))?;
+    let name =
+        ServerName::try_from(account.server.clone()).map_err(|_| anyhow!("invalid server name: {}", account.server))?;
     let tls = connector
         .connect(name, tcp)
         .await
@@ -138,7 +157,10 @@ async fn connect_now(account: &Account, password: &str) -> Result<Session> {
             .map_err(|(e, _)| anyhow!("login rejected: {e}.{help}"));
     }
     let token = crate::oauth::access_token(account).await?;
-    let auth = XOAuth2 { message: crate::oauth::xoauth2(account.imap_login(), &token), answered: false };
+    let auth = XOAuth2 {
+        message: crate::oauth::xoauth2(account.imap_login(), &token),
+        answered: false,
+    };
     match client.authenticate("XOAUTH2", auth).await {
         Ok(session) => Ok(Session::new(session)),
         Err((e, _)) => {
@@ -227,7 +249,11 @@ pub async fn resolve_folders(session: &mut Session, wanted: &[String]) -> Result
             out.push(f.clone());
             continue;
         }
-        let target = if uses_prefix && !want.starts_with(&prefix) { with_prefix } else { want.clone() };
+        let target = if uses_prefix && !want.starts_with(&prefix) {
+            with_prefix
+        } else {
+            want.clone()
+        };
         session
             .create(&target)
             .await
@@ -249,7 +275,10 @@ pub struct FolderCache {
 impl FolderCache {
     /// Starts from cards kept locally, so only what changed is downloaded.
     pub fn from_cards(uid_validity: Option<u32>, cards: Vec<crate::message::Card>) -> Self {
-        FolderCache { uid_validity, cards: cards.into_iter().map(|c| (c.uid, c)).collect() }
+        FolderCache {
+            uid_validity,
+            cards: cards.into_iter().map(|c| (c.uid, c)).collect(),
+        }
     }
 
     pub fn uid_validity(&self) -> Option<u32> {
@@ -298,7 +327,11 @@ pub async fn load_cards(
     }
 
     // 2) Download the first 32 KB, only for emails we do not have yet.
-    let missing: Vec<u32> = current.keys().filter(|u| !cache.cards.contains_key(u)).copied().collect();
+    let missing: Vec<u32> = current
+        .keys()
+        .filter(|u| !cache.cards.contains_key(u))
+        .copied()
+        .collect();
     for chunk in missing.chunks(50) {
         let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let fetched: Vec<_> = session
@@ -346,7 +379,10 @@ pub async fn load_raw(session: &mut Session, folder: &str, uid: u32) -> Result<V
         }
         // The folder was open from before: look again with a fresh view of it.
         anyhow::ensure!(reused, "the email no longer exists (moved by another program?)");
-        session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+        session
+            .select(folder)
+            .await
+            .with_context(|| format!("cannot open {folder}"))?;
         reused = false;
     }
 }
@@ -354,11 +390,19 @@ pub async fn load_raw(session: &mut Session, folder: &str, uid: u32) -> Result<V
 /// Downloads several full emails of a folder (without marking them as read),
 /// skipping those bigger than `max_size` bytes. Returns (UID, content or None
 /// when too big, size).
-pub async fn fetch_raws(session: &mut Session, folder: &str, uids: &[u32], max_size: u64) -> Result<Vec<(u32, Option<Vec<u8>>, u64)>> {
+pub async fn fetch_raws(
+    session: &mut Session,
+    folder: &str,
+    uids: &[u32],
+    max_size: u64,
+) -> Result<Vec<(u32, Option<Vec<u8>>, u64)>> {
     if uids.is_empty() {
         return Ok(Vec::new());
     }
-    session.examine(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    session
+        .examine(folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
     let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
     let sizes: Vec<_> = session
         .uid_fetch(&set, "(UID RFC822.SIZE)")
@@ -369,7 +413,9 @@ pub async fn fetch_raws(session: &mut Session, folder: &str, uids: &[u32], max_s
     let mut out = Vec::new();
     let mut small = Vec::new();
     for f in &sizes {
-        let (Some(uid), Some(size)) = (f.uid, f.size) else { continue };
+        let (Some(uid), Some(size)) = (f.uid, f.size) else {
+            continue;
+        };
         if u64::from(size) > max_size {
             out.push((uid, None, u64::from(size)));
         } else {
@@ -385,7 +431,9 @@ pub async fn fetch_raws(session: &mut Session, folder: &str, uids: &[u32], max_s
             .try_collect()
             .await?;
         for f in fetched {
-            let (Some(uid), Some(body)) = (f.uid, f.body()) else { continue };
+            let (Some(uid), Some(body)) = (f.uid, f.body()) else {
+                continue;
+            };
             out.push((uid, Some(body.to_vec()), body.len() as u64));
         }
     }
@@ -394,7 +442,10 @@ pub async fn fetch_raws(session: &mut Session, folder: &str, uids: &[u32], max_s
 
 /// Downloads the full email for the reader (without marking it as read).
 pub async fn load_message(session: &mut Session, folder: &str, uid: u32) -> Result<crate::message::MessageView> {
-    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    session
+        .select(folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
     let fetched: Vec<_> = session
         .uid_fetch(uid.to_string(), "(UID BODY.PEEK[])")
         .await
@@ -442,7 +493,11 @@ pub async fn move_messages(session: &mut Session, caps: ServerCaps, from: &str, 
 /// Turns the pin (IMAP \Flagged flag) on or off.
 pub async fn set_flagged(session: &mut Session, folder: &str, uid: u32, flagged: bool) -> Result<()> {
     session.open(folder).await?;
-    let op = if flagged { "+FLAGS.SILENT (\\Flagged)" } else { "-FLAGS.SILENT (\\Flagged)" };
+    let op = if flagged {
+        "+FLAGS.SILENT (\\Flagged)"
+    } else {
+        "-FLAGS.SILENT (\\Flagged)"
+    };
     let _: Vec<_> = session
         .uid_store(uid.to_string(), op)
         .await
@@ -455,20 +510,37 @@ pub async fn set_flagged(session: &mut Session, folder: &str, uid: u32, flagged:
 /// Waits for changes in a folder. Returns when the server reports a change
 /// or after `max_wait`. Gives the session back so it can be reused.
 pub async fn wait_for_change(mut session: Session, folder: &str, max_wait: std::time::Duration) -> Result<Session> {
-    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
-    let Session { conn, open, special, listed } = session;
+    session
+        .select(folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
+    let Session {
+        conn,
+        open,
+        special,
+        listed,
+    } = session;
     let mut idle = conn.idle();
     idle.init().await.context("IDLE did not start")?;
     let (wait, _stop) = idle.wait_with_timeout(max_wait);
     wait.await.context("IDLE interrupted")?;
     let conn = idle.done().await.context("ending IDLE failed")?;
-    Ok(Session { conn, open, special, listed })
+    Ok(Session {
+        conn,
+        open,
+        special,
+        listed,
+    })
 }
 
 /// Marks an email as read or unread (\Seen flag).
 pub async fn set_seen(session: &mut Session, folder: &str, uid: u32, seen: bool) -> Result<()> {
     session.open(folder).await?;
-    let op = if seen { "+FLAGS.SILENT (\\Seen)" } else { "-FLAGS.SILENT (\\Seen)" };
+    let op = if seen {
+        "+FLAGS.SILENT (\\Seen)"
+    } else {
+        "-FLAGS.SILENT (\\Seen)"
+    };
     let _: Vec<_> = session
         .uid_store(uid.to_string(), op)
         .await
@@ -493,7 +565,10 @@ pub async fn set_answered(session: &mut Session, folder: &str, uid: u32) -> Resu
 pub async fn all_mail_folder(session: &mut Session) -> Result<Option<String>> {
     use async_imap::types::NameAttribute;
     let names = session.list_all().await?;
-    Ok(names.iter().find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::All))).map(|n| n.name().to_string()))
+    Ok(names
+        .iter()
+        .find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::All)))
+        .map(|n| n.name().to_string()))
 }
 
 /// Finds the sent-mail folder: the one the server marks \Sent, otherwise
@@ -512,7 +587,10 @@ pub async fn sent_folder(session: &mut Session) -> Result<String> {
 async fn look_for_sent_folder(session: &mut Session) -> Result<String> {
     use async_imap::types::NameAttribute;
     let names = session.list_all().await?;
-    if let Some(n) = names.iter().find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::Sent))) {
+    if let Some(n) = names
+        .iter()
+        .find(|n| n.attributes().iter().any(|a| matches!(a, NameAttribute::Sent)))
+    {
         return Ok(n.name().to_string());
     }
     let delim = names.iter().find_map(|n| n.delimiter()).unwrap_or(".");
@@ -529,7 +607,10 @@ async fn look_for_sent_folder(session: &mut Session) -> Result<String> {
 
 /// Is the email with this Message-ID already in the folder?
 pub async fn has_message(session: &mut Session, folder: &str, message_id: &str) -> Result<bool> {
-    session.select(folder).await.with_context(|| format!("cannot open {folder}"))?;
+    session
+        .select(folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
     Ok(!uids_by_message_id(session, message_id).await?.is_empty())
 }
 
@@ -633,7 +714,11 @@ pub async fn folder_tree(session: &mut Session) -> Result<Vec<FolderInfo>> {
     let key = |f: &FolderInfo| {
         let p = path(f);
         let root = p.split(delim.as_str()).next().unwrap_or("").to_string();
-        let r = if f.name.eq_ignore_ascii_case("INBOX") { -1 } else { *root_rank.get(&root).unwrap_or(&6) };
+        let r = if f.name.eq_ignore_ascii_case("INBOX") {
+            -1
+        } else {
+            *root_rank.get(&root).unwrap_or(&6)
+        };
         (r, root, p)
     };
     out.sort_by_key(key);
@@ -688,7 +773,10 @@ pub async fn trash_folder(session: &mut Session) -> Result<String> {
 /// UIDs in the selected folder whose Message-ID header matches `message_id`.
 async fn uids_by_message_id(session: &mut Session, message_id: &str) -> Result<Vec<u32>> {
     let bare = message_id.trim().trim_start_matches('<').trim_end_matches('>');
-    anyhow::ensure!(!bare.is_empty() && !bare.contains('"') && !bare.contains('\\'), "invalid Message-ID");
+    anyhow::ensure!(
+        !bare.is_empty() && !bare.contains('"') && !bare.contains('\\'),
+        "invalid Message-ID"
+    );
     let mut uids: Vec<u32> = session
         .uid_search(format!("HEADER Message-ID \"{bare}\""))
         .await
@@ -726,7 +814,10 @@ pub async fn save_draft(session: &mut Session, caps: ServerCaps, raw: &[u8], mes
         .append(&folder, Some("(\\Draft \\Seen)"), None, raw)
         .await
         .with_context(|| format!("saving the draft to {folder} failed"))?;
-    session.select(&folder).await.with_context(|| format!("cannot open {folder}"))?;
+    session
+        .select(&folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
     let uids = uids_by_message_id(session, message_id).await?;
     // The newest copy has the highest UID: keep it, remove the others.
     if let Some((_, older)) = uids.split_last() {
@@ -738,7 +829,10 @@ pub async fn save_draft(session: &mut Session, caps: ServerCaps, raw: &[u8], mes
 /// Removes every copy of a draft (after sending it, or when it is discarded).
 pub async fn delete_draft(session: &mut Session, caps: ServerCaps, message_id: &str) -> Result<()> {
     let folder = special_folder(session, "drafts").await?;
-    session.select(&folder).await.with_context(|| format!("cannot open {folder}"))?;
+    session
+        .select(&folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
     let uids = uids_by_message_id(session, message_id).await?;
     delete_uids(session, caps, &uids).await
 }
@@ -847,9 +941,16 @@ async fn search_folders(
                 let seen = f.flags().any(|x| matches!(x, Flag::Seen));
                 let card = crate::message::parse_card(uid, f.body().unwrap_or_default(), flagged, seen, date);
                 // The same email can sit in several folders (e.g. Inbox and Archive).
-                let key = card.message_id.clone().map(|id| bare_id(&id)).unwrap_or_else(|| format!("{folder}/{uid}"));
+                let key = card
+                    .message_id
+                    .clone()
+                    .map(|id| bare_id(&id))
+                    .unwrap_or_else(|| format!("{folder}/{uid}"));
                 if seen_ids.insert(key) {
-                    out.push(ThreadEntry { folder: folder.clone(), card });
+                    out.push(ThreadEntry {
+                        folder: folder.clone(),
+                        card,
+                    });
                 }
             }
         }
@@ -897,7 +998,12 @@ pub async fn searchable_folders(session: &mut Session) -> Result<Vec<String>> {
         .iter()
         .filter(|n| !n.attributes().iter().any(|a| matches!(a, NameAttribute::NoSelect)))
         .filter(|n| !is_virtual(n.attributes()))
-        .map(|n| (n.name().to_string(), n.attributes().iter().any(|a| matches!(a, NameAttribute::All))))
+        .map(|n| {
+            (
+                n.name().to_string(),
+                n.attributes().iter().any(|a| matches!(a, NameAttribute::All)),
+            )
+        })
         .collect();
     out.sort_by_key(|(name, is_all)| search_rank(name, *is_all));
     Ok(out.into_iter().map(|(name, _)| name).collect())
@@ -920,20 +1026,29 @@ pub struct SearchQuery {
 impl SearchQuery {
     /// Plain words only.
     pub fn words(text: &str) -> Self {
-        SearchQuery { words: text.split_whitespace().map(String::from).collect(), ..Default::default() }
+        SearchQuery {
+            words: text.split_whitespace().map(String::from).collect(),
+            ..Default::default()
+        }
     }
 }
 
 /// "2026-10-05" as (2026, 10, 5).
 pub(crate) fn ymd(day: &str) -> Option<(i64, u32, u32)> {
     let mut parts = day.split('-');
-    let (y, m, d) = (parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?);
+    let (y, m, d) = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
     ((1..=12).contains(&m) && (1..=31).contains(&d)).then_some((y, m, d))
 }
 
 /// "2026-10-05" as IMAP writes it: "5-Oct-2026".
 fn imap_date(day: &str) -> Option<String> {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     let (y, m, d) = ymd(day)?;
     Some(format!("{d}-{}-{y}", MONTHS[m as usize - 1]))
 }
@@ -946,7 +1061,12 @@ fn search_criteria(q: &SearchQuery, in_body: bool) -> Option<String> {
         .iter()
         .map(|w| {
             let w = imap_quote(w);
-            let mut any = vec![format!("FROM {w}"), format!("TO {w}"), format!("CC {w}"), format!("SUBJECT {w}")];
+            let mut any = vec![
+                format!("FROM {w}"),
+                format!("TO {w}"),
+                format!("CC {w}"),
+                format!("SUBJECT {w}"),
+            ];
             if in_body {
                 any.push(format!("BODY {w}"));
             }
@@ -992,7 +1112,9 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
         .collect();
     let mut out = std::collections::BTreeSet::new();
     for folder in sent {
-        let Ok(mailbox) = session.examine(&folder).await else { continue };
+        let Ok(mailbox) = session.examine(&folder).await else {
+            continue;
+        };
         if mailbox.exists == 0 {
             continue;
         }
@@ -1005,7 +1127,9 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
             .await?;
         for f in fetched {
             let Some(raw) = f.header() else { continue };
-            let Some(m) = mail_parser::MessageParser::default().parse(raw) else { continue };
+            let Some(m) = mail_parser::MessageParser::default().parse(raw) else {
+                continue;
+            };
             for list in [m.to(), m.cc(), m.bcc()].into_iter().flatten() {
                 for mb in list.mailboxes() {
                     if let Some(a) = mb.address() {
@@ -1024,22 +1148,40 @@ pub async fn sent_recipients(session: &mut Session, limit: u32) -> Result<std::c
 pub async fn folder_unseen(session: &mut Session, folder: &str, to: &[String]) -> Result<u32> {
     if !to.is_empty() {
         session.open(folder).await?;
-        let found = session.conn.uid_search(format!("UNSEEN {}", to_any(to))).await.with_context(|| format!("cannot read {folder}"))?;
+        let found = session
+            .conn
+            .uid_search(format!("UNSEEN {}", to_any(to)))
+            .await
+            .with_context(|| format!("cannot read {folder}"))?;
         return Ok(found.len() as u32);
     }
     // STATUS on the open folder may give old numbers (RFC 3501 6.3.10, and
     // Outlook and iCloud do): a kept connection usually has the Inbox open.
-    if session.open.as_ref().is_some_and(|(f, _)| f == folder || (f.eq_ignore_ascii_case("INBOX") && folder.eq_ignore_ascii_case("INBOX"))) {
-        let found = session.conn.uid_search("UNSEEN").await.with_context(|| format!("cannot read {folder}"))?;
+    if session
+        .open
+        .as_ref()
+        .is_some_and(|(f, _)| f == folder || (f.eq_ignore_ascii_case("INBOX") && folder.eq_ignore_ascii_case("INBOX")))
+    {
+        let found = session
+            .conn
+            .uid_search("UNSEEN")
+            .await
+            .with_context(|| format!("cannot read {folder}"))?;
         return Ok(found.len() as u32);
     }
-    let mb = session.status(folder, "(UNSEEN)").await.with_context(|| format!("cannot read {folder}"))?;
+    let mb = session
+        .status(folder, "(UNSEEN)")
+        .await
+        .with_context(|| format!("cannot read {folder}"))?;
     Ok(mb.unseen.unwrap_or(0))
 }
 
 /// How many emails a folder holds, read or not.
 pub async fn folder_total(session: &mut Session, folder: &str) -> Result<u32> {
-    let mb = session.status(folder, "(MESSAGES)").await.with_context(|| format!("cannot read {folder}"))?;
+    let mb = session
+        .status(folder, "(MESSAGES)")
+        .await
+        .with_context(|| format!("cannot read {folder}"))?;
     Ok(mb.exists)
 }
 
@@ -1047,9 +1189,21 @@ pub async fn folder_total(session: &mut Session, folder: &str) -> Result<u32> {
 /// CONDSTORE, the modification sequence that also changes on flag updates).
 /// When it changes, something happened in the folder.
 pub async fn folder_fingerprint(session: &mut Session, folder: &str, caps: ServerCaps) -> Result<(u32, u32, u32, u64)> {
-    let items = if caps.condstore { "(MESSAGES UIDNEXT UNSEEN HIGHESTMODSEQ)" } else { "(MESSAGES UIDNEXT UNSEEN)" };
-    let mb = session.status(folder, items).await.with_context(|| format!("STATUS {folder} failed"))?;
-    Ok((mb.exists, mb.uid_next.unwrap_or(0), mb.unseen.unwrap_or(0), mb.highest_modseq.unwrap_or(0)))
+    let items = if caps.condstore {
+        "(MESSAGES UIDNEXT UNSEEN HIGHESTMODSEQ)"
+    } else {
+        "(MESSAGES UIDNEXT UNSEEN)"
+    };
+    let mb = session
+        .status(folder, items)
+        .await
+        .with_context(|| format!("STATUS {folder} failed"))?;
+    Ok((
+        mb.exists,
+        mb.uid_next.unwrap_or(0),
+        mb.unseen.unwrap_or(0),
+        mb.highest_modseq.unwrap_or(0),
+    ))
 }
 
 /// "All Mail": the `total` most recent emails across `folders`, newest first.
@@ -1073,7 +1227,9 @@ pub async fn load_all_mail(
     }
     let mut rows = Vec::new();
     for folder in folders {
-        let Ok(mailbox) = session.examine(folder).await else { continue };
+        let Ok(mailbox) = session.examine(folder).await else {
+            continue;
+        };
         if mailbox.exists == 0 {
             continue;
         }
@@ -1104,8 +1260,11 @@ pub async fn load_all_mail(
     // Gmail: an email with a label is also in All Mail, with the same date and size.
     // The copy under the label stays: it says where the email is.
     if let Some(all) = all_folder {
-        let labelled: std::collections::HashSet<(i64, u32)> =
-            rows.iter().filter(|r| r.folder != all).map(|r| (r.date, r.size)).collect();
+        let labelled: std::collections::HashSet<(i64, u32)> = rows
+            .iter()
+            .filter(|r| r.folder != all)
+            .map(|r| (r.date, r.size))
+            .collect();
         rows.retain(|r| r.folder != all || !labelled.contains(&(r.date, r.size)));
     }
     rows.sort_by_key(|a| std::cmp::Reverse(a.date));
@@ -1120,7 +1279,10 @@ pub async fn load_all_mail(
         }
     }
     for (folder, uids) in by_folder {
-        session.examine(folder).await.with_context(|| format!("cannot open {folder}"))?;
+        session
+            .examine(folder)
+            .await
+            .with_context(|| format!("cannot open {folder}"))?;
         let cache = caches.entry(folder.to_string()).or_default();
         for chunk in uids.chunks(50) {
             let set = chunk.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
@@ -1133,7 +1295,10 @@ pub async fn load_all_mail(
             for f in fetched {
                 let Some(uid) = f.uid else { continue };
                 let date = f.internal_date().map(|d| d.timestamp()).unwrap_or(0);
-                cache.cards.insert(uid, crate::message::parse_card(uid, f.body().unwrap_or_default(), false, false, date));
+                cache.cards.insert(
+                    uid,
+                    crate::message::parse_card(uid, f.body().unwrap_or_default(), false, false, date),
+                );
             }
         }
     }
@@ -1151,10 +1316,21 @@ pub async fn load_all_mail(
 
 /// Moves an email back after an undo: finds it in `now_in` by Message-ID and
 /// moves it to `back_to`.
-pub async fn move_back(session: &mut Session, caps: ServerCaps, message_id: &str, now_in: &str, back_to: &str) -> Result<()> {
-    session.select(now_in).await.with_context(|| format!("cannot open {now_in}"))?;
+pub async fn move_back(
+    session: &mut Session,
+    caps: ServerCaps,
+    message_id: &str,
+    now_in: &str,
+    back_to: &str,
+) -> Result<()> {
+    session
+        .select(now_in)
+        .await
+        .with_context(|| format!("cannot open {now_in}"))?;
     let uids = uids_by_message_id(session, message_id).await?;
-    let uid = *uids.last().ok_or_else(|| anyhow!("the email is no longer in {now_in}"))?;
+    let uid = *uids
+        .last()
+        .ok_or_else(|| anyhow!("the email is no longer in {now_in}"))?;
     move_message(session, caps, now_in, uid, back_to).await
 }
 
@@ -1165,8 +1341,17 @@ pub async fn set_seen_many(session: &mut Session, folder: &str, uids: &[u32], se
     }
     session.open(folder).await?;
     let set = uids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-    let op = if seen { "+FLAGS.SILENT (\\Seen)" } else { "-FLAGS.SILENT (\\Seen)" };
-    let _: Vec<_> = session.uid_store(&set, op).await.context("changing read state failed")?.try_collect().await?;
+    let op = if seen {
+        "+FLAGS.SILENT (\\Seen)"
+    } else {
+        "-FLAGS.SILENT (\\Seen)"
+    };
+    let _: Vec<_> = session
+        .uid_store(&set, op)
+        .await
+        .context("changing read state failed")?
+        .try_collect()
+        .await?;
     Ok(())
 }
 
@@ -1174,8 +1359,13 @@ pub async fn set_seen_many(session: &mut Session, folder: &str, uids: &[u32], se
 /// Returns the folder name and how many emails were deleted.
 pub async fn empty_folder(session: &mut Session, kind: &str) -> Result<(String, u32)> {
     anyhow::ensure!(kind == "trash" || kind == "junk", "only Trash and Junk can be emptied");
-    let folder = find_special_folder(session, kind).await?.ok_or_else(|| anyhow!("no {kind} folder"))?;
-    let mailbox = session.select(&folder).await.with_context(|| format!("cannot open {folder}"))?;
+    let folder = find_special_folder(session, kind)
+        .await?
+        .ok_or_else(|| anyhow!("no {kind} folder"))?;
+    let mailbox = session
+        .select(&folder)
+        .await
+        .with_context(|| format!("cannot open {folder}"))?;
     if mailbox.exists == 0 {
         return Ok((folder, 0));
     }
@@ -1202,20 +1392,34 @@ mod tests {
     fn search_for_any_address_in_to() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(to_any(&a(&["me@example.com"])), "TO \"me@example.com\"");
-        assert_eq!(to_any(&a(&["a@x.io", "b@x.io", "c@x.io"])), "OR TO \"a@x.io\" OR TO \"b@x.io\" TO \"c@x.io\"");
+        assert_eq!(
+            to_any(&a(&["a@x.io", "b@x.io", "c@x.io"])),
+            "OR TO \"a@x.io\" OR TO \"b@x.io\" TO \"c@x.io\""
+        );
     }
 
     #[test]
     fn the_folder_of_every_email_is_searched_last() {
-        let mut list = [("[Gmail]/All Mail", true), ("Work", false), ("INBOX", false), ("Archive", false)];
+        let mut list = [
+            ("[Gmail]/All Mail", true),
+            ("Work", false),
+            ("INBOX", false),
+            ("Archive", false),
+        ];
         list.sort_by_key(|(name, all)| search_rank(name, *all));
-        assert_eq!(list.iter().map(|x| x.0).collect::<Vec<_>>(), ["INBOX", "Archive", "Work", "[Gmail]/All Mail"]);
+        assert_eq!(
+            list.iter().map(|x| x.0).collect::<Vec<_>>(),
+            ["INBOX", "Archive", "Work", "[Gmail]/All Mail"]
+        );
     }
 
     #[test]
     fn xoauth2_answers_once_then_closes_the_exchange() {
         use async_imap::Authenticator;
-        let mut auth = XOAuth2 { message: "login".into(), answered: false };
+        let mut auth = XOAuth2 {
+            message: "login".into(),
+            answered: false,
+        };
         assert_eq!(auth.process(b""), "login");
         // The server's reason for refusing: it expects an empty line.
         assert_eq!(auth.process(b"{\"status\":\"400\"}"), "");

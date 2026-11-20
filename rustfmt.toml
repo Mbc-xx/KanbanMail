@@ -1,0 +1,2 @@
+# Wider than the default 100: the code was written with long lines.
+max_width = 120

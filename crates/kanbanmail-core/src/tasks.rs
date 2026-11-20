@@ -65,7 +65,11 @@ fn key_in(url: &url::Url) -> Option<String> {
     url.query_pairs()
         .find(|(k, _)| k == "selectedIssue")
         .and_then(|(_, v)| issue_key(&v).map(str::to_string))
-        .or_else(|| url.path_segments()?.rev().find_map(|s| issue_key(s).map(str::to_string)))
+        .or_else(|| {
+            url.path_segments()?
+                .rev()
+                .find_map(|s| issue_key(s).map(str::to_string))
+        })
 }
 
 /// What tells two addresses of the same task apart from two tasks: the site
@@ -87,7 +91,9 @@ fn identity(address: &str) -> String {
 /// The name a task gets from its address: its key, else the last piece of the
 /// path, else the site.
 pub fn name_from_url(address: &str) -> String {
-    let Ok(u) = url::Url::parse(address.trim()) else { return address.trim().to_string() };
+    let Ok(u) = url::Url::parse(address.trim()) else {
+        return address.trim().to_string();
+    };
     key_in(&u)
         .or_else(|| u.path_segments()?.rev().find(|s| !s.is_empty()).map(str::to_string))
         .unwrap_or_else(|| u.host_str().unwrap_or_default().to_string())
@@ -101,11 +107,20 @@ fn position(tasks: &[Task], address: &str) -> Option<usize> {
 /// Links emails to the task at `address` (created if new) and moves it first.
 pub fn link(tasks: &mut Vec<Task>, address: &str, ids: &[String]) -> Result<()> {
     let address = address.trim();
-    let parsed = url::Url::parse(address).ok().filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
-    anyhow::ensure!(parsed.is_some(), "this is not a web link (it should start with https://)");
+    let parsed = url::Url::parse(address)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some());
+    anyhow::ensure!(
+        parsed.is_some(),
+        "this is not a web link (it should start with https://)"
+    );
     let mut task = match position(tasks, address) {
         Some(i) => tasks.remove(i),
-        None => Task { url: address.to_string(), name: name_from_url(address), emails: Vec::new() },
+        None => Task {
+            url: address.to_string(),
+            name: name_from_url(address),
+            emails: Vec::new(),
+        },
     };
     for id in ids.iter().map(|id| bare_id(id)).filter(|id| !id.is_empty()) {
         if !task.emails.iter().any(|e| e.eq_ignore_ascii_case(&id)) {
@@ -120,7 +135,9 @@ pub fn link(tasks: &mut Vec<Task>, address: &str, ids: &[String]) -> Result<()> 
 pub fn unlink(tasks: &mut Vec<Task>, address: &str, ids: &[String]) {
     let Some(i) = position(tasks, address) else { return };
     let gone: Vec<String> = ids.iter().map(|id| bare_id(id)).collect();
-    tasks[i].emails.retain(|e| !gone.iter().any(|g| g.eq_ignore_ascii_case(e)));
+    tasks[i]
+        .emails
+        .retain(|e| !gone.iter().any(|g| g.eq_ignore_ascii_case(e)));
     if tasks[i].emails.is_empty() {
         tasks.remove(i);
     }
@@ -136,7 +153,11 @@ pub fn remove(tasks: &mut Vec<Task>, address: &str) {
 pub fn rename(tasks: &mut [Task], address: &str, name: &str) {
     if let Some(i) = position(tasks, address) {
         let name = name.trim();
-        tasks[i].name = if name.is_empty() { name_from_url(&tasks[i].url) } else { name.to_string() };
+        tasks[i].name = if name.is_empty() {
+            name_from_url(&tasks[i].url)
+        } else {
+            name.to_string()
+        };
     }
 }
 
@@ -149,7 +170,10 @@ mod tests {
     #[test]
     fn names_come_from_the_address() {
         assert_eq!(name_from_url(JIRA), "WEB-12");
-        assert_eq!(name_from_url("https://acme.atlassian.net/jira/software/projects/WEB/boards/3?selectedIssue=WEB-40"), "WEB-40");
+        assert_eq!(
+            name_from_url("https://acme.atlassian.net/jira/software/projects/WEB/boards/3?selectedIssue=WEB-40"),
+            "WEB-40"
+        );
         assert_eq!(name_from_url("https://tracker.example/tickets/881/"), "881");
         assert_eq!(name_from_url("https://tracker.example"), "tracker.example");
     }
@@ -158,7 +182,12 @@ mod tests {
     fn one_task_however_its_address_is_written() {
         let mut tasks = Vec::new();
         link(&mut tasks, JIRA, &["<a@x>".into()]).unwrap();
-        link(&mut tasks, "https://acme.atlassian.net/browse/WEB-12?focusedCommentId=7", &["<b@x>".into(), "A@x".into()]).unwrap();
+        link(
+            &mut tasks,
+            "https://acme.atlassian.net/browse/WEB-12?focusedCommentId=7",
+            &["<b@x>".into(), "A@x".into()],
+        )
+        .unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].emails, ["a@x", "b@x"]);
         // The same key on another site is another task.

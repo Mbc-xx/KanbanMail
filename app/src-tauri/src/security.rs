@@ -24,11 +24,19 @@ pub struct SecurityView {
 }
 
 fn view(report: Report, new: Vec<Advisory>) -> SecurityView {
-    SecurityView { unseen: report.unseen(), report, new, running: APP_VERSION.to_string() }
+    SecurityView {
+        unseen: report.unseen(),
+        report,
+        new,
+        running: APP_VERSION.to_string(),
+    }
 }
 
 fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// The last result, without going on the network.
@@ -51,7 +59,11 @@ pub async fn security_check(force: bool) -> SecurityView {
     match advisories::check(&components).await {
         Ok(found) => {
             let before: Vec<String> = report.advisories.iter().map(|a| a.key()).collect();
-            new = found.iter().filter(|a| a.is_vulnerability() && !before.contains(&a.key())).cloned().collect();
+            new = found
+                .iter()
+                .filter(|a| a.is_vulnerability() && !before.contains(&a.key()))
+                .cloned()
+                .collect();
             report.advisories = found;
             report.components = components.len();
             report.app_version = APP_VERSION.to_string();
@@ -93,7 +105,10 @@ mod tests {
     fn the_build_lists_the_components() {
         let list = kanbanmail_core::advisories::parse_components(super::COMPONENTS);
         assert!(list.len() > 100, "only {} components listed", list.len());
-        assert!(list.iter().any(|c| c.name == "tauri" && c.via.is_empty()), "tauri is a direct dependency");
+        assert!(
+            list.iter().any(|c| c.name == "tauri" && c.via.is_empty()),
+            "tauri is a direct dependency"
+        );
         assert!(list.iter().any(|c| c.name == "lettre" && c.via.is_empty()));
         // Linux-only crates are not built on macOS.
         #[cfg(target_os = "macos")]
@@ -106,7 +121,10 @@ mod tests {
     async fn live_check() {
         let list = kanbanmail_core::advisories::parse_components(super::COMPONENTS);
         for a in kanbanmail_core::advisories::check(&list).await.unwrap() {
-            println!("{} {} {} [{}] via={} → {:?}: {}", a.id, a.package, a.version, a.kind, a.via, a.upgrade_to, a.summary);
+            println!(
+                "{} {} {} [{}] via={} → {:?}: {}",
+                a.id, a.package, a.version, a.kind, a.via, a.upgrade_to, a.summary
+            );
         }
     }
 }

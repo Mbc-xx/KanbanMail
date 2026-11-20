@@ -36,7 +36,9 @@ impl Items for Keychain {
     }
 
     fn write(&self, name: &str, value: &str) -> Result<()> {
-        entry(name)?.set_password(value).context("saving the password to the keychain")
+        entry(name)?
+            .set_password(value)
+            .context("saving the password to the keychain")
     }
 
     fn remove(&self, name: &str) -> Result<()> {
@@ -56,7 +58,10 @@ struct Vault<I> {
 
 impl<I: Items> Vault<I> {
     fn new(items: I) -> Self {
-        Vault { items, secrets: Mutex::new(None) }
+        Vault {
+            items,
+            secrets: Mutex::new(None),
+        }
     }
 
     /// Runs `change` on the secrets, read if this is the first time. A damaged item
@@ -65,7 +70,8 @@ impl<I: Items> Vault<I> {
         let mut guard = self.secrets.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
             let saved = self.items.read(VAULT)?;
-            let secrets = saved.map(|text| serde_json::from_str(&text).context("the keychain item of the app is damaged"));
+            let secrets =
+                saved.map(|text| serde_json::from_str(&text).context("the keychain item of the app is damaged"));
             *guard = Some(secrets.transpose()?.unwrap_or_default());
         }
         change(guard.as_mut().unwrap())
@@ -81,7 +87,9 @@ impl<I: Items> Vault<I> {
             if let Some(found) = secrets.get(name) {
                 return Ok(Some(found.clone()));
             }
-            let Some(old) = self.items.read(name)? else { return Ok(None) };
+            let Some(old) = self.items.read(name)? else {
+                return Ok(None);
+            };
             secrets.insert(name.to_string(), old.clone());
             self.save(secrets)?;
             self.items.remove(name).ok();
@@ -112,15 +120,27 @@ fn vault() -> &'static Vault<Keychain> {
 }
 
 pub fn get_password(name: &str) -> Result<Option<String>> {
-    if ONE_ITEM { vault().get(name) } else { Keychain.read(name) }
+    if ONE_ITEM {
+        vault().get(name)
+    } else {
+        Keychain.read(name)
+    }
 }
 
 pub fn set_password(name: &str, password: &str) -> Result<()> {
-    if ONE_ITEM { vault().set(name, password) } else { Keychain.write(name, password) }
+    if ONE_ITEM {
+        vault().set(name, password)
+    } else {
+        Keychain.write(name, password)
+    }
 }
 
 pub fn delete_password(name: &str) -> Result<()> {
-    if ONE_ITEM { vault().delete(name) } else { Keychain.remove(name) }
+    if ONE_ITEM {
+        vault().delete(name)
+    } else {
+        Keychain.remove(name)
+    }
 }
 
 /// Keychain name of a refresh token. It stays apart from the passwords: an address

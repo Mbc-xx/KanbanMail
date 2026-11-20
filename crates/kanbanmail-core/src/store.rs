@@ -96,7 +96,11 @@ fn now() -> i64 {
 
 /// "<Abc@Host>" -> "abc@host": the form used to compare Message-IDs.
 pub fn bare_id(id: &str) -> String {
-    id.trim().trim_start_matches('<').trim_end_matches('>').trim().to_lowercase()
+    id.trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim()
+        .to_lowercase()
 }
 
 /// Where the content of an email is kept: the same email in two folders (or
@@ -110,8 +114,11 @@ fn body_key(folder: &str, uidvalidity: Option<u32>, card: &Card) -> String {
 
 /// The file of the cache of an account (one database each), by its key.
 pub fn path_for(key: &str) -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", crate::account::APP_NAME).context("cannot determine the cache folder")?;
-    Ok(dirs.cache_dir().join(format!("{}.sqlite", crate::account::safe_name(key))))
+    let dirs = directories::ProjectDirs::from("", "", crate::account::APP_NAME)
+        .context("cannot determine the cache folder")?;
+    Ok(dirs
+        .cache_dir()
+        .join(format!("{}.sqlite", crate::account::safe_name(key))))
 }
 
 /// Deletes the local copy of an account (when it is disconnected or the cache is cleared).
@@ -155,7 +162,9 @@ impl Store {
     pub fn folder_cards(&self, folder: &str) -> Result<(Option<u32>, Vec<Card>)> {
         let validity: Option<u32> = self
             .conn
-            .query_row("SELECT uidvalidity FROM folders WHERE name = ?1", [folder], |r| r.get(0))
+            .query_row("SELECT uidvalidity FROM folders WHERE name = ?1", [folder], |r| {
+                r.get(0)
+            })
             .optional()?
             .flatten();
         let mut stmt = self.conn.prepare_cached("SELECT card FROM cards WHERE folder = ?1")?;
@@ -188,7 +197,9 @@ impl Store {
     pub fn save_cards(&mut self, folder: &str, uidvalidity: Option<u32>, cards: &[Card], complete: bool) -> Result<()> {
         let tx = self.conn.transaction()?;
         let old: Option<Option<u32>> = tx
-            .query_row("SELECT uidvalidity FROM folders WHERE name = ?1", [folder], |r| r.get(0))
+            .query_row("SELECT uidvalidity FROM folders WHERE name = ?1", [folder], |r| {
+                r.get(0)
+            })
             .optional()?;
         if old.is_some_and(|v| v != uidvalidity) {
             // The server renumbered the folder: what we had is meaningless.
@@ -220,7 +231,10 @@ impl Store {
             rows.filter_map(|r| r.ok()).collect()
         };
         for card in cards {
-            if known.get(&card.uid).is_some_and(|old| *old == serde_json::to_string(card).unwrap_or_default()) {
+            if known
+                .get(&card.uid)
+                .is_some_and(|old| *old == serde_json::to_string(card).unwrap_or_default())
+            {
                 continue;
             }
             upsert_card(&tx, folder, uidvalidity, card)?;
@@ -234,7 +248,9 @@ impl Store {
         let tx = self.conn.transaction()?;
         for e in entries {
             let validity: Option<u32> = tx
-                .query_row("SELECT uidvalidity FROM folders WHERE name = ?1", [&e.folder], |r| r.get(0))
+                .query_row("SELECT uidvalidity FROM folders WHERE name = ?1", [&e.folder], |r| {
+                    r.get(0)
+                })
                 .optional()?
                 .flatten();
             upsert_card(&tx, &e.folder, validity, &e.card)?;
@@ -266,9 +282,15 @@ impl Store {
         let tx = self.conn.transaction()?;
         for uid in uids {
             let json: Option<String> = tx
-                .query_row("SELECT card FROM cards WHERE folder = ?1 AND uid = ?2", params![folder, uid], |r| r.get(0))
+                .query_row(
+                    "SELECT card FROM cards WHERE folder = ?1 AND uid = ?2",
+                    params![folder, uid],
+                    |r| r.get(0),
+                )
                 .optional()?;
-            let Some(mut card) = json.and_then(|j| serde_json::from_str::<Card>(&j).ok()) else { continue };
+            let Some(mut card) = json.and_then(|j| serde_json::from_str::<Card>(&j).ok()) else {
+                continue;
+            };
             if let Some(s) = seen {
                 card.seen = s;
             }
@@ -286,11 +308,17 @@ impl Store {
 
     /// The newest cards of every folder, newest first.
     pub fn recent(&self, limit: u32) -> Result<Vec<ThreadEntry>> {
-        let mut stmt = self.conn.prepare_cached("SELECT folder, card FROM cards ORDER BY date DESC LIMIT ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT folder, card FROM cards ORDER BY date DESC LIMIT ?1")?;
         let rows = stmt.query_map([limit], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows
             .filter_map(|r| r.ok())
-            .filter_map(|(folder, json)| serde_json::from_str(&json).ok().map(|card| ThreadEntry { folder, card }))
+            .filter_map(|(folder, json)| {
+                serde_json::from_str(&json)
+                    .ok()
+                    .map(|card| ThreadEntry { folder, card })
+            })
             .collect())
     }
 
@@ -300,15 +328,24 @@ impl Store {
     pub fn raw(&self, folder: &str, uid: u32) -> Result<Option<Vec<u8>>> {
         let key: Option<String> = self
             .conn
-            .query_row("SELECT body_key FROM cards WHERE folder = ?1 AND uid = ?2", params![folder, uid], |r| r.get(0))
+            .query_row(
+                "SELECT body_key FROM cards WHERE folder = ?1 AND uid = ?2",
+                params![folder, uid],
+                |r| r.get(0),
+            )
             .optional()?;
         let Some(key) = key else { return Ok(None) };
         let raw: Option<Vec<u8>> = self
             .conn
-            .query_row("SELECT raw FROM bodies WHERE key = ?1 AND raw IS NOT NULL", [&key], |r| r.get(0))
+            .query_row(
+                "SELECT raw FROM bodies WHERE key = ?1 AND raw IS NOT NULL",
+                [&key],
+                |r| r.get(0),
+            )
             .optional()?;
         if raw.is_some() {
-            self.conn.execute("UPDATE bodies SET last_access = ?2 WHERE key = ?1", params![key, now()])?;
+            self.conn
+                .execute("UPDATE bodies SET last_access = ?2 WHERE key = ?1", params![key, now()])?;
         }
         Ok(raw)
     }
@@ -317,9 +354,11 @@ impl Store {
     pub fn put_raw(&mut self, folder: &str, uid: u32, raw: &[u8]) -> Result<()> {
         let row: Option<(i64, String)> = self
             .conn
-            .query_row("SELECT id, body_key FROM cards WHERE folder = ?1 AND uid = ?2", params![folder, uid], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT id, body_key FROM cards WHERE folder = ?1 AND uid = ?2",
+                params![folder, uid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .optional()?;
         let Some((id, key)) = row else { return Ok(()) };
         let view = crate::message::parse_view(raw);
@@ -354,7 +393,11 @@ impl Store {
     pub fn mark_too_big(&mut self, folder: &str, uid: u32, size: u64) -> Result<()> {
         let key: Option<String> = self
             .conn
-            .query_row("SELECT body_key FROM cards WHERE folder = ?1 AND uid = ?2", params![folder, uid], |r| r.get(0))
+            .query_row(
+                "SELECT body_key FROM cards WHERE folder = ?1 AND uid = ?2",
+                params![folder, uid],
+                |r| r.get(0),
+            )
             .optional()?;
         if let Some(key) = key {
             self.conn.execute(
@@ -389,7 +432,11 @@ impl Store {
     /// most `max_bytes` (cards and the search index stay). Dropped emails are
     /// not downloaded in the background again, only when opened.
     pub fn evict(&mut self, max_bytes: u64) -> Result<u64> {
-        let total: i64 = self.conn.query_row("SELECT COALESCE(SUM(size), 0) FROM bodies WHERE raw IS NOT NULL", [], |r| r.get(0))?;
+        let total: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(size), 0) FROM bodies WHERE raw IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?;
         let mut over = total - max_bytes as i64;
         if over <= 0 {
             return Ok(0);
@@ -427,7 +474,12 @@ impl Store {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         let queued: i64 = self.conn.query_row("SELECT COUNT(*) FROM queue", [], |r| r.get(0))?;
-        Ok(StoreStats { emails: emails as u64, bodies: bodies as u64, bytes: bytes as u64, queued: queued as u64 })
+        Ok(StoreStats {
+            emails: emails as u64,
+            bodies: bodies as u64,
+            bytes: bytes as u64,
+            queued: queued as u64,
+        })
     }
 
     // ---------- search and conversations ----------
@@ -438,9 +490,17 @@ impl Store {
     pub fn search(&self, q: &SearchQuery, limit: u32) -> Result<Vec<ThreadEntry>> {
         // Full-text terms, `column : "word"*` for the words of one field.
         let mut terms = Vec::new();
-        for (column, values) in [("", &q.words), ("sender : ", &q.from), ("recipients : ", &q.to), ("subject : ", &q.subject)] {
+        for (column, values) in [
+            ("", &q.words),
+            ("sender : ", &q.from),
+            ("recipients : ", &q.to),
+            ("subject : ", &q.subject),
+        ] {
             for word in values.iter().flat_map(|v| v.split_whitespace()) {
-                let word: String = word.chars().filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_')).collect();
+                let word: String = word
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || matches!(c, '@' | '.' | '-' | '_'))
+                    .collect();
                 if !word.is_empty() {
                     terms.push(format!("{column}\"{word}\"*"));
                 }
@@ -451,16 +511,30 @@ impl Store {
         if terms.is_empty() && since.is_none() && before.is_none() {
             return Ok(Vec::new());
         }
-        let words = if terms.is_empty() { "?1 = ''" } else { "c.id IN (SELECT rowid FROM search WHERE search MATCH ?1)" };
+        let words = if terms.is_empty() {
+            "?1 = ''"
+        } else {
+            "c.id IN (SELECT rowid FROM search WHERE search MATCH ?1)"
+        };
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT c.folder, c.card FROM cards c WHERE {words} AND c.date >= ?2 AND c.date < ?3 ORDER BY c.date DESC LIMIT ?4"
         ))?;
-        let rows = stmt.query_map(params![terms.join(" "), since.unwrap_or(i64::MIN), before.unwrap_or(i64::MAX), limit], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
+        let rows = stmt.query_map(
+            params![
+                terms.join(" "),
+                since.unwrap_or(i64::MIN),
+                before.unwrap_or(i64::MAX),
+                limit
+            ],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )?;
         Ok(rows
             .filter_map(|r| r.ok())
-            .filter_map(|(folder, json)| serde_json::from_str(&json).ok().map(|card| ThreadEntry { folder, card }))
+            .filter_map(|(folder, json)| {
+                serde_json::from_str(&json)
+                    .ok()
+                    .map(|card| ThreadEntry { folder, card })
+            })
             .collect())
     }
 
@@ -468,7 +542,11 @@ impl Store {
     /// Message-IDs and those referring to them, following the links twice.
     /// Oldest first, one entry per email (the first folder found).
     pub fn thread(&self, message_id: Option<&str>, references: &[String]) -> Result<Vec<ThreadEntry>> {
-        let mut ids: HashSet<String> = references.iter().map(|r| bare_id(r)).filter(|r| !r.is_empty()).collect();
+        let mut ids: HashSet<String> = references
+            .iter()
+            .map(|r| bare_id(r))
+            .filter(|r| !r.is_empty())
+            .collect();
         if let Some(m) = message_id.map(bare_id).filter(|m| !m.is_empty()) {
             ids.insert(m);
         }
@@ -486,15 +564,23 @@ impl Store {
                      UNION SELECT c.id, c.folder, c.card FROM refs r JOIN cards c ON c.id = r.card WHERE r.ref IN ({marks})"
                 );
                 let mut stmt = self.conn.prepare(&sql)?;
-                let args: Vec<&dyn rusqlite::ToSql> = chunk.iter().chain(chunk.iter()).map(|s| s as &dyn rusqlite::ToSql).collect();
-                let rows = stmt.query_map(args.as_slice(), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+                let args: Vec<&dyn rusqlite::ToSql> = chunk
+                    .iter()
+                    .chain(chunk.iter())
+                    .map(|s| s as &dyn rusqlite::ToSql)
+                    .collect();
+                let rows = stmt.query_map(args.as_slice(), |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })?;
                 new_rows.extend(rows.filter_map(|r| r.ok()));
             }
             for (id, folder, json) in new_rows {
                 if found.contains_key(&id) {
                     continue;
                 }
-                let Ok(card) = serde_json::from_str::<Card>(&json) else { continue };
+                let Ok(card) = serde_json::from_str::<Card>(&json) else {
+                    continue;
+                };
                 if let Some(m) = card.message_id.as_deref() {
                     ids.insert(bare_id(m));
                 }
@@ -557,8 +643,15 @@ impl Store {
     }
 }
 
-fn delete_cards_where(tx: &rusqlite::Transaction<'_>, condition: &str, args: impl rusqlite::Params + Clone) -> Result<()> {
-    tx.execute(&format!("DELETE FROM search WHERE rowid IN (SELECT id FROM cards WHERE {condition})"), args.clone())?;
+fn delete_cards_where(
+    tx: &rusqlite::Transaction<'_>,
+    condition: &str,
+    args: impl rusqlite::Params + Clone,
+) -> Result<()> {
+    tx.execute(
+        &format!("DELETE FROM search WHERE rowid IN (SELECT id FROM cards WHERE {condition})"),
+        args.clone(),
+    )?;
     tx.execute(&format!("DELETE FROM cards WHERE {condition}"), args)?;
     Ok(())
 }
@@ -572,7 +665,11 @@ fn upsert_card(tx: &rusqlite::Transaction<'_>, folder: &str, uidvalidity: Option
              body_key = excluded.body_key, card = excluded.card",
         params![folder, card.uid, mid, card.date, key, serde_json::to_string(card)?],
     )?;
-    let id: i64 = tx.query_row("SELECT id FROM cards WHERE folder = ?1 AND uid = ?2", params![folder, card.uid], |r| r.get(0))?;
+    let id: i64 = tx.query_row(
+        "SELECT id FROM cards WHERE folder = ?1 AND uid = ?2",
+        params![folder, card.uid],
+        |r| r.get(0),
+    )?;
     tx.execute("DELETE FROM refs WHERE card = ?1", [id])?;
     for r in card.thread_refs.iter().map(|r| bare_id(r)).filter(|r| !r.is_empty()) {
         tx.execute("INSERT INTO refs (ref, card) VALUES (?1, ?2)", params![r, id])?;
@@ -596,7 +693,13 @@ fn upsert_card(tx: &rusqlite::Transaction<'_>, folder: &str, uidvalidity: Option
     tx.execute("DELETE FROM search WHERE rowid = ?1", [id])?;
     tx.execute(
         "INSERT INTO search (rowid, sender, recipients, subject, body) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, format!("{} {}", card.from, card.from_address), card.to, card.subject, if body.is_empty() { card.preview.clone() } else { body }],
+        params![
+            id,
+            format!("{} {}", card.from, card.from_address),
+            card.to,
+            card.subject,
+            if body.is_empty() { card.preview.clone() } else { body }
+        ],
     )?;
     Ok(())
 }
@@ -639,46 +742,79 @@ mod tests {
     #[test]
     fn cards_round_trip_and_window() {
         let mut s = Store::in_memory().unwrap();
-        let cards = vec![card(10, "Anna", "Hello", "a@x", &[], 100), card(11, "Luca", "Quote", "b@x", &[], 200)];
+        let cards = vec![
+            card(10, "Anna", "Hello", "a@x", &[], 100),
+            card(11, "Luca", "Quote", "b@x", &[], 200),
+        ];
         s.save_cards("INBOX", Some(7), &cards, true).unwrap();
         let (v, got) = s.folder_cards("INBOX").unwrap();
         assert_eq!(v, Some(7));
         assert_eq!(got.len(), 2);
         assert_eq!(s.cards("INBOX", 10).unwrap()[0].uid, 11, "newest first");
         // UID 10 left the folder (the window is the whole folder); 12 arrived.
-        s.save_cards("INBOX", Some(7), &[card(11, "Luca", "Quote", "b@x", &[], 200), card(12, "Sara", "New", "c@x", &[], 300)], true)
-            .unwrap();
+        s.save_cards(
+            "INBOX",
+            Some(7),
+            &[
+                card(11, "Luca", "Quote", "b@x", &[], 200),
+                card(12, "Sara", "New", "c@x", &[], 300),
+            ],
+            true,
+        )
+        .unwrap();
         let uids: Vec<u32> = s.cards("INBOX", 10).unwrap().iter().map(|c| c.uid).collect();
         assert_eq!(uids, vec![12, 11]);
         // A new UIDVALIDITY wipes the folder.
-        s.save_cards("INBOX", Some(8), &[card(1, "Anna", "Again", "d@x", &[], 400)], false).unwrap();
+        s.save_cards("INBOX", Some(8), &[card(1, "Anna", "Again", "d@x", &[], 400)], false)
+            .unwrap();
         assert_eq!(s.cards("INBOX", 10).unwrap().len(), 1);
     }
 
     #[test]
     fn older_cards_outside_the_window_are_kept() {
         let mut s = Store::in_memory().unwrap();
-        s.save_cards("INBOX", Some(1), &[card(5, "Old", "Old one", "o@x", &[], 10), card(20, "New", "New one", "n@x", &[], 20)], false)
-            .unwrap();
+        s.save_cards(
+            "INBOX",
+            Some(1),
+            &[
+                card(5, "Old", "Old one", "o@x", &[], 10),
+                card(20, "New", "New one", "n@x", &[], 20),
+            ],
+            false,
+        )
+        .unwrap();
         // Only the newest email is in the window now (a smaller limit).
-        s.save_cards("INBOX", Some(1), &[card(20, "New", "New one", "n@x", &[], 20)], false).unwrap();
+        s.save_cards("INBOX", Some(1), &[card(20, "New", "New one", "n@x", &[], 20)], false)
+            .unwrap();
         assert_eq!(s.cards("INBOX", 10).unwrap().len(), 2);
     }
 
     #[test]
     fn bodies_are_shared_and_evicted() {
         let mut s = Store::in_memory().unwrap();
-        s.save_cards("INBOX", Some(1), &[card(1, "Anna", "Report", "r@x", &[], 10)], false).unwrap();
-        s.save_cards("Archive", Some(1), &[card(9, "Anna", "Report", "r@x", &[], 10)], false).unwrap();
+        s.save_cards("INBOX", Some(1), &[card(1, "Anna", "Report", "r@x", &[], 10)], false)
+            .unwrap();
+        s.save_cards("Archive", Some(1), &[card(9, "Anna", "Report", "r@x", &[], 10)], false)
+            .unwrap();
         let raw = b"From: Anna <anna@example.com>\r\nSubject: Report\r\nMessage-ID: <r@x>\r\n\r\nThe quarterly numbers are ready.\r\n";
         assert!(s.raw("INBOX", 1).unwrap().is_none());
         s.put_raw("INBOX", 1, raw).unwrap();
-        assert_eq!(s.raw("Archive", 9).unwrap().as_deref(), Some(&raw[..]), "same Message-ID, same content");
-        assert!(s.missing_bodies(&["INBOX".into(), "Archive".into()], 10).unwrap().is_empty());
+        assert_eq!(
+            s.raw("Archive", 9).unwrap().as_deref(),
+            Some(&raw[..]),
+            "same Message-ID, same content"
+        );
+        assert!(s
+            .missing_bodies(&["INBOX".into(), "Archive".into()], 10)
+            .unwrap()
+            .is_empty());
         assert_eq!(s.stats().unwrap().bodies, 1);
         s.evict(0).unwrap();
         assert!(s.raw("INBOX", 1).unwrap().is_none());
-        assert!(s.missing_bodies(&["INBOX".into()], 10).unwrap().is_empty(), "not prefetched again");
+        assert!(
+            s.missing_bodies(&["INBOX".into()], 10).unwrap().is_empty(),
+            "not prefetched again"
+        );
         s.put_raw("INBOX", 1, raw).unwrap();
         assert!(s.raw("INBOX", 1).unwrap().is_some(), "kept again once opened");
     }
@@ -686,12 +822,24 @@ mod tests {
     #[test]
     fn search_finds_words_in_body_without_accents() {
         let mut s = Store::in_memory().unwrap();
-        s.save_cards("INBOX", Some(1), &[card(1, "Anna Bianchi", "Riunione", "r@x", &[], 10), card(2, "Luca", "Pranzo", "p@x", &[], 20)], false)
-            .unwrap();
+        s.save_cards(
+            "INBOX",
+            Some(1),
+            &[
+                card(1, "Anna Bianchi", "Riunione", "r@x", &[], 10),
+                card(2, "Luca", "Pranzo", "p@x", &[], 20),
+            ],
+            false,
+        )
+        .unwrap();
         let raw = "From: Anna <anna@example.com>\r\nSubject: Riunione\r\nMessage-ID: <r@x>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nCi vediamo lunedì per il preventivo.\r\n";
         s.put_raw("INBOX", 1, raw.as_bytes()).unwrap();
         fn hit(s: &Store, q: &str) -> Vec<u32> {
-            s.search(&SearchQuery::words(q), 10).unwrap().iter().map(|e| e.card.uid).collect()
+            s.search(&SearchQuery::words(q), 10)
+                .unwrap()
+                .iter()
+                .map(|e| e.card.uid)
+                .collect()
         }
         assert_eq!(hit(&s, "lunedi"), vec![1], "accents ignored");
         assert_eq!(hit(&s, "preven"), vec![1], "start of a word");
@@ -700,8 +848,16 @@ mod tests {
         assert!(hit(&s, "anna pranzo").is_empty());
         assert!(hit(&s, "\"").is_empty());
         // Re-saving the card keeps the indexed body text.
-        s.save_cards("INBOX", Some(1), &[card(1, "Anna Bianchi", "Riunione", "r@x", &[], 10), card(2, "Luca", "Pranzo", "p@x", &[], 20)], false)
-            .unwrap();
+        s.save_cards(
+            "INBOX",
+            Some(1),
+            &[
+                card(1, "Anna Bianchi", "Riunione", "r@x", &[], 10),
+                card(2, "Luca", "Pranzo", "p@x", &[], 20),
+            ],
+            false,
+        )
+        .unwrap();
         assert_eq!(hit(&s, "preventivo"), vec![1]);
     }
 
@@ -709,23 +865,76 @@ mod tests {
     fn search_by_field_and_days() {
         let mut s = Store::in_memory().unwrap();
         let day = 86_400;
-        s.save_cards("INBOX", Some(1), &[card(1, "Anna Bianchi", "Luca news", "a@x", &[], day), card(2, "Luca", "Anna news", "b@x", &[], 3 * day)], false)
-            .unwrap();
+        s.save_cards(
+            "INBOX",
+            Some(1),
+            &[
+                card(1, "Anna Bianchi", "Luca news", "a@x", &[], day),
+                card(2, "Luca", "Anna news", "b@x", &[], 3 * day),
+            ],
+            false,
+        )
+        .unwrap();
         let hit = |q: SearchQuery| s.search(&q, 10).unwrap().iter().map(|e| e.card.uid).collect::<Vec<_>>();
-        assert_eq!(hit(SearchQuery { from: vec!["anna".into()], ..Default::default() }), vec![1]);
-        assert_eq!(hit(SearchQuery { subject: vec!["anna".into()], ..Default::default() }), vec![2]);
-        assert_eq!(hit(SearchQuery { since: Some("1970-01-03".into()), ..Default::default() }), vec![2]);
-        assert_eq!(hit(SearchQuery { words: vec!["news".into()], before: Some("1970-01-03".into()), ..Default::default() }), vec![1]);
+        assert_eq!(
+            hit(SearchQuery {
+                from: vec!["anna".into()],
+                ..Default::default()
+            }),
+            vec![1]
+        );
+        assert_eq!(
+            hit(SearchQuery {
+                subject: vec!["anna".into()],
+                ..Default::default()
+            }),
+            vec![2]
+        );
+        assert_eq!(
+            hit(SearchQuery {
+                since: Some("1970-01-03".into()),
+                ..Default::default()
+            }),
+            vec![2]
+        );
+        assert_eq!(
+            hit(SearchQuery {
+                words: vec!["news".into()],
+                before: Some("1970-01-03".into()),
+                ..Default::default()
+            }),
+            vec![1]
+        );
         assert_eq!(day_start("2026-11-02"), Some(1_793_577_600));
     }
 
     #[test]
     fn thread_follows_references_across_folders() {
         let mut s = Store::in_memory().unwrap();
-        s.save_cards("INBOX", Some(1), &[card(1, "Anna", "Plan", "root@x", &[], 10), card(3, "Anna", "Re: Plan", "c@x", &["root@x", "b@x"], 30)], false)
-            .unwrap();
-        s.save_cards("Sent", Some(1), &[card(2, "Me", "Re: Plan", "b@x", &["root@x"], 20)], false).unwrap();
-        s.save_cards("INBOX.Other", Some(1), &[card(4, "Zoe", "Unrelated", "z@x", &[], 40)], false).unwrap();
+        s.save_cards(
+            "INBOX",
+            Some(1),
+            &[
+                card(1, "Anna", "Plan", "root@x", &[], 10),
+                card(3, "Anna", "Re: Plan", "c@x", &["root@x", "b@x"], 30),
+            ],
+            false,
+        )
+        .unwrap();
+        s.save_cards(
+            "Sent",
+            Some(1),
+            &[card(2, "Me", "Re: Plan", "b@x", &["root@x"], 20)],
+            false,
+        )
+        .unwrap();
+        s.save_cards(
+            "INBOX.Other",
+            Some(1),
+            &[card(4, "Zoe", "Unrelated", "z@x", &[], 40)],
+            false,
+        )
+        .unwrap();
         let t = s.thread(Some("<c@x>"), &["<b@x>".into()]).unwrap();
         let got: Vec<(String, u32)> = t.iter().map(|e| (e.folder.clone(), e.card.uid)).collect();
         assert_eq!(got, vec![("INBOX".into(), 1), ("Sent".into(), 2), ("INBOX".into(), 3)]);
@@ -738,7 +947,10 @@ mod tests {
         s.enqueue("seen", "{}").unwrap();
         s.queue_failed(a, "offline").unwrap();
         let q = s.queue().unwrap();
-        assert_eq!(q.iter().map(|x| x.kind.as_str()).collect::<Vec<_>>(), vec!["move", "seen"]);
+        assert_eq!(
+            q.iter().map(|x| x.kind.as_str()).collect::<Vec<_>>(),
+            vec!["move", "seen"]
+        );
         assert_eq!(q[0].attempts, 1);
         s.dequeue(a).unwrap();
         assert_eq!(s.queue().unwrap().len(), 1);
@@ -747,7 +959,8 @@ mod tests {
     #[test]
     fn flags_update_cards() {
         let mut s = Store::in_memory().unwrap();
-        s.save_cards("INBOX", Some(1), &[card(1, "Anna", "Plan", "p@x", &[], 10)], false).unwrap();
+        s.save_cards("INBOX", Some(1), &[card(1, "Anna", "Plan", "p@x", &[], 10)], false)
+            .unwrap();
         s.set_flags("INBOX", &[1], Some(true), Some(true)).unwrap();
         let c = &s.cards("INBOX", 1).unwrap()[0];
         assert!(c.seen && c.flagged);

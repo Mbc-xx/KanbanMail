@@ -65,7 +65,12 @@ mod tests {
     use super::*;
 
     fn item(id: &str, until: i64) -> Snoozed {
-        Snoozed { message_id: id.into(), folder: "Snoozed".into(), back: "INBOX".into(), until }
+        Snoozed {
+            message_id: id.into(),
+            folder: "Snoozed".into(),
+            back: "INBOX".into(),
+            until,
+        }
     }
 
     #[test]
@@ -73,7 +78,12 @@ mod tests {
         let mut list = Vec::new();
         add(&mut list, vec![item("<a@x>", 300), item("<b@x>", 100)]);
         add(&mut list, vec![item("<A@X>", 50), item("", 10)]);
-        assert_eq!(list.iter().map(|x| (x.message_id.as_str(), x.until)).collect::<Vec<_>>(), [("<A@X>", 50), ("<b@x>", 100)]);
+        assert_eq!(
+            list.iter()
+                .map(|x| (x.message_id.as_str(), x.until))
+                .collect::<Vec<_>>(),
+            [("<A@X>", 50), ("<b@x>", 100)]
+        );
         remove(&mut list, &["b@x".into()]);
         assert_eq!(list.len(), 1);
     }

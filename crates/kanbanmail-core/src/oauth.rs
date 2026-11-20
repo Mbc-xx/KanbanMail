@@ -76,7 +76,10 @@ fn client(provider: Provider) -> Option<Client> {
 
 /// The services this build can sign in to.
 pub fn available() -> Vec<Provider> {
-    [Provider::Microsoft, Provider::Gmail].into_iter().filter(|p| client(*p).is_some()).collect()
+    [Provider::Microsoft, Provider::Gmail]
+        .into_iter()
+        .filter(|p| client(*p).is_some())
+        .collect()
 }
 
 /// A completed sign-in.
@@ -110,7 +113,9 @@ struct Identity {
 /// TLS, so its signature needs no check (OpenID Connect Core, 3.1.3.7).
 fn identity(id_token: &str) -> Result<Identity> {
     let payload = id_token.split('.').nth(1).context("invalid ID token")?;
-    let bytes = URL_SAFE_NO_PAD.decode(payload.trim_end_matches('=')).context("invalid ID token")?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .context("invalid ID token")?;
     serde_json::from_slice(&bytes).context("invalid ID token")
 }
 
@@ -154,7 +159,9 @@ enum Redirect {
 /// Reads the first line of a request, like `GET /?code=abc&state=xyz HTTP/1.1`.
 fn parse_redirect(request_line: &str, state: &str) -> Redirect {
     let target = request_line.split_whitespace().nth(1).unwrap_or_default();
-    let Some((path, query)) = target.split_once('?') else { return Redirect::Ignored };
+    let Some((path, query)) = target.split_once('?') else {
+        return Redirect::Ignored;
+    };
     if path != "/" {
         return Redirect::Ignored;
     }
@@ -166,7 +173,11 @@ fn parse_redirect(request_line: &str, state: &str) -> Redirect {
     if let Some(code) = params.get("code") {
         return Redirect::Code(code.clone());
     }
-    let why = params.get("error_description").or(params.get("error")).cloned().unwrap_or_default();
+    let why = params
+        .get("error_description")
+        .or(params.get("error"))
+        .cloned()
+        .unwrap_or_default();
     Redirect::Refused(why)
 }
 
@@ -218,8 +229,16 @@ async fn wait_for_code(v4: TcpListener, v6: Option<TcpListener>, state: &str) ->
 /// Leaves a mailing list with its one-click address (RFC 8058): a POST with
 /// "List-Unsubscribe=One-Click" and nothing else (no cookies, no page).
 pub async fn unsubscribe_one_click(url: &str) -> Result<()> {
-    anyhow::ensure!(url.to_ascii_lowercase().starts_with("https://"), "only https addresses are used");
-    let reply = http()?.post(url).form(&[("List-Unsubscribe", "One-Click")]).send().await.context("the list could not be reached")?;
+    anyhow::ensure!(
+        url.to_ascii_lowercase().starts_with("https://"),
+        "only https addresses are used"
+    );
+    let reply = http()?
+        .post(url)
+        .form(&[("List-Unsubscribe", "One-Click")])
+        .send()
+        .await
+        .context("the list could not be reached")?;
     anyhow::ensure!(reply.status().is_success(), "the list answered {}", reply.status());
     Ok(())
 }
@@ -246,14 +265,23 @@ async fn token_request(client: &Client, form: &[(&str, &str)]) -> Result<TokenRe
         .send()
         .await
         .map_err(|_| anyhow!("cannot reach the sign-in service"))?;
-    let bytes = reply.bytes().await.map_err(|_| anyhow!("cannot reach the sign-in service"))?;
+    let bytes = reply
+        .bytes()
+        .await
+        .map_err(|_| anyhow!("cannot reach the sign-in service"))?;
     serde_json::from_slice(&bytes).context("unexpected answer from the sign-in service")
 }
 
 /// Signs in with the system browser. `open` shows the page; the future can be dropped to cancel.
-pub async fn sign_in(provider: Provider, hint: &str, open: impl FnOnce(&str) -> Result<(), String>) -> Result<SignedIn> {
+pub async fn sign_in(
+    provider: Provider,
+    hint: &str,
+    open: impl FnOnce(&str) -> Result<(), String>,
+) -> Result<SignedIn> {
     let client = client(provider).context("this build has no sign-in for this service")?;
-    let v4 = TcpListener::bind(("127.0.0.1", 0)).await.context("cannot open a local port for the sign-in")?;
+    let v4 = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .context("cannot open a local port for the sign-in")?;
     let port = v4.local_addr()?.port();
     // `localhost` may mean the IPv6 address in the browser.
     let v6 = TcpListener::bind(("::1", port)).await.ok();
@@ -272,16 +300,27 @@ pub async fn sign_in(provider: Provider, hint: &str, open: impl FnOnce(&str) -> 
     ];
     let reply = token_request(&client, &form).await?;
     let (Some(access), Some(refresh)) = (reply.access_token, reply.refresh_token) else {
-        bail!("the sign-in failed: {}", reply.error_description.or(reply.error).unwrap_or_default());
+        bail!(
+            "the sign-in failed: {}",
+            reply.error_description.or(reply.error).unwrap_or_default()
+        );
     };
     let who = reply.id_token.as_deref().map(identity).transpose()?.unwrap_or_default();
-    let email = who.email.filter(|e| !e.is_empty()).or(who.preferred_username).unwrap_or_default();
+    let email = who
+        .email
+        .filter(|e| !e.is_empty())
+        .or(who.preferred_username)
+        .unwrap_or_default();
     remember(&email, access.clone(), reply.expires_in).await;
     if !hint.is_empty() {
         remember(hint, access, reply.expires_in).await;
     }
     let personal = who.tid.as_deref() == Some(MICROSOFT_PERSONAL_TENANT);
-    Ok(SignedIn { email, refresh_token: refresh, personal })
+    Ok(SignedIn {
+        email,
+        refresh_token: refresh,
+        personal,
+    })
 }
 
 struct Token {
@@ -305,7 +344,13 @@ fn valid_until(expires_in: Option<u64>) -> Instant {
 }
 
 async fn remember(email: &str, value: String, expires_in: Option<u64>) {
-    tokens().lock().await.insert(key(email), Token { value, expires: valid_until(expires_in) });
+    tokens().lock().await.insert(
+        key(email),
+        Token {
+            value,
+            expires: valid_until(expires_in),
+        },
+    );
 }
 
 /// Drops the access token, after a server refused it.
@@ -323,7 +368,10 @@ pub async fn assign(email: &str, account_key: &str) {
 
 /// Was the refresh token refused for good (revoked, expired, password changed)?
 fn must_sign_in_again(error: &str) -> bool {
-    matches!(error, "invalid_grant" | "interaction_required" | "consent_required" | "login_required")
+    matches!(
+        error,
+        "invalid_grant" | "interaction_required" | "consent_required" | "login_required"
+    )
 }
 
 /// A valid access token for the account, renewed if needed.
@@ -340,14 +388,23 @@ pub async fn access_token(account: &Account) -> Result<String> {
         if must_sign_in_again(error) {
             return Err(expired());
         }
-        bail!("the sign-in service refused: {}", reply.error_description.as_deref().unwrap_or(error));
+        bail!(
+            "the sign-in service refused: {}",
+            reply.error_description.as_deref().unwrap_or(error)
+        );
     }
     let value = reply.access_token.context("no access token from the sign-in service")?;
     // Microsoft replaces the refresh token, Google keeps the old one.
     if let Some(new) = reply.refresh_token.filter(|r| *r != refresh) {
         secret::set_refresh_token(account.key(), &new)?;
     }
-    all.insert(key(account.key()), Token { value: value.clone(), expires: valid_until(reply.expires_in) });
+    all.insert(
+        key(account.key()),
+        Token {
+            value: value.clone(),
+            expires: valid_until(reply.expires_in),
+        },
+    );
     Ok(value)
 }
 
@@ -375,7 +432,10 @@ mod tests {
     #[test]
     fn pkce_matches_the_rfc_example() {
         // RFC 7636, appendix B.
-        assert_eq!(challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+        assert_eq!(
+            challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
     }
 
     #[test]
@@ -401,11 +461,20 @@ mod tests {
     fn redirects_are_trusted_only_with_our_state() {
         let code = parse_redirect("GET /?code=a%2Fb&state=st HTTP/1.1", "st");
         assert_eq!(code, Redirect::Code("a/b".into()));
-        assert_eq!(parse_redirect("GET /?code=a&state=other HTTP/1.1", "st"), Redirect::Ignored);
+        assert_eq!(
+            parse_redirect("GET /?code=a&state=other HTTP/1.1", "st"),
+            Redirect::Ignored
+        );
         assert_eq!(parse_redirect("GET /?code=a HTTP/1.1", "st"), Redirect::Ignored);
         assert_eq!(parse_redirect("GET /favicon.ico HTTP/1.1", "st"), Redirect::Ignored);
-        assert_eq!(parse_redirect("GET /other?code=a&state=st HTTP/1.1", "st"), Redirect::Ignored);
-        let refused = parse_redirect("GET /?error=access_denied&error_description=No+way&state=st HTTP/1.1", "st");
+        assert_eq!(
+            parse_redirect("GET /other?code=a&state=st HTTP/1.1", "st"),
+            Redirect::Ignored
+        );
+        let refused = parse_redirect(
+            "GET /?error=access_denied&error_description=No+way&state=st HTTP/1.1",
+            "st",
+        );
         assert_eq!(refused, Redirect::Refused("No way".into()));
     }
 
@@ -414,7 +483,10 @@ mod tests {
         let v4 = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = v4.local_addr().unwrap().port();
         let browser = tokio::spawn(async move {
-            for line in ["GET /favicon.ico HTTP/1.1\r\n\r\n", "GET /?code=good&state=st HTTP/1.1\r\n\r\n"] {
+            for line in [
+                "GET /favicon.ico HTTP/1.1\r\n\r\n",
+                "GET /?code=good&state=st HTTP/1.1\r\n\r\n",
+            ] {
                 let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
                 s.write_all(line.as_bytes()).await.unwrap();
                 let mut reply = String::new();
@@ -443,16 +515,25 @@ mod tests {
             let n = s.read(&mut buffer).await.unwrap();
             request.extend_from_slice(&buffer[..n]);
             let text = String::from_utf8_lossy(&request);
-            let Some((head, rest)) = text.split_once("\r\n\r\n") else { continue };
+            let Some((head, rest)) = text.split_once("\r\n\r\n") else {
+                continue;
+            };
             let length = head
                 .lines()
-                .find_map(|l| l.to_lowercase().strip_prefix("content-length: ").map(|v| v.trim().parse::<usize>().unwrap()))
+                .find_map(|l| {
+                    l.to_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(|v| v.trim().parse::<usize>().unwrap())
+                })
                 .unwrap_or(0);
             if rest.len() >= length {
                 break;
             }
         }
-        let reply = format!("HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        let reply = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
         s.write_all(reply.as_bytes()).await.unwrap();
         String::from_utf8_lossy(&request).to_string()
     }
@@ -461,11 +542,16 @@ mod tests {
     async fn a_refusal_of_the_token_service_is_an_answer_not_a_failure() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(one_reply(listener, r#"{"error":"invalid_grant","error_description":"gone"}"#));
+        let server = tokio::spawn(one_reply(
+            listener,
+            r#"{"error":"invalid_grant","error_description":"gone"}"#,
+        ));
         let mut client = test_client();
         client.token_url = format!("http://127.0.0.1:{port}/token");
         client.client_secret = Some("shh".into());
-        let reply = token_request(&client, &[("grant_type", "refresh_token"), ("refresh_token", "r/1")]).await.unwrap();
+        let reply = token_request(&client, &[("grant_type", "refresh_token"), ("refresh_token", "r/1")])
+            .await
+            .unwrap();
         assert_eq!(reply.error.as_deref(), Some("invalid_grant"));
         let request = server.await.unwrap();
         assert!(request.contains("grant_type=refresh_token") && request.contains("refresh_token=r%2F1"));
@@ -479,7 +565,10 @@ mod tests {
         drop(listener);
         let mut client = test_client();
         client.token_url = format!("http://127.0.0.1:{port}/token");
-        let e = token_request(&client, &[("grant_type", "refresh_token")]).await.err().unwrap();
+        let e = token_request(&client, &[("grant_type", "refresh_token")])
+            .await
+            .err()
+            .unwrap();
         assert!(e.to_string().contains("cannot reach"));
     }
 
@@ -488,13 +577,24 @@ mod tests {
     #[ignore]
     async fn the_real_token_services_answer() {
         for (url, id) in [
-            ("https://login.microsoftonline.com/common/oauth2/v2.0/token", "00000000-0000-0000-0000-000000000000"),
-            ("https://oauth2.googleapis.com/token", "invalid.apps.googleusercontent.com"),
+            (
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                "00000000-0000-0000-0000-000000000000",
+            ),
+            (
+                "https://oauth2.googleapis.com/token",
+                "invalid.apps.googleusercontent.com",
+            ),
         ] {
             let mut client = test_client();
             client.token_url = url.into();
             client.client_id = id.into();
-            let reply = token_request(&client, &[("grant_type", "refresh_token"), ("refresh_token", "made-up")]).await.unwrap();
+            let reply = token_request(
+                &client,
+                &[("grant_type", "refresh_token"), ("refresh_token", "made-up")],
+            )
+            .await
+            .unwrap();
             println!("{url}: {:?}", reply.error);
             assert!(reply.error.is_some());
         }
@@ -515,6 +615,8 @@ mod tests {
     fn the_expired_message_does_not_look_like_being_offline() {
         // main.rs treats errors with these words as "no network" and would not ask to sign in.
         let text = format!("Your sign-in to a@b.c has expired. {SIGN_IN_AGAIN}.").to_lowercase();
-        assert!(!["connection", "network", "offline", "cannot reach"].iter().any(|k| text.contains(k)));
+        assert!(!["connection", "network", "offline", "cannot reach"]
+            .iter()
+            .any(|k| text.contains(k)));
     }
 }

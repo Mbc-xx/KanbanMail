@@ -79,7 +79,15 @@ fn yes() -> bool {
 
 impl Default for Report {
     fn default() -> Self {
-        Report { checked_at: None, app_version: String::new(), components: 0, advisories: Vec::new(), seen: Vec::new(), auto: true, error: None }
+        Report {
+            checked_at: None,
+            app_version: String::new(),
+            components: 0,
+            advisories: Vec::new(),
+            seen: Vec::new(),
+            auto: true,
+            error: None,
+        }
     }
 }
 
@@ -109,7 +117,11 @@ fn path() -> Result<PathBuf> {
 }
 
 pub fn load() -> Report {
-    path().ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
 }
 
 pub fn save(report: &Report) -> Result<()> {
@@ -117,7 +129,8 @@ pub fn save(report: &Report) -> Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&path, serde_json::to_string_pretty(report)?).with_context(|| format!("cannot write {}", path.display()))
+    std::fs::write(&path, serde_json::to_string_pretty(report)?)
+        .with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// Parses the list written by the build: `[[name, version, via], …]`.
@@ -163,8 +176,10 @@ pub async fn check(components: &[Component]) -> Result<Vec<Advisory>> {
     // Which advisory ids touch which component.
     let mut hits: Vec<(usize, String)> = Vec::new();
     for (start, chunk) in components.chunks(500).enumerate().map(|(i, c)| (i * 500, c)) {
-        let queries: Vec<Value> =
-            chunk.iter().map(|c| json!({ "package": { "name": c.name, "ecosystem": "crates.io" }, "version": c.version })).collect();
+        let queries: Vec<Value> = chunk
+            .iter()
+            .map(|c| json!({ "package": { "name": c.name, "ecosystem": "crates.io" }, "version": c.version }))
+            .collect();
         let answer = post_json(&client, &format!("{OSV}/querybatch"), &json!({ "queries": queries })).await?;
         let results = answer["results"].as_array().context("unexpected answer from OSV.dev")?;
         for (i, result) in results.iter().enumerate() {
@@ -182,9 +197,13 @@ pub async fn check(components: &[Component]) -> Result<Vec<Advisory>> {
             details.insert(id.clone(), get_json(&client, &format!("{OSV}/vulns/{id}")).await?);
         }
     }
-    let mut out: Vec<Advisory> = hits.iter().map(|(i, id)| advisory(&components[*i], id, &details[id])).collect();
+    let mut out: Vec<Advisory> = hits
+        .iter()
+        .map(|(i, id)| advisory(&components[*i], id, &details[id]))
+        .collect();
     // A GHSA that repeats a RustSec advisory on the same package says nothing new.
-    let same = |a: &Advisory, b: &Advisory| a.package == b.package && a.version == b.version && b.aliases.contains(&a.id);
+    let same =
+        |a: &Advisory, b: &Advisory| a.package == b.package && a.version == b.version && b.aliases.contains(&a.id);
     let copy: Vec<Advisory> = out.clone();
     out.retain(|a| !(a.id.starts_with("GHSA-") && copy.iter().any(|b| b.id.starts_with("RUSTSEC-") && same(a, b))));
     out.sort_by(|a, b| (!a.is_vulnerability(), &a.package, &a.id).cmp(&(!b.is_vulnerability(), &b.package, &b.id)));
@@ -192,14 +211,23 @@ pub async fn check(components: &[Component]) -> Result<Vec<Advisory>> {
 }
 
 fn advisory(component: &Component, id: &str, v: &Value) -> Advisory {
-    let strings = |x: &Value| x.as_array().into_iter().flatten().filter_map(|s| s.as_str().map(String::from)).collect::<Vec<_>>();
+    let strings = |x: &Value| {
+        x.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str().map(String::from))
+            .collect::<Vec<_>>()
+    };
     let affected: Vec<&Value> = v["affected"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|a| a["package"]["name"].as_str() == Some(component.name.as_str()))
         .collect();
-    let informational = affected.iter().find_map(|a| a["database_specific"]["informational"].as_str()).map(String::from);
+    let informational = affected
+        .iter()
+        .find_map(|a| a["database_specific"]["informational"].as_str())
+        .map(String::from);
     let mut fixed: Vec<String> = Vec::new();
     for a in &affected {
         for r in a["ranges"].as_array().into_iter().flatten() {
@@ -212,8 +240,20 @@ fn advisory(component: &Component, id: &str, v: &Value) -> Advisory {
             }
         }
     }
-    let upgrade_to = fixed.iter().filter(|f| newer(f, &component.version)).min_by(|a, b| cmp_versions(a, b)).cloned();
-    let summary = v["summary"].as_str().or(v["details"].as_str()).unwrap_or("").lines().next().unwrap_or("").trim().to_string();
+    let upgrade_to = fixed
+        .iter()
+        .filter(|f| newer(f, &component.version))
+        .min_by(|a, b| cmp_versions(a, b))
+        .cloned();
+    let summary = v["summary"]
+        .as_str()
+        .or(v["details"].as_str())
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let url = if id.starts_with("RUSTSEC-") {
         format!("https://rustsec.org/advisories/{id}.html")
     } else {
@@ -235,7 +275,12 @@ fn advisory(component: &Component, id: &str, v: &Value) -> Advisory {
 }
 
 fn numbers(v: &str) -> Vec<u64> {
-    v.split(['-', '+']).next().unwrap_or("").split('.').map(|n| n.parse().unwrap_or(0)).collect()
+    v.split(['-', '+'])
+        .next()
+        .unwrap_or("")
+        .split('.')
+        .map(|n| n.parse().unwrap_or(0))
+        .collect()
 }
 
 fn cmp_versions(a: &str, b: &str) -> std::cmp::Ordering {
@@ -263,7 +308,11 @@ mod tests {
                 "database_specific": { "informational": null }
             }]
         });
-        let c = Component { name: "ammonia".into(), version: "4.2.4".into(), via: String::new() };
+        let c = Component {
+            name: "ammonia".into(),
+            version: "4.2.4".into(),
+            via: String::new(),
+        };
         let a = advisory(&c, "RUSTSEC-2026-0533", &record);
         assert_eq!(a.kind, "vulnerability");
         assert_eq!(a.upgrade_to.as_deref(), Some("4.2.5"));
@@ -274,7 +323,11 @@ mod tests {
     #[test]
     fn unmaintained_is_a_notice() {
         let record = json!({ "id": "RUSTSEC-2026-0543", "summary": "chrono is unmaintained", "affected": [{ "package": { "name": "chrono" }, "database_specific": { "informational": "unmaintained" } }] });
-        let c = Component { name: "chrono".into(), version: "0.4.45".into(), via: "async-imap".into() };
+        let c = Component {
+            name: "chrono".into(),
+            version: "0.4.45".into(),
+            via: "async-imap".into(),
+        };
         let a = advisory(&c, "RUSTSEC-2026-0543", &record);
         assert_eq!(a.kind, "unmaintained");
         assert!(a.upgrade_to.is_none());
@@ -282,7 +335,11 @@ mod tests {
 
     #[test]
     fn due_once_a_day_or_after_an_update() {
-        let mut r = Report { checked_at: Some(1_000_000), app_version: "2.14.0".into(), ..Default::default() };
+        let mut r = Report {
+            checked_at: Some(1_000_000),
+            app_version: "2.14.0".into(),
+            ..Default::default()
+        };
         assert!(!r.due(1_000_000 + 3600, "2.14.0"));
         assert!(r.due(1_000_000 + AUTO_EVERY_SECS, "2.14.0"));
         assert!(r.due(1_000_000 + 60, "2.15.0"));

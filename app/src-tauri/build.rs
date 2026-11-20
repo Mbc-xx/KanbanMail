@@ -14,7 +14,20 @@ fn write_components() {
     println!("cargo:rerun-if-changed=../../Cargo.lock");
     println!("cargo:rerun-if-changed=build.rs");
     let output = Command::new(cargo)
-        .args(["tree", "--offline", "--locked", "-e", "normal", "--prefix", "depth", "-f", "{p}", "--target", &target, "--manifest-path"])
+        .args([
+            "tree",
+            "--offline",
+            "--locked",
+            "-e",
+            "normal",
+            "--prefix",
+            "depth",
+            "-f",
+            "{p}",
+            "--target",
+            &target,
+            "--manifest-path",
+        ])
         .arg(&manifest)
         .output();
     let mut list: Vec<(String, String, String)> = Vec::new();
@@ -24,9 +37,13 @@ fn write_components() {
             let mut stack: Vec<(String, bool)> = Vec::new();
             for line in String::from_utf8_lossy(&out.stdout).lines() {
                 let digits = line.chars().take_while(|c| c.is_ascii_digit()).count();
-                let Ok(depth) = line[..digits].parse::<usize>() else { continue };
+                let Ok(depth) = line[..digits].parse::<usize>() else {
+                    continue;
+                };
                 let mut parts = line[digits..].split_whitespace();
-                let (Some(name), Some(version)) = (parts.next(), parts.next()) else { continue };
+                let (Some(name), Some(version)) = (parts.next(), parts.next()) else {
+                    continue;
+                };
                 let local = line.contains(" (/") || line.contains(" (\\") || line.contains(":\\");
                 stack.truncate(depth);
                 stack.push((name.to_string(), local));
@@ -34,7 +51,11 @@ fn write_components() {
                     continue;
                 }
                 // The first package below the local crates is the direct dependency.
-                let via = stack.iter().find(|(_, l)| !l).map(|(n, _)| n.clone()).unwrap_or_default();
+                let via = stack
+                    .iter()
+                    .find(|(_, l)| !l)
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_default();
                 let via = if via == name { String::new() } else { via };
                 let version = version.trim_start_matches('v').to_string();
                 if !list.iter().any(|(n, v, _)| n == name && *v == version) {
@@ -42,13 +63,23 @@ fn write_components() {
                 }
             }
         }
-        Ok(out) => println!("cargo:warning=component list not written: {}", String::from_utf8_lossy(&out.stderr).trim()),
+        Ok(out) => println!(
+            "cargo:warning=component list not written: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
         Err(e) => println!("cargo:warning=component list not written: {e}"),
     }
     list.sort();
     let json = format!(
         "[{}]",
-        list.iter().map(|(n, v, via)| format!("[\"{n}\",\"{v}\",\"{via}\"]")).collect::<Vec<_>>().join(",")
+        list.iter()
+            .map(|(n, v, via)| format!("[\"{n}\",\"{v}\",\"{via}\"]"))
+            .collect::<Vec<_>>()
+            .join(",")
     );
-    std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("components.json"), json).unwrap();
+    std::fs::write(
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("components.json"),
+        json,
+    )
+    .unwrap();
 }

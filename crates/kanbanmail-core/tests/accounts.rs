@@ -21,16 +21,31 @@ fn accounts_keep_their_own_settings_and_can_be_removed() {
     assert!(root.starts_with(&home), "must not touch the real configuration");
 
     // First account, in the main folder.
-    Account::new("mail.first.example".into(), "first@example.com".into()).save().unwrap();
-    Settings { signature: "First".into(), theme: "dark".into(), ..Settings::default() }.save().unwrap();
+    Account::new("mail.first.example".into(), "first@example.com".into())
+        .save()
+        .unwrap();
+    Settings {
+        signature: "First".into(),
+        theme: "dark".into(),
+        ..Settings::default()
+    }
+    .save()
+    .unwrap();
 
     // A second one has its own folder and starts without the first one's signature.
     account::begin_new("second@example.com").unwrap();
-    Account::new("mail.second.example".into(), "second@example.com".into()).save().unwrap();
+    Account::new("mail.second.example".into(), "second@example.com".into())
+        .save()
+        .unwrap();
     assert!(account::is_extra());
     assert_ne!(account::config_dir().unwrap(), root);
     assert_eq!(Settings::load().unwrap().signature, "");
-    Settings { signature: "Second".into(), ..Settings::default() }.save().unwrap();
+    Settings {
+        signature: "Second".into(),
+        ..Settings::default()
+    }
+    .save()
+    .unwrap();
     assert_eq!(emails(), ["first@example.com", "second@example.com"]);
 
     // Moving back finds each account as it was.
@@ -59,7 +74,12 @@ fn accounts_keep_their_own_settings_and_can_be_removed() {
     twin.set_id_beside(&account::list().unwrap());
     account::begin_new(twin.key()).unwrap();
     twin.save().unwrap();
-    Settings { signature: "Twin".into(), ..Settings::default() }.save().unwrap();
+    Settings {
+        signature: "Twin".into(),
+        ..Settings::default()
+    }
+    .save()
+    .unwrap();
     assert_eq!(emails(), ["first@example.com", "first@example.com"]);
     account::switch_to("first@example.com").unwrap();
     assert_eq!(Settings::load().unwrap().signature, "First");
@@ -71,7 +91,9 @@ fn accounts_keep_their_own_settings_and_can_be_removed() {
 
     // Removing the first while another exists hands over to that one.
     account::begin_new("third@example.com").unwrap();
-    Account::new("mail.third.example".into(), "third@example.com".into()).save().unwrap();
+    Account::new("mail.third.example".into(), "third@example.com".into())
+        .save()
+        .unwrap();
     account::switch_to("first@example.com").unwrap();
     account::remove_active().unwrap();
     assert_eq!(emails(), ["third@example.com"]);

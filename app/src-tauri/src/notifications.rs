@@ -35,9 +35,9 @@ mod mac {
     use objc2::{define_class, msg_send, AllocAnyThread};
     use objc2_foundation::{NSBundle, NSError, NSString};
     use objc2_user_notifications::{
-        UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotification, UNNotificationPresentationOptions,
-        UNNotificationRequest, UNNotificationResponse, UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter,
-        UNUserNotificationCenterDelegate,
+        UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotification,
+        UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse, UNNotificationSettings,
+        UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
     };
     use std::ptr::NonNull;
     use std::sync::{mpsc, Once};
@@ -65,7 +65,12 @@ mod mac {
 
             // A click: what the notification was about rides in its identifier.
             #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
-            fn did_receive(&self, _center: &UNUserNotificationCenter, response: &UNNotificationResponse, handler: &block2::DynBlock<dyn Fn()>) {
+            fn did_receive(
+                &self,
+                _center: &UNUserNotificationCenter,
+                response: &UNNotificationResponse,
+                handler: &block2::DynBlock<dyn Fn()>,
+            ) {
                 let id = response.notification().request().identifier().to_string();
                 if let Some((_, target)) = id.split_once('|') {
                     super::clicked(target);
@@ -98,7 +103,8 @@ mod mac {
             let _ = tx.send(unsafe { settings.as_ref() }.authorizationStatus());
         });
         center.getNotificationSettingsWithCompletionHandler(&block);
-        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(UNAuthorizationStatus::NotDetermined)
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap_or(UNAuthorizationStatus::NotDetermined)
     }
 
     /// Asks once (macOS shows its dialog); true when allowed. May wait for the answer.
@@ -129,9 +135,13 @@ mod mac {
         content.setTitle(&NSString::from_str(title));
         content.setBody(&NSString::from_str(body));
         content.setSound(Some(&UNNotificationSound::defaultSound()));
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let id = format!("pigeonhole-{stamp}|{target}");
-        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
+        let request =
+            UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
         let (tx, rx) = mpsc::channel();
         let block = RcBlock::new(move |error: *mut NSError| {
             let message = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
@@ -162,5 +172,10 @@ pub fn show<R: tauri::Runtime>(app: &tauri::AppHandle<R>, title: &str, body: &st
     }
     let _ = target;
     use tauri_plugin_notification::NotificationExt;
-    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
 }

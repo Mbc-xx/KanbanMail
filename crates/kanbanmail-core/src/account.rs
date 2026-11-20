@@ -117,8 +117,7 @@ pub(crate) const APP_NAME: &str = "Pigeonhole";
 
 /// Main configuration folder, e.g. `~/Library/Application Support/Pigeonhole` on macOS.
 pub(crate) fn root_dir() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", APP_NAME)
-        .context("cannot determine the configuration folder")?;
+    let dirs = directories::ProjectDirs::from("", "", APP_NAME).context("cannot determine the configuration folder")?;
     Ok(dirs.config_dir().to_path_buf())
 }
 
@@ -143,7 +142,10 @@ pub struct Look {
 
 /// A damaged file only costs the icons, so it never stops the app.
 fn read_looks(root: &Path) -> BTreeMap<String, Look> {
-    std::fs::read_to_string(root.join(LOOKS_FILE)).ok().and_then(|text| toml::from_str(&text).ok()).unwrap_or_default()
+    std::fs::read_to_string(root.join(LOOKS_FILE))
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 fn write_look(root: &Path, key: &str, look: Look) -> Result<()> {
@@ -170,7 +172,15 @@ pub fn set_look(key: &str, look: Look) -> Result<()> {
 
 /// An account key as a file name.
 pub(crate) fn safe_name(key: &str) -> String {
-    key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '@' || c == '-' { c } else { '_' }).collect()
+    key.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '@' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn extra_dir(root: &Path, key: &str) -> PathBuf {
@@ -183,7 +193,9 @@ fn read_account(dir: &Path) -> Result<Option<Account>> {
         return Ok(None);
     }
     let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(Some(toml::from_str(&text).with_context(|| format!("invalid {}", path.display()))?))
+    Ok(Some(
+        toml::from_str(&text).with_context(|| format!("invalid {}", path.display()))?,
+    ))
 }
 
 /// The folders holding an account: the main one first, then the others by name.
@@ -192,12 +204,17 @@ fn dirs_in(root: &Path) -> Vec<PathBuf> {
         .map(|list| list.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
     extra.sort();
-    std::iter::once(root.to_path_buf()).chain(extra).filter(|d| d.join("account.toml").exists()).collect()
+    std::iter::once(root.to_path_buf())
+        .chain(extra)
+        .filter(|d| d.join("account.toml").exists())
+        .collect()
 }
 
 /// The extra account to use at startup (None: the one in the main folder).
 fn saved_active(root: &Path) -> Option<String> {
-    let named = std::fs::read_to_string(root.join(ACTIVE_FILE)).ok().map(|s| s.trim().to_string());
+    let named = std::fs::read_to_string(root.join(ACTIVE_FILE))
+        .ok()
+        .map(|s| s.trim().to_string());
     if let Some(key) = named.filter(|k| !k.is_empty() && extra_dir(root, k).join("account.toml").exists()) {
         return Some(key);
     }
@@ -269,7 +286,10 @@ pub fn switch_to(key: &str) -> Result<()> {
     let root = root_dir()?;
     let first = read_account(&root)?.is_some_and(|a| a.key().eq_ignore_ascii_case(key));
     if !first {
-        anyhow::ensure!(extra_dir(&root, key).join("account.toml").exists(), "unknown account: {key}");
+        anyhow::ensure!(
+            extra_dir(&root, key).join("account.toml").exists(),
+            "unknown account: {key}"
+        );
     }
     set_active(&root, (!first).then(|| key.to_string()))
 }
@@ -341,17 +361,25 @@ impl Account {
 
     /// The name to log in with on the IMAP server.
     pub fn imap_login(&self) -> &str {
-        self.username.as_deref().filter(|u| !u.is_empty()).unwrap_or(&self.email)
+        self.username
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .unwrap_or(&self.email)
     }
 
     /// The name to log in with on the SMTP server: iCloud wants a whole address
     /// there, also where IMAP takes only the part before the @.
     pub fn smtp_login(&self) -> &str {
-        Some(self.imap_login()).filter(|u| u.contains('@')).unwrap_or(&self.email)
+        Some(self.imap_login())
+            .filter(|u| u.contains('@'))
+            .unwrap_or(&self.email)
     }
 
     pub fn smtp_host(&self) -> &str {
-        self.smtp_server.as_deref().filter(|s| !s.is_empty()).unwrap_or(&self.server)
+        self.smtp_server
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.server)
     }
 
     pub fn load() -> Result<Option<Account>> {
@@ -361,8 +389,7 @@ impl Account {
     pub fn save(&self) -> Result<()> {
         let path = account_path()?;
         std::fs::create_dir_all(path.parent().unwrap())?;
-        std::fs::write(&path, toml::to_string_pretty(self)?)
-            .with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&path, toml::to_string_pretty(self)?).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 }
@@ -373,7 +400,11 @@ mod tests {
 
     fn write_account(dir: &Path, email: &str) {
         std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join("account.toml"), format!("server = \"mail.example.com\"\nemail = \"{email}\"\n")).unwrap();
+        std::fs::write(
+            dir.join("account.toml"),
+            format!("server = \"mail.example.com\"\nemail = \"{email}\"\n"),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -394,9 +425,21 @@ mod tests {
     fn account_icons_are_kept_by_address() {
         let root = std::env::temp_dir().join(format!("kanbanmail-looks-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        let look = Look { icon: Some("🏠".into()), color: Some("#43a07a".into()), label: Some("Home".into()) };
+        let look = Look {
+            icon: Some("🏠".into()),
+            color: Some("#43a07a".into()),
+            label: Some("Home".into()),
+        };
         write_look(&root, "Me@Example.com", look.clone()).unwrap();
-        write_look(&root, "other@example.com", Look { icon: Some("AB".into()), ..Look::default() }).unwrap();
+        write_look(
+            &root,
+            "other@example.com",
+            Look {
+                icon: Some("AB".into()),
+                ..Look::default()
+            },
+        )
+        .unwrap();
         assert_eq!(read_looks(&root).get("me@example.com"), Some(&look));
         write_look(&root, "ME@example.com", Look::default()).unwrap();
         let left = read_looks(&root);
@@ -437,7 +480,9 @@ mod tests {
         for p in [Provider::Icloud, Provider::Gmail, Provider::Microsoft] {
             for oauth in [false, true] {
                 let text = p.login_help(oauth).to_lowercase();
-                assert!(!["connection", "network", "offline", "cannot reach"].iter().any(|k| text.contains(k)));
+                assert!(!["connection", "network", "offline", "cannot reach"]
+                    .iter()
+                    .any(|k| text.contains(k)));
             }
         }
     }

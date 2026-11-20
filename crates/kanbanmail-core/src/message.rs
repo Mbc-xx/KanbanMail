@@ -102,7 +102,9 @@ pub fn parse_unsubscribe(header: &str, post: Option<&str>) -> Option<Unsubscribe
             mailto = Some(link.to_string());
         }
     }
-    let one_click = url.as_deref().is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
+    let one_click = url
+        .as_deref()
+        .is_some_and(|u| u.to_ascii_lowercase().starts_with("https://"))
         && post.is_some_and(|p| p.to_ascii_lowercase().contains("list-unsubscribe=one-click"));
     (url.is_some() || mailto.is_some()).then_some(Unsubscribe { url, mailto, one_click })
 }
@@ -164,7 +166,8 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
         .unwrap_or_default();
     let has_attachments = parsed.as_ref().is_some_and(|m| {
         m.content_type().is_some_and(|ct| {
-            ct.ctype().eq_ignore_ascii_case("multipart") && ct.subtype().is_some_and(|s| s.eq_ignore_ascii_case("mixed"))
+            ct.ctype().eq_ignore_ascii_case("multipart")
+                && ct.subtype().is_some_and(|s| s.eq_ignore_ascii_case("mixed"))
         }) || m.attachments().any(|p| p.content_id().is_none())
     });
     let (from, subject, date, preview) = match &parsed {
@@ -185,9 +188,47 @@ pub fn parse_card(uid: u32, raw: &[u8], flagged: bool, seen: bool, fallback_date
     let message_id = parsed.as_ref().and_then(|m| m.message_id()).map(str::to_string);
     let automated = parsed.as_ref().is_some_and(|m| is_automated(m, &from_address));
     let thread_refs = parsed.as_ref().map(thread_refs).unwrap_or_default();
-    let to = parsed.as_ref().map(|m| [m.to(), m.cc()].into_iter().flatten().flat_map(|l| l.mailboxes().filter_map(|mb| mb.address().map(str::to_string)).collect::<Vec<_>>()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
-    let to_only = parsed.as_ref().and_then(|m| m.to()).map(|l| l.mailboxes().filter_map(|mb| mb.address().map(str::to_string)).collect::<Vec<_>>().join(", ")).unwrap_or_default();
-    Card { uid, from, from_address, subject, date, preview, flagged, seen, has_attachments, message_id, automated, thread_refs, to, to_only }
+    let to = parsed
+        .as_ref()
+        .map(|m| {
+            [m.to(), m.cc()]
+                .into_iter()
+                .flatten()
+                .flat_map(|l| {
+                    l.mailboxes()
+                        .filter_map(|mb| mb.address().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let to_only = parsed
+        .as_ref()
+        .and_then(|m| m.to())
+        .map(|l| {
+            l.mailboxes()
+                .filter_map(|mb| mb.address().map(str::to_string))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    Card {
+        uid,
+        from,
+        from_address,
+        subject,
+        date,
+        preview,
+        flagged,
+        seen,
+        has_attachments,
+        message_id,
+        automated,
+        thread_refs,
+        to,
+        to_only,
+    }
 }
 
 /// In-Reply-To plus the first and the last few References (enough to link a
@@ -212,9 +253,27 @@ fn thread_refs(m: &mail_parser::Message<'_>) -> Vec<String> {
 
 /// Local parts used by machines rather than people.
 const MACHINE_SENDERS: &[&str] = &[
-    "noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "do_not_reply", "notification",
-    "notifications", "notify", "mailer-daemon", "postmaster", "bounce", "bounces", "alert", "alerts",
-    "newsletter", "newsletters", "automated", "automailer", "system", "daemon",
+    "noreply",
+    "no-reply",
+    "no_reply",
+    "donotreply",
+    "do-not-reply",
+    "do_not_reply",
+    "notification",
+    "notifications",
+    "notify",
+    "mailer-daemon",
+    "postmaster",
+    "bounce",
+    "bounces",
+    "alert",
+    "alerts",
+    "newsletter",
+    "newsletters",
+    "automated",
+    "automailer",
+    "system",
+    "daemon",
 ];
 
 /// True for emails written by a machine: mailing lists and newsletters
@@ -240,9 +299,14 @@ pub fn is_automated(m: &mail_parser::Message<'_>, from_address: &str) -> bool {
         return true;
     }
     let local = from_address.split('@').next().unwrap_or("").to_ascii_lowercase();
-    MACHINE_SENDERS
-        .iter()
-        .any(|m| local == *m || local.starts_with(&format!("{m}+")) || local.starts_with(&format!("{m}.")) || local.starts_with(&format!("{m}-")) || local.ends_with(&format!("-{m}")) || local.ends_with(&format!(".{m}")))
+    MACHINE_SENDERS.iter().any(|m| {
+        local == *m
+            || local.starts_with(&format!("{m}+"))
+            || local.starts_with(&format!("{m}."))
+            || local.starts_with(&format!("{m}-"))
+            || local.ends_with(&format!("-{m}"))
+            || local.ends_with(&format!(".{m}"))
+    })
 }
 
 pub fn parse_view(raw: &[u8]) -> MessageView {
@@ -272,10 +336,12 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
     };
     // Use HTML only if the message really has some: otherwise mail-parser
     // generates it from the text, and we prefer showing plain text.
-    let has_real_html = m
-        .html_body()
-        .any(|p| matches!(p.kind(), mail_parser::PartKind::Html));
-    let raw_html = if has_real_html { m.body_html(0).map(|h| h.into_owned()) } else { None };
+    let has_real_html = m.html_body().any(|p| matches!(p.kind(), mail_parser::PartKind::Html));
+    let raw_html = if has_real_html {
+        m.body_html(0).map(|h| h.into_owned())
+    } else {
+        None
+    };
     let html = raw_html.as_deref().map(|h| sanitize_html(&inline_cid_images(&m, h)));
     let html_main = raw_html
         .as_deref()
@@ -305,12 +371,22 @@ pub fn parse_view(raw: &[u8]) -> MessageView {
             references.extend((0..r.len()).filter_map(|i| r.get(i)).map(str::to_string));
         }
     }
-    let header = |name: &str| m.headers().get(name).map(|h| String::from_utf8_lossy(h.raw_value()).replace(['\r', '\n'], " ").trim().to_string());
-    let unsubscribe = header("List-Unsubscribe").and_then(|h| parse_unsubscribe(&h, header("List-Unsubscribe-Post").as_deref()));
+    let header = |name: &str| {
+        m.headers().get(name).map(|h| {
+            String::from_utf8_lossy(h.raw_value())
+                .replace(['\r', '\n'], " ")
+                .trim()
+                .to_string()
+        })
+    };
+    let unsubscribe =
+        header("List-Unsubscribe").and_then(|h| parse_unsubscribe(&h, header("List-Unsubscribe-Post").as_deref()));
     MessageView {
         unsubscribe,
         from: sender(m.from()),
-        reply_address: first_address(m.reply_to()).or_else(|| first_address(m.from())).unwrap_or_default(),
+        reply_address: first_address(m.reply_to())
+            .or_else(|| first_address(m.from()))
+            .unwrap_or_default(),
         to: recipients(m.to()),
         all_recipients,
         cc: recipients(m.cc()),
@@ -402,9 +478,16 @@ pub fn attachment(raw: &[u8], index: usize) -> Option<(String, Vec<u8>)> {
 
 fn has_remote_content(html: &str) -> bool {
     let lower = html.to_ascii_lowercase();
-    ["src=\"http", "src='http", "url(http", "url(\"http", "url('http", "background=\"http"]
-        .iter()
-        .any(|p| lower.contains(p))
+    [
+        "src=\"http",
+        "src='http",
+        "url(http",
+        "url(\"http",
+        "url('http",
+        "background=\"http",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
 }
 
 /// Cleans a signature written or pasted in the settings editor.
@@ -472,7 +555,11 @@ pub fn quote_start_html(html: &str) -> Option<usize> {
         if let Some(attr) = lower[..b].rfind("<div") {
             let between = html_to_plain(&html[attr..b]);
             let t = between.trim().to_lowercase();
-            if t.ends_with("wrote:") || t.ends_with("ha scritto:") || t.ends_with("a écrit :") || t.ends_with("schrieb:") {
+            if t.ends_with("wrote:")
+                || t.ends_with("ha scritto:")
+                || t.ends_with("a écrit :")
+                || t.ends_with("schrieb:")
+            {
                 best = Some(attr);
             }
         }
@@ -489,7 +576,12 @@ pub fn quote_start_text(text: &str) -> Option<usize> {
         let lower = t.to_lowercase();
         let next = lines.get(i + 1).map(|l| l.trim().to_lowercase()).unwrap_or_default();
         let header_block = (lower.starts_with("from:") || lower.starts_with("da:") || lower.starts_with("de:"))
-            && (next.starts_with("sent:") || next.starts_with("date:") || next.starts_with("inviato:") || next.starts_with("data:") || next.starts_with("to:") || next.starts_with("a:"));
+            && (next.starts_with("sent:")
+                || next.starts_with("date:")
+                || next.starts_with("inviato:")
+                || next.starts_with("data:")
+                || next.starts_with("to:")
+                || next.starts_with("a:"));
         let wrote = (lower.starts_with("on ") && lower.ends_with("wrote:"))
             || ((lower.starts_with("il ") || lower.starts_with("in data ")) && lower.ends_with("ha scritto:"))
             || lower.ends_with("a écrit :")
@@ -497,7 +589,9 @@ pub fn quote_start_text(text: &str) -> Option<usize> {
         let separator = lower.contains("original message") || lower.contains("messaggio originale");
         // A run of "> " lines that lasts until the end of the message.
         let quote_tail = t.starts_with('>')
-            && lines[i..].iter().all(|l| l.trim().is_empty() || l.trim_start().starts_with('>'));
+            && lines[i..]
+                .iter()
+                .all(|l| l.trim().is_empty() || l.trim_start().starts_with('>'));
         if offset > 0 && (header_block || wrote || separator || quote_tail) {
             return Some(offset);
         }
@@ -510,7 +604,8 @@ pub fn quote_start_text(text: &str) -> Option<usize> {
 fn find_invite(m: &mail_parser::Message<'_>) -> Option<Invite> {
     m.parts().find_map(|p| {
         let is_ics = mime_of(&p).starts_with("text/calendar")
-            || p.attachment_name().is_some_and(|n| n.to_ascii_lowercase().ends_with(".ics"));
+            || p.attachment_name()
+                .is_some_and(|n| n.to_ascii_lowercase().ends_with(".ics"));
         if !is_ics {
             return None;
         }
@@ -522,7 +617,10 @@ fn find_invite(m: &mail_parser::Message<'_>) -> Option<Invite> {
 fn ics_lines(ics: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in ics.split('\n').map(|l| l.trim_end_matches('\r')) {
-        match (line.strip_prefix(' ').or_else(|| line.strip_prefix('\t')), out.last_mut()) {
+        match (
+            line.strip_prefix(' ').or_else(|| line.strip_prefix('\t')),
+            out.last_mut(),
+        ) {
             (Some(rest), Some(prev)) => prev.push_str(rest),
             _ => out.push(line.to_string()),
         }
@@ -535,12 +633,14 @@ pub fn ics_property(line: &str) -> Option<(String, String, String)> {
     let colon = {
         // The value starts at the first colon outside quoted parameter values.
         let mut quoted = false;
-        line.char_indices().find(|&(_, c)| {
-            if c == '"' {
-                quoted = !quoted;
-            }
-            c == ':' && !quoted
-        })?.0
+        line.char_indices()
+            .find(|&(_, c)| {
+                if c == '"' {
+                    quoted = !quoted;
+                }
+                c == ':' && !quoted
+            })?
+            .0
     };
     let (head, value) = (&line[..colon], &line[colon + 1..]);
     let (name, params) = head.split_once(';').unwrap_or((head, ""));
@@ -548,7 +648,12 @@ pub fn ics_property(line: &str) -> Option<(String, String, String)> {
 }
 
 fn ics_text(value: &str) -> String {
-    value.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\")
+    value
+        .replace("\\n", "\n")
+        .replace("\\N", "\n")
+        .replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\\\", "\\")
 }
 
 fn ics_param(params: &str, name: &str) -> Option<String> {
@@ -560,22 +665,41 @@ fn ics_param(params: &str, name: &str) -> Option<String> {
 
 fn ics_time(params: &str, value: &str) -> IcsTime {
     let v = value.trim();
-    let date = |d: &str| if d.len() >= 8 { format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8]) } else { d.to_string() };
+    let date = |d: &str| {
+        if d.len() >= 8 {
+            format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8])
+        } else {
+            d.to_string()
+        }
+    };
     if params.to_ascii_uppercase().contains("VALUE=DATE") && !v.contains('T') || v.len() == 8 {
-        return IcsTime { date: date(v), time: None, utc: false };
+        return IcsTime {
+            date: date(v),
+            time: None,
+            utc: false,
+        };
     }
     let (d, t) = v.split_once('T').unwrap_or((v, ""));
     let time = (t.len() >= 4).then(|| format!("{}:{}", &t[0..2], &t[2..4]));
-    IcsTime { date: date(d), time, utc: t.ends_with('Z') }
+    IcsTime {
+        date: date(d),
+        time,
+        utc: t.ends_with('Z'),
+    }
 }
 
 /// The first event of a calendar file.
 pub fn parse_ics(ics: &str) -> Option<Invite> {
-    let mut inv = Invite { ics: ics.to_string(), ..Default::default() };
+    let mut inv = Invite {
+        ics: ics.to_string(),
+        ..Default::default()
+    };
     let mut in_event = false;
     let mut seen_event = false;
     for line in ics_lines(ics) {
-        let Some((name, params, value)) = ics_property(&line) else { continue };
+        let Some((name, params, value)) = ics_property(&line) else {
+            continue;
+        };
         match (name.as_str(), in_event) {
             ("METHOD", false) => inv.method = value.trim().to_ascii_uppercase(),
             ("BEGIN", _) if value.eq_ignore_ascii_case("VEVENT") && !seen_event => in_event = true,
@@ -589,7 +713,10 @@ pub fn parse_ics(ics: &str) -> Option<Invite> {
             ("DTSTART", true) => inv.start = ics_time(&params, &value),
             ("DTEND", true) => inv.end = Some(ics_time(&params, &value)),
             ("ORGANIZER", true) => {
-                inv.organizer = value.trim_start_matches("mailto:").trim_start_matches("MAILTO:").to_string();
+                inv.organizer = value
+                    .trim_start_matches("mailto:")
+                    .trim_start_matches("MAILTO:")
+                    .to_string();
                 inv.organizer_name = ics_param(&params, "CN").unwrap_or_default();
             }
             _ => {}
@@ -603,15 +730,21 @@ mod tests {
 
     #[test]
     fn the_unsubscribe_header_is_read() {
-        let u = parse_unsubscribe("<mailto:leave@list.example?subject=unsubscribe>, <https://list.example/u/1>", Some("List-Unsubscribe=One-Click")).unwrap();
+        let u = parse_unsubscribe(
+            "<mailto:leave@list.example?subject=unsubscribe>, <https://list.example/u/1>",
+            Some("List-Unsubscribe=One-Click"),
+        )
+        .unwrap();
         assert_eq!(u.url.as_deref(), Some("https://list.example/u/1"));
-        assert_eq!(u.mailto.as_deref(), Some("mailto:leave@list.example?subject=unsubscribe"));
+        assert_eq!(
+            u.mailto.as_deref(),
+            Some("mailto:leave@list.example?subject=unsubscribe")
+        );
         assert!(u.one_click);
         let plain = parse_unsubscribe("<http://list.example/u>", Some("List-Unsubscribe=One-Click")).unwrap();
         assert!(!plain.one_click, "one click only over https");
         assert_eq!(parse_unsubscribe("<javascript:alert(1)>, <file:///etc>", None), None);
     }
-
 
     #[test]
     fn a_rich_draft_comes_back_with_its_format_and_signature() {
@@ -620,7 +753,9 @@ mod tests {
             to: "you@example.com".into(),
             subject: "Hi".into(),
             body: "Hello\n\n-- \nJane".into(),
-            html: Some("<p><b>Hello</b></p><div data-signature>-- <br><b style=\"color:#1f6feb\">Jane</b></div>".into()),
+            html: Some(
+                "<p><b>Hello</b></p><div data-signature>-- <br><b style=\"color:#1f6feb\">Jane</b></div>".into(),
+            ),
             message_id: Some("<d1@example.com>".into()),
             cc: String::new(),
             bcc: String::new(),
@@ -634,8 +769,13 @@ mod tests {
         let view = parse_view(&raw);
         assert_eq!(view.draft_format.as_deref(), Some("rich"));
         let html = view.html.unwrap();
-        assert!(html.contains("<b>Hello</b>") && html.contains("data-signature") && html.contains("color:#1f6feb"), "{html}");
-        let plain = crate::smtp::build_draft(&acc, &crate::smtp::Draft { html: None, ..draft }, None).unwrap().formatted();
+        assert!(
+            html.contains("<b>Hello</b>") && html.contains("data-signature") && html.contains("color:#1f6feb"),
+            "{html}"
+        );
+        let plain = crate::smtp::build_draft(&acc, &crate::smtp::Draft { html: None, ..draft }, None)
+            .unwrap()
+            .formatted();
         assert_eq!(parse_view(&plain).draft_format.as_deref(), Some("plain"));
     }
 
@@ -701,7 +841,14 @@ JVBERi0xLjQ=\r\n\
         assert_eq!(inv.uid, "abc-123@example.com");
         assert_eq!(inv.summary, "Project kick-off, phase 2");
         assert_eq!(inv.location, "Room 4");
-        assert_eq!(inv.start, IcsTime { date: "2026-10-28".into(), time: Some("10:00".into()), utc: false });
+        assert_eq!(
+            inv.start,
+            IcsTime {
+                date: "2026-10-28".into(),
+                time: Some("10:00".into()),
+                utc: false
+            }
+        );
         assert_eq!(inv.end.unwrap().time.as_deref(), Some("11:30"));
         assert_eq!(inv.organizer, "anna@example.com");
         assert_eq!(inv.organizer_name, "Anna: PM");
