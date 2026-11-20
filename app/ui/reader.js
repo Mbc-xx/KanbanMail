@@ -249,6 +249,10 @@ async function setSeen(folder, card, seen) {
   stopSeenTimer();
   if (card.seen !== seen) changeUnseen(folder, seen ? -1 : 1);
   seenEverywhere(folder, card, seen);
+  // Other copies of the same email (one per address of yours it was sent to)
+  // follow, or the conversation stays unread on the board.
+  const copies = otherCopies(folder, card).filter((c) => c.seen !== seen);
+  if (copies.length) markMany(copies.map((c) => ({ folder, card: c })), seen);
   paintFolderCounts();
   scheduleFolderCounts();
   if (readerCard?.card === card) updateSeenButton();
@@ -259,6 +263,20 @@ async function setSeen(folder, card, seen) {
     toast("Read state not changed: " + e);
     await loadColumn(folder);
   }
+}
+
+/// Copies of the same email in the same folder under other UIDs: the server
+/// delivers one per address when an email is sent to several of yours (an alias
+/// or a send-only address of this mailbox).
+function otherCopies(folder, card) {
+  const id = mailId(card.message_id);
+  if (!id) return [];
+  const out = new Map();
+  const lists = [state.cards[folder] || [], ...MULTI_KEYS.map((k) => (state.cards[k] || []).filter((c) => c.__folder === folder))];
+  for (const c of lists.flat()) {
+    if (c.uid !== card.uid && mailId(c.message_id) === id && !out.has(c.uid)) out.set(c.uid, c);
+  }
+  return [...out.values()];
 }
 
 /// The same email can be held by the column, by search or All Mail, and by

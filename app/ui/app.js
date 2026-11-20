@@ -170,6 +170,18 @@ function clearSelection() {
 }
 
 async function markMany(members, seen) {
+  // Copies of these emails under other UIDs (see otherCopies) change with them.
+  members = [...members];
+  const keys = new Set(members.map((m) => `${m.folder}/${m.card.uid}`));
+  for (const m of [...members]) {
+    for (const card of otherCopies(m.folder, m.card)) {
+      const key = `${m.folder}/${card.uid}`;
+      if (card.seen !== seen && !keys.has(key)) {
+        keys.add(key);
+        members.push({ folder: m.folder, card });
+      }
+    }
+  }
   const byFolder = new Map();
   for (const m of members) {
     if (m.card.seen !== seen) changeUnseen(m.folder, seen ? -1 : 1);
