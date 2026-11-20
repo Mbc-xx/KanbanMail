@@ -1190,6 +1190,11 @@ pub async fn empty_folder(session: &mut Session, kind: &str) -> Result<(String, 
 }
 
 #[cfg(test)]
+mod fake_server;
+#[cfg(test)]
+mod server_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

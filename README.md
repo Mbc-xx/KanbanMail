@@ -313,9 +313,23 @@ crates/kanbanmail-core   shared logic: accounts, board, keychain, IMAP, SMTP, MI
 crates/kanbanmail-cli    command-line test tool
 app/src-tauri            desktop app (Tauri backend)
 app/ui                   user interface (HTML/CSS/JS, no external libraries): app.js,
-                         board.js, organize.js, reader.js, compose.js, settings.js,
-                         loaded in this order and sharing one scope
+                         board.js, organize.js, reader.js, compose.js, security.js,
+                         settings.js, loaded in this order and sharing one scope
+app/tests                tests of the interface
 ```
+
+### Tests
+
+```bash
+cargo test --workspace   # Rust, including IMAP against a fake server on 127.0.0.1
+cd app && npm test       # the interface, run in jsdom against a fake backend
+```
+
+The IMAP tests start a small server in memory (`crates/kanbanmail-core/src/imap/fake_server.rs`)
+and check what moving, marking and loading leave on it; the interface tests load
+the real `app/ui` with fake emails (`app/tests/harness.mjs`). Neither needs a
+network or a real mailbox. GitHub Actions runs both, clippy and `cargo audit` on
+every push (`.github/workflows/ci.yml`).
 
 ### Browser sign-in
 
